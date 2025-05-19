@@ -687,6 +687,7 @@ int main(int argc, char* argv[])
         chi2text.SetBorderSize(0);
         chi2text.SetTextAlign(12);
         texts.push_back(chi2text);
+
         plot_channels((final_output_tag+"_PROfile_hists.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts, PlotOptions::DataPostfitRatio);
 
         TCanvas c;
@@ -1095,17 +1096,17 @@ int main(int argc, char* argv[])
         for(size_t im = 0; im < config.m_num_modes; im++){
                 for(size_t id =0; id < config.m_num_detectors; id++){
                     for(size_t ic = 0; ic < config.m_num_channels; ic++){
-                        
-                    double chival = allcov_metric->getSingleChannelChi(global_channel_index);
-                    int ndf = config.m_channel_num_bins[global_channel_index] - bool(opt&PlotOptions::AreaNormalized);
-                    log<LOG_INFO>(L"%1% || On channel %2% the datamc chi^2/ndof is %3%/%4% .") % __func__ % global_channel_index % chival % ndf;
-                    TPaveText chi2text(0.59, 0.50, 0.89, 0.59, "NDC");
-                    chi2text.AddText(("#chi^{2}/ndf = "+to_string_prec(chival,2)+"/"+std::to_string(ndf)).c_str());
-                    chi2text.SetFillColor(0);
-                    chi2text.SetBorderSize(0);
-                    chi2text.SetTextAlign(12);
-                    channel_chitexts.push_back(chi2text);
-                    global_channel_index++;
+                        log<LOG_INFO>(L"%1% || On channel %2%:") % __func__ % global_channel_index ;
+                        double chival = allcov_metric->getSingleChannelChi(global_channel_index);
+                        int ndf = config.m_channel_num_bins[ic] - bool(opt&PlotOptions::AreaNormalized);
+                        log<LOG_INFO>(L"%1% || -- the datamc chi^2/ndof is %2%/%3% .") % __func__ % chival % ndf;
+                        TPaveText chi2text(0.59, 0.50, 0.89, 0.59, "NDC");
+                        chi2text.AddText(("#chi^{2}/ndf = "+to_string_prec(chival,2)+"/"+std::to_string(ndf)).c_str());
+                        chi2text.SetFillColor(0);
+                        chi2text.SetBorderSize(0);
+                        chi2text.SetTextAlign(12);
+                        channel_chitexts.push_back(chi2text);
+                        global_channel_index++;
                     }
                 }
         }

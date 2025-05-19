@@ -149,11 +149,12 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
     return value;
 }
 
-float PROCNP::getSingleChannelChi(size_t channel_index) {
+float PROCNP::getSingleChannelChi(size_t global_channel_index) {
     PROspec cv = FillCVSpectrum(config, peller,strat == BinnedChi2);
 
-    size_t nbin =  config.m_channel_num_bins[channel_index];
-    size_t startBin = config.GetCollapsedGlobalBinStart(channel_index);
+    size_t nbin =  config.m_channel_num_bins[config.GetLocalChannelIndex(global_channel_index)];
+    size_t startBin = config.GetCollapsedGlobalBinStart(global_channel_index);
+
 
     Eigen::MatrixXf inverted_collapsed_full_covariance(nbin,nbin);
 
