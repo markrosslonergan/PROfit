@@ -357,6 +357,7 @@ namespace PROfit {
         if(!PROsyst::isPositiveSemiDefinite_WithTolerance(frac_covar_matrix,Eigen::NumTraits<float>::dummy_precision())){
             log<LOG_ERROR>(L"%1% || Fractional Covariance Matrix is not positive semi-definite!") % __func__;
             log<LOG_ERROR>(L"Terminating.");
+            log<LOG_ERROR>(L" Matrix is %1% .") % frac_covar_matrix;
             exit(EXIT_FAILURE);
         }
 

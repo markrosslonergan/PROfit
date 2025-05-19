@@ -113,7 +113,7 @@ int main(int argc, char* argv[])
     app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
     app.add_option("--inject-systs", injected_systs, "Systematic shifts to inject. Map of name and shift value in sigmas. Only spline systs are supported right now.");
     app.add_flag("--poisson-throw", poisson_throw, "Do a Poisson stats throw of fake data.");
-    app.add_flag("--scale", scale_arg, "Scale detector POT by a given value.")->expected(-1);
+    app.add_option("--scale", scale_arg, "Scale detector POT by a given value.");
     app.add_option("--syst-list", syst_list, "Override list of systematics to use (note: all systs must be in the xml).");
     app.add_option("--exclude-systs", systs_excluded, "List of systematics to exclude.")->excludes("--syst-list"); 
     app.add_option("--fit-options", global_fit_options, "Parameters for single, detailed global best fit LBFGSB.");
@@ -247,8 +247,7 @@ int main(int argc, char* argv[])
     //Scale events by some percentage of total detector POT
     if(scale_arg.size()) {
         if (scale_arg.size() % 2 != 0) {
-            log<LOG_ERROR>(L"%1% || Expected pairs of detector and scaling values (e.g., ICARUS 0.5)")
-                % __func__;
+            log<LOG_ERROR>(L"%1% || Expected pairs of detector and scaling values (e.g., ICARUS 0.5)") % __func__;
             exit(EXIT_FAILURE);
         }
         for (size_t i = 0; i < scale_arg.size(); i += 2) {
