@@ -145,18 +145,41 @@ namespace PROfit{
                         }
                     }
 
+                    std::vector<std::vector<int>> scaleotherbins;
+                    for(size_t io =0; io<inconfig.m_num_other_vars; io++){
+                        std::vector<int> tmpbins;
+                        for(auto &name: scalenames){
+                            size_t is = inconfig.GetSubchannelIndex(name);     
+                            size_t ic = inconfig.GetChannelIndex(is); 
+                            size_t start = inconfig.GetGlobalOtherBinStart(is,io); 
+                            for(size_t b = 0; b < inconfig.m_channel_num_other_bins[io][ic] ; b++){
+                                tmpbins.push_back((int)(start+b));
+                            }
+                        }
+                        scaleotherbins.push_back(tmpbins);
+                    }
+
+
                     log<LOG_INFO>(L"%1% || and scales reco bins  %2% and true bins %3%.") % __func__  %  scalerecobins %  scaletruebins;
 
                     for (int r : scaletruebins) {
-                        //histLE(r) *= value;
                         for (int c : scalerecobins) {
                             hist(r, c) *= value;
                         }
                     }
 
-                    for (int c : scalerecobins) {
-                        mcStatErr(c) *= value;
+                    
+                    for (int r : scaletruebins) {
+                     for(size_t io =0; io<inconfig.m_num_other_vars; io++){
+                        for (int c : scalerecobins) {
+                            other_hists[io](r, c) *= value;
+                        }
+                     }
                     }
+                    //mcStarErr is only used for calculating fractional error later. Fractional does not change. 
+                    //for (int c : scalerecobins) {
+                    //    mcStatErr(c) *= value;
+                    //}
 
                     for (size_t i = 0; i < added_weights.size(); ++i) {
                         int bin = bin_indices[i];

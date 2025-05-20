@@ -35,7 +35,7 @@ namespace PROfit {
         
         if(config.m_use_mcstats){
             Eigen::MatrixXf fractional_mcstat_cov = other_index < 0 ? prop.mcStatErr.array().square().inverse().matrix().asDiagonal()
-                : prop.otherMCStatErr[other_index].array().square().inverse().matrix().asDiagonal();
+                            : prop.otherMCStatErr[other_index].array().square().inverse().matrix().asDiagonal();
             toFiniteMatrix(fractional_mcstat_cov);
             Eigen::MatrixXf mcstat_corr = GenerateCorrMatrix(fractional_mcstat_cov);
             syst_map["mcstat"] = {covmat.size(), SystType::Covariance};
