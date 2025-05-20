@@ -108,7 +108,7 @@ namespace PROfit{
 
                     if (value <= 0.0f) {
                         log<LOG_ERROR>(L"%1% || Scale factor %2% for '%3%' is invalid. Must be > 0.")
-                           % __func__ % value % detector.c_str();
+                            % __func__ % value % detector.c_str();
                         exit(EXIT_FAILURE);
                     }
 
@@ -145,6 +145,7 @@ namespace PROfit{
                         }
                     }
 
+
                     std::vector<std::vector<int>> scaleotherbins;
                     for(size_t io =0; io<inconfig.m_num_other_vars; io++){
                         std::vector<int> tmpbins;
@@ -157,6 +158,7 @@ namespace PROfit{
                             }
                         }
                         scaleotherbins.push_back(tmpbins);
+
                     }
 
 
@@ -168,13 +170,13 @@ namespace PROfit{
                         }
                     }
 
-                    
-                    for (int r : scaletruebins) {
-                     for(size_t io =0; io<inconfig.m_num_other_vars; io++){
-                        for (int c : scalerecobins) {
-                            other_hists[io](r, c) *= value;
+
+                    for(size_t io =0; io<inconfig.m_num_other_vars; io++){
+                        for (int o : scaleotherbins[io]) {
+                            for (int r : scalerecobins) {
+                                (other_hists[io])(o, r) *= value;
+                            }
                         }
-                     }
                     }
                     //mcStarErr is only used for calculating fractional error later. Fractional does not change. 
                     //for (int c : scalerecobins) {
@@ -191,9 +193,9 @@ namespace PROfit{
 
                     log<LOG_INFO>(L"%1% || Applied %2% scaling for '%3%'")
                         % __func__ % value % detector.c_str();
-                
+
                 }
-    
+
             }
 
     };
