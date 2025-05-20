@@ -222,7 +222,8 @@ namespace PROfit{
                             const std::string& subchannel_name  = config.m_fullnames[global_subchannel_index];
                             if(bool(opt&PlotOptions::CVasStack)) {
                                 cvstack->Add(cvhists[subchannel_name].get());
-                                leg->AddEntry(cvhists[subchannel_name].get(), config.m_subchannel_plotnames[channel][subchannel].c_str() ,"f");
+                                float sum = cvhists[subchannel_name].get()->Integral();
+                                leg->AddEntry(cvhists[subchannel_name].get(), (config.m_subchannel_plotnames[channel][subchannel]+" : "+to_string_prec(sum,1)).c_str() ,"f");
                             }
                             cv_hist.Add(cvhists[subchannel_name].get());
                             ++global_subchannel_index;
