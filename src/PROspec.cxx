@@ -41,7 +41,35 @@ void PROspec::Print() const {
     log<LOG_INFO>(L"%1% || %2%" ) % __func__ % spec_string.c_str();
     return;
 }
+void PROspec::PrintAll(const PROconfig & inconfig) const {
+    std::string spec_string = "";
+    for(auto &f : spec) spec_string+=" "+std::to_string(f); 
+    log<LOG_INFO>(L"%1% || %2%" ) % __func__ % spec_string.c_str();
 
+        size_t global_sb_index = 0;
+        for(size_t im = 0; im < inconfig.m_num_modes; im++){
+            for(size_t id =0; id < inconfig.m_num_detectors; id++){
+                for(size_t ic = 0; ic < inconfig.m_num_channels; ic++){
+                    std::string name =   inconfig.m_mode_names[im]  +" "+ inconfig.m_detector_names[id]+" "+ inconfig.m_channel_names[ic];
+                    int nbins = inconfig.m_channel_num_bins[ic];
+                    std::vector<float> eventcount;
+                    float sum = 0;
+                    for(size_t sc = 0; sc < inconfig.m_num_subchannels[ic]; sc++){
+                        size_t global_bin_start = inconfig.GetGlobalBinStart(global_sb_index);
+                        for(size_t b =global_bin_start; b< global_bin_start+nbins; b++){
+                            eventcount.push_back(spec(b));
+                            sum+=eventcount.back();
+                        }
+                        global_sb_index++;
+                    }
+                    log<LOG_INFO>(L"%1% || Channel: %2%, total events: %3% " ) % __func__ % name.c_str() % sum  ;
+                    log<LOG_INFO>(L"%1% ||  -- breakdown: %2% " ) % __func__ % eventcount ;
+                }
+            }
+        }
+
+    return;
+}
 
 void PROspec::Fill(int bin_index, float weight){
     //Removed to help speed up filling

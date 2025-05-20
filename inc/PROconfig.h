@@ -452,7 +452,15 @@ namespace PROfit{
 
             /* Calculate hash of unique properties of XML config for PROpeller */
             uint32_t CalcHash() const;
-                    
+                   
+
+            Eigen::VectorXf GetCollapsedBinCenters() const;
+            Eigen::VectorXf GetCollapsedOtherBinCenters(int index) const;
+            Eigen::VectorXf GetCollapsedBinWidths() const;
+            Eigen::VectorXf GetCollapsedOtherBinWidths(int index) const;
+
+
+
 
     };
 

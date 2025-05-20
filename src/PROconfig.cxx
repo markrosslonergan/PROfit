@@ -1044,11 +1044,11 @@ int PROconfig::LoadFromXML(const std::string &filename){
         else if(m_mcgen_variation_type[i] == "covariance"){
             m_num_variation_type_covariance+=1;
         }
-        
+
         else if(m_mcgen_variation_type[i] == "flat"){
             m_num_variation_type_flat+=1;
         }
-         else if(m_mcgen_variation_type[i] == "norm"){
+        else if(m_mcgen_variation_type[i] == "norm"){
             m_num_variation_type_norm+=1;
         }else if(m_mcgen_variation_type[i] == "mcstat"){
             m_use_mcstats = true;
@@ -1232,7 +1232,7 @@ const std::vector<float>& PROconfig::GetChannelTrueBinEdges(size_t channel_index
         log<LOG_ERROR>(L"Terminating.");
         exit(EXIT_FAILURE);
     }
- 
+
     return m_channel_truebin_edges[GetLocalChannelIndex(channel_index)];
 }
 
@@ -1257,6 +1257,72 @@ const std::vector<float>& PROconfig::GetChannelOtherBinEdges(size_t channel_inde
         log<LOG_ERROR>(L"Terminating.");
         exit(EXIT_FAILURE);
     }    return m_channel_other_bin_edges[GetLocalChannelIndex(channel_index)][other_index];
+}
+
+
+Eigen::VectorXf PROconfig::GetCollapsedBinCenters() const{
+    std::vector<float> centers; 
+    for(size_t im = 0; im < m_num_modes; im++){
+        for(size_t id =0; id < m_num_detectors; id++){
+            for(size_t ic = 0; ic < m_num_channels; ic++){
+                for(size_t n = 0; n< m_channel_num_bins[ic]; n++){
+                    centers.push_back(m_channel_bin_edges[ic][n]+m_channel_bin_widths[ic][n]/2.0);
+                }
+            }
+        }
+    }
+    Eigen::VectorXf eigCen = Eigen::Map<Eigen::VectorXf>(centers.data(), centers.size());
+    return eigCen;
+
+}
+Eigen::VectorXf PROconfig::GetCollapsedOtherBinCenters(int index) const{
+    std::vector<float> centers; 
+    for(size_t im = 0; im < m_num_modes; im++){
+        for(size_t id =0; id < m_num_detectors; id++){
+            for(size_t ic = 0; ic < m_num_channels; ic++){
+                for(size_t n = 0; n< m_channel_num_other_bins[ic][index]; n++){
+                    centers.push_back(m_channel_other_bin_edges[ic][index][n]+m_channel_other_bin_widths[ic][index][n]/2.0);
+                }
+            }
+        }
+    }
+    Eigen::VectorXf eigCen = Eigen::Map<Eigen::VectorXf>(centers.data(), centers.size());
+    return eigCen;
+
+
+}
+
+Eigen::VectorXf PROconfig::GetCollapsedBinWidths() const{
+    std::vector<float> widths; 
+    for(size_t im = 0; im < m_num_modes; im++){
+        for(size_t id =0; id < m_num_detectors; id++){
+            for(size_t ic = 0; ic < m_num_channels; ic++){
+                for(size_t n = 0; n< m_channel_num_bins[ic]; n++){
+                    widths.push_back(m_channel_bin_widths[ic][n]);
+                }
+            }
+        }
+    }
+    Eigen::VectorXf eigCen = Eigen::Map<Eigen::VectorXf>(widths.data(), widths.size());
+    return eigCen;
+
+
+}
+Eigen::VectorXf PROconfig::GetCollapsedOtherBinWidths(int index) const{
+    std::vector<float> widths; 
+    for(size_t im = 0; im < m_num_modes; im++){
+        for(size_t id =0; id < m_num_detectors; id++){
+            for(size_t ic = 0; ic < m_num_channels; ic++){
+                for(size_t n = 0; n< m_channel_num_other_bins[ic][index]; n++){
+                    widths.push_back(m_channel_other_bin_widths[ic][index][n]);
+                }
+            }
+        }
+    }
+    Eigen::VectorXf eigCen = Eigen::Map<Eigen::VectorXf>(widths.data(), widths.size());
+    return eigCen;
+
+
 }
 
 
@@ -1774,11 +1840,11 @@ uint32_t PROconfig::CalcHash() const{
             unique_string << br->name << br->associated_hist << br->associated_systematic << br->true_param_name<< br->true_L_name << br->model_rule;
         }
     }
-   
+
     log<LOG_DEBUG>(L"%1% || MurmurHash input uniue string %2% ") % __func__ % unique_string.str().c_str();
 
     MurmurHash3_x86_32(unique_string.str().c_str(), unique_string.str().size(), fixed_seed, &hash);
-    
+
     log<LOG_INFO>(L"%1% || MurmurHash output hash %2% ") % __func__ % hash;
 
     return hash;

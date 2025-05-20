@@ -958,6 +958,8 @@ int main(int argc, char* argv[])
     if(*proplot_command){
         //PROspec spec = FillCVSpectrum(config, prop, !eventbyevent);
         PROspec spec = FillRecoSpectra(config, prop, systs, *model, CVpparams, !eventbyevent);
+        log<LOG_INFO>(L"%1% || PROplot CV PrintAll") % __func__;
+        spec.PrintAll(config);
         PlotOptions opt = PlotOptions::CVasStack;
         std::vector<TPaveText> notext;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;

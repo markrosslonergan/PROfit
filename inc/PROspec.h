@@ -107,6 +107,10 @@ namespace PROfit{
             /* Function: Print out spec*/
             void Print() const;
 
+            /* Function: Print out spec*/
+            void PrintAll(const PROconfig & config) const;
+
+
             /*Return number of bins in spectrum */
             size_t GetNbins() const;
 

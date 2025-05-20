@@ -131,30 +131,29 @@ namespace PROfit{
         //TODO: Only works with 1 mode/detector/channel
         Eigen::VectorXf cv = other_index < 0 ? CollapseMatrix(config, FillCVSpectrum(config, prop, true).Spec()) :
             CollapseMatrix(config, FillOtherCVSpectrum(config, prop, other_index).Spec(), other_index);
-        std::vector<float> edges = other_index < 0 ? config.GetChannelBinEdges(0) : config.GetChannelOtherBinEdges(0, other_index);
-        log<LOG_DEBUG>(L"%1% || For other var %2% the cv is %3% and the edges are %4%")
-            % __func__ % other_index % cv % edges;
-        std::vector<float> centers;
+       
+        Eigen::VectorXf centers = other_index < 0 ? config.GetCollapsedBinCenters() :config.GetCollapsedOtherBinCenters(other_index);
+        Eigen::VectorXf widths = other_index < 0 ? config.GetCollapsedBinWidths() :config.GetCollapsedOtherBinWidths(other_index);
+       
+        log<LOG_DEBUG>(L"%1% || Sizes: cv size %2% centers size %3% withs size %4%") % __func__ % cv.size() % centers.size() % widths.size();
+        log<LOG_DEBUG>(L"%1% || CV: %2%") % __func__ % cv;
+        log<LOG_DEBUG>(L"%1% || centers %2%") % __func__ % centers ;
+        log<LOG_DEBUG>(L"%1% || widthes %2%") % __func__ % widths ;
+        
         size_t nerrorsample = 5000;
-        for(size_t i = 0; i < edges.size() - 1; ++i)
-            centers.push_back((edges[i+1] + edges[i])/2);
         std::vector<Eigen::VectorXf> specs;
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
         for(size_t i = 0; i < nerrorsample; ++i)
             specs.push_back(FillSystRandomThrow(config, prop, syst, dseed(PROseed::global_rng), other_index).Spec());
-        //specs.push_back(CollapseMatrix(config, FillSystRandomThrow(config, prop, syst).Spec()));
-        TH1D tmphist("th", "", cv.size(), edges.data());
-        for(int i = 0; i < cv.size(); ++i)
-            tmphist.SetBinContent(i+1, cv(i));
-        if(scale) tmphist.Scale(1, "width");
-        //std::unique_ptr<TGraphAsymmErrors> ret = std::make_unique<TGraphAsymmErrors>(cv.size(), centers.data(), cv.data());
-        std::unique_ptr<TGraphAsymmErrors> ret = std::make_unique<TGraphAsymmErrors>(&tmphist);
+        
+        std::unique_ptr<TGraphAsymmErrors> ret = std::make_unique<TGraphAsymmErrors>(cv.size(), centers.data(), cv.data());
+
         for(int i = 0; i < cv.size(); ++i) {
             std::vector<float> binconts(nerrorsample);
             for(size_t j = 0; j < nerrorsample; ++j) {
                 binconts[j] = specs[j](i);
             }
-            float scale_factor = tmphist.GetBinContent(i+1)/cv(i);
+            float scale_factor = scale ?  1.0/widths(i) :  1.0;
             if(std::isnan(scale_factor)) scale_factor = 1;
             std::sort(binconts.begin(), binconts.end());
             float ehi = std::abs((binconts[5*840] - cv(i))*scale_factor);
@@ -162,7 +161,7 @@ namespace PROfit{
             ret->SetPointEYhigh(i, ehi);
             ret->SetPointEYlow(i, elo);
 
-            log<LOG_DEBUG>(L"%1% || ErrorBand bin %2% %3% %4% %5% %6% %7%") % __func__ % i % cv(i) % ehi % elo % scale_factor % tmphist.GetBinContent(i+1);
+            log<LOG_DEBUG>(L"%1% || ErrorBand bin %2% %3% %4% %5% %6% ") % __func__ % i % cv(i) % ehi % elo % scale_factor  ;
         }
         return ret;
     }
@@ -222,7 +221,8 @@ namespace PROfit{
                             const std::string& subchannel_name  = config.m_fullnames[global_subchannel_index];
                             if(bool(opt&PlotOptions::CVasStack)) {
                                 cvstack->Add(cvhists[subchannel_name].get());
-                                leg->AddEntry(cvhists[subchannel_name].get(), config.m_subchannel_plotnames[channel][subchannel].c_str() ,"f");
+                                float sum = cvhists[subchannel_name].get()->Integral();
+                                leg->AddEntry(cvhists[subchannel_name].get(), (config.m_subchannel_plotnames[channel][subchannel]+" : "+to_string_prec(sum,1)).c_str() ,"f");
                             }
                             cv_hist.Add(cvhists[subchannel_name].get());
                             ++global_subchannel_index;
