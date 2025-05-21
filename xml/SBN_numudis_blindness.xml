@@ -1,0 +1,205 @@
+<?xml version="1.0" ?>
+
+<mode name="nu" />
+
+<detector name="SBND" />
+<detector name="ICARUS" />
+
+<channel name="numu" unit="Reconstructed Neutrino Energy [GeV]">
+    <bins min="0.0" max="3" nbins="20"/>
+    <truebins min="0" max="3" nbins="100"/>
+    <otherbins unit="True E [GeV]" min="0" max="3" nbins="20"/>
+    <subchannel name="numucc" plotname="#nu_{#mu} CC" color="#99CCFF"/>
+</channel>
+
+<variation_list>
+    <!-- Inlcude MC stats, uncomment out to remove -->
+    <allowlist type="mcstat" plotname="MC Stats" ></allowlist>
+
+    <!--systs from multisigmaTree should have type spline-->
+    <!--systs from multisimTree should have type covariance-->
+    <!--systs from detsystTree should have type spline-->
+    <!>
+    <!--use uncorrelated b1,b2,b3,b4 instead of correlated A1,A2,A3,A4-->
+    <!-- <allowlist type="spline" binning="other0" plotname="ZExp_b1">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b1</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b2">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b2</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b3">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b3</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b4">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b4</allowlist>
+    -->
+    <!--use EITHER ZExpAVariationResponse OR ZExpA1CCQE + ZExpA2CCQE + ZExpA3CCQE + ZExpA4CCQE-->
+    <!--<allowlist type="covariance">GENIEReWeight_SBN_v1_multisim_ZExpAVariationResponse</allowlist> -->
+    <allowlist type="spline" plotname="ZExpA1CCQE">GENIEReWeight_SBN_v1_multisigma_ZExpA1CCQE</allowlist>
+    <allowlist type="spline" plotname="ZExpA2CCQE">GENIEReWeight_SBN_v1_multisigma_ZExpA2CCQE</allowlist>
+    <allowlist type="spline" plotname="ZExpA3CCQE">GENIEReWeight_SBN_v1_multisigma_ZExpA3CCQE</allowlist>
+    <allowlist type="spline" plotname="ZExpA4CCQE">GENIEReWeight_SBN_v1_multisigma_ZExpA4CCQE</allowlist>
+    <!>
+    <!--use EITHER NCELVariationResponse OR EtaNCEL + MaNCEL-->
+    <allowlist type="covariance" plotname="NCELVariationResponse">GENIEReWeight_SBN_v1_multisim_NCELVariationResponse</allowlist>
+    <!--<allowlist type="spline" plotname="MaNCEL">GENIEReWeight_SBN_v1_multisigma_MaNCEL</allowlist>
+    <allowlist type="spline" plotname="EtaNCEL">GENIEReWeight_SBN_v1_multisigma_EtaNCEL</allowlist>-->
+    <!>
+    <!--use EITHER CCRESVariationResponse OR MaCCRES + MvCCRES-->
+    <!-- <allowlist type="covariance" plotname="CCRESVariationResponse">GENIEReWeight_SBN_v1_multisim_CCRESVariationResponse</allowlist> -->
+    <allowlist type="spline" binning="other0" plotname="MaCCRES">GENIEReWeight_SBN_v1_multisigma_MaCCRES</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="MvCCRES">GENIEReWeight_SBN_v1_multisigma_MvCCRES</allowlist>
+    <!>
+    <!--use EITHER NCRESVariationResponse OR MaNCRES + MvNCRES-->
+    <allowlist type="covariance" plotname="NCRESVariationResponse">GENIEReWeight_SBN_v1_multisim_NCRESVariationResponse</allowlist>
+    <!--<allowlist type="spline" plotname="MaNCRES">GENIEReWeight_SBN_v1_multisigma_MaNCRES</allowlist>
+    <allowlist type="spline" plotname="MvNCRES">GENIEReWeight_SBN_v1_multisigma_MvNCRES</allowlist>-->
+    <!>
+    <!--COHVariationResponse = NormCCCOH + NormNCCOH-->
+    <!--we do not have NormCCCOH and NormNCCOH as separate systematics-->
+    <allowlist type="covariance" plotname="COHVariationResponse">GENIEReWeight_SBN_v1_multisim_COHVariationResponse</allowlist>
+    <!>
+    <!--use EITHER DISBYVariationResponse OR AhtBY + BhtBY + CV1uBY + CV2uBY-->
+    <allowlist type="covariance" plotname="DISBYVariationResponse">GENIEReWeight_SBN_v1_multisim_DISBYVariationResponse</allowlist>
+    <!--<allowlist type="spline" plotname="AhtBY">GENIEReWeight_SBN_v1_multisigma_AhtBY</allowlist>
+    <allowlist type="spline" plotname="BhtBY">GENIEReWeight_SBN_v1_multisigma_BhtBY</allowlist>
+    <allowlist type="spline" plotname="CV1uBY">GENIEReWeight_SBN_v1_multisigma_CV1uBY</allowlist>
+    <allowlist type="spline" plotname="CV2uBY">GENIEReWeight_SBN_v1_multisigma_CV2uBY</allowlist>-->
+    <!>
+    <!--use EITHER FSI_pi_VariationResponse OR FrAbs_pi + FrInel_pi + FrPiProd_pi + MFP_pi-->
+    <allowlist type="covariance" plotname="FSI_pi">GENIEReWeight_SBN_v1_multisim_FSI_pi_VariationResponse</allowlist>
+    <!--<allowlist type="spline" plotname="FrAbs_pi">GENIEReWeight_SBN_v1_multisigma_FrAbs_pi</allowlist>
+    <allowlist type="spline" plotname="FrInel_pi">GENIEReWeight_SBN_v1_multisigma_FrInel_pi</allowlist>
+    <allowlist type="spline" plotname="FrPiProd_pi">GENIEReWeight_SBN_v1_multisigma_FrPiProd_pi</allowlist>
+    <allowlist type="spline" plotname="MFP_pi">GENIEReWeight_SBN_v1_multisigma_MFP_pi</allowlist>-->
+    <!>
+    <!--use EITHER FSI_N_VariationResponse OR FrAbs_N + FrInel_N + FrPiProd_N + MFP_N-->
+    <allowlist type="covariance" plotname="FSI_N">GENIEReWeight_SBN_v1_multisim_FSI_N_VariationResponse</allowlist>
+    <!--<allowlist type="spline" plotname="FrAbs_N">GENIEReWeight_SBN_v1_multisigma_FrAbs_N</allowlist>
+    <allowlist type="spline" plotname="FrInel_N">GENIEReWeight_SBN_v1_multisigma_FrInel_N</allowlist>
+    <allowlist type="spline" plotname="FrPiProd_N">GENIEReWeight_SBN_v1_multisigma_FrPiProd_N</allowlist>
+    <allowlist type="spline" plotname="MFP_N">GENIEReWeight_SBN_v1_multisigma_MFP_N</allowlist>-->
+    <!>
+    <!--important systs that we want to treat as spline systs-->
+    <allowlist type="spline"  binning="other0" plotname="RPA_CCQE">GENIEReWeight_SBN_v1_multisigma_RPA_CCQE</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="CoulombCCQE">GENIEReWeight_SBN_v1_multisigma_CoulombCCQE</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="NormCCMEC">GENIEReWeight_SBN_v1_multisigma_NormCCMEC</allowlist>
+    <!--<allowlist type="covariance" plotname="RPA_CCQE">GENIEReWeight_SBN_v1_multisim_RPA_CCQE</allowlist>
+    <allowlist type="covariance" plotname="CoulombCCQE">GENIEReWeight_SBN_v1_multisim_CoulombCCQE</allowlist>
+    <allowlist type="covariance" plotname="NormCCMEC">GENIEReWeight_SBN_v1_multisim_NormCCMEC</allowlist>-->
+    <!>
+    <!--less important systs that we can treat as covariance systs-->
+    <allowlist type="covariance" plotname="NormNCMEC">GENIEReWeight_SBN_v1_multisim_NormNCMEC</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpCC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvpCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpCC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvpCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpNC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvpNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpNC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvpNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnCC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvnCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnCC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvnCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnNC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvnNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnNC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvnNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpCC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpCC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpNC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpNC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnCC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnCC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnNC1pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnNC2pi">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnNC2pi</allowlist>
+    <!--<allowlist type="spline" plotname="NormNCMEC">GENIEReWeight_SBN_v1_multisigma_NormNCMEC</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarnCC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarnCC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarnCC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarnCC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarnNC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarnNC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarnNC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarnNC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarpCC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarpCC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarpCC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarpCC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarpNC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarpNC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvbarpNC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvbarpNC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvnCC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvnCC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvnCC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvnCC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvnNC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvnNC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvnNC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvnNC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvpCC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvpCC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvpCC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvpCC2pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvpNC1pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvpNC1pi</allowlist>
+    <allowlist type="spline" plotname="NonRESBGvpNC2pi">GENIEReWeight_SBN_v1_multisigma_NonRESBGvpNC2pi</allowlist>-->
+    <!>
+    <!--other spline systs from multisigmaTree-->
+    <allowlist type="spline"  binning="other0" plotname="FrCEx_N">GENIEReWeight_SBN_v1_multisigma_FrCEx_N</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="FrCEx_pi">GENIEReWeight_SBN_v1_multisigma_FrCEx_pi</allowlist>
+    <!--<allowlist type="spline" plotname="VecFFCCQEshape">GENIEReWeight_SBN_v1_multisigma_VecFFCCQEshape</allowlist>-->
+    <allowlist type="spline"  binning="other0" plotname="DecayAngMEC">GENIEReWeight_SBN_v1_multisigma_DecayAngMEC</allowlist>
+    <!--<allowlist type="spline" plotname="Theta_Delta2Npi">GENIEReWeight_SBN_v1_multisigma_Theta_Delta2Npi</allowlist>-->
+    <!--<allowlist type="spline" plotname="ThetaDelta2NRad">GENIEReWeight_SBN_v1_multisigma_ThetaDelta2NRad</allowlist>-->
+    <allowlist type="spline"  binning="other0" plotname="XSecShape_CCMEC">GENIEReWeight_SBNNuSyst_GENIE_multisigma_XSecShape_CCMEC</allowlist>
+    <!>
+    <!-- use all flux covariance systs from multisimTree-->
+    <allowlist type="covariance">expskin_Flux</allowlist>  
+    <allowlist type="covariance">horncurrent_Flux</allowlist>  
+    <allowlist type="covariance">nucleoninexsec_Flux</allowlist>  
+    <allowlist type="covariance">nucleonqexsec_Flux</allowlist>  
+    <allowlist type="covariance">nucleontotxsec_Flux</allowlist>  
+    <allowlist type="covariance">pioninexsec_Flux</allowlist>  
+    <allowlist type="covariance">pionqexsec_Flux</allowlist>  
+    <allowlist type="covariance">piontotxsec_Flux</allowlist>  
+    <allowlist type="covariance">piplus_Flux</allowlist>  
+    <allowlist type="covariance">piminus_Flux</allowlist>  
+    <allowlist type="covariance">kplus_Flux</allowlist>  
+    <allowlist type="covariance">kminus_Flux</allowlist>  
+    <allowlist type="covariance">kzero_Flux</allowlist> 
+    <!>
+   
+    
+    <!--use all detector spline systs from detsystTree 
+         DONT HAVE FOR SBN
+    <allowlist type="spline" binning="reco" plotname="Recomb">detector_var2_reco_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="NULLVariation">detector_var4_null_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="SCINT">detector_var3_scint_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="TPCCohNoise">detector_var5_tpccohnoise_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="TPCIntNoise">detector_var4_tpcintnoise_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="TPCYZNonUni">detector_var10_tpcyznonuniformity_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="ExtraCathBen">detector_var8_addlcathodebending_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="ExtraWireGap">detector_var9_addlwiregap_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="TrigEff">detector_var11_trigeff_recoE_multisigma</allowlist>
+    <allowlist type="spline" binning="reco" plotname="Containment">detector_var12_containment_multisigma</allowlist>
+    -->
+
+    <!--Extra normalization systematics-->
+    <!--   <allowlist type="norm" binning="reco" plotname="SBNDNorm">nu_ICARUS:0.02</allowlist>-->
+    <!--   <allowlist type="norm" binning="reco" plotname="ICARUSNorm">nu_SBND:0.02</allowlist>-->
+    <allowlist type="flat" binning="reco" plotname="ICARUSDet">nu_ICARUS:0.02</allowlist>
+    <allowlist type="flat" binning="reco" plotname="SBNDDet">nu_SBND:0.02</allowlist>
+    <!-- <allowlist type="norm" plotname="FiducialVol">nu_ICARUS:0.01</allowlist> -->
+</variation_list>
+
+<model tag="numudis">
+    <rule index="0" name="No Osc"/>
+    <rule index="1" name="Numu Dis"/>
+</model>
+
+<plotpot value="9.7e20"/>
+
+<MCFile treename="events/selectedNu" filename="/pnfs/sbnd/persistent/users/noza/sBruce/sbnd_bnbcv/sbnd_bnbcv_files.txt" scale = "1.0" pot="1.07578e21"> 
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_SBND_numu_numucc"
+        name                  = "recoE"
+        true_param_name       = "trueE" 
+        model_rule            = "1"
+        true_L_name           = "trueL / 1000"
+        pdg_name              = "truePDG"
+        additional_weight     = "0.9*(CC && (truePDG == 14 || truePDG == -14))"
+        other_param_names     = "trueE"
+        />
+</MCFile>
+    
+ 
+<MCFile treename="events/selectedNu" filename="/pnfs/sbnd/persistent/users/noza/sBruce/icarus_bnbcv/icarus_bnbcv_files.txt" scale = "1.0" pot="8.01169e20"> 
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_numucc"
+        name                  = "recoE"
+        true_param_name       = "trueE" 
+        model_rule            = "1"
+        true_L_name           = "trueL / 1000"
+        pdg_name              = "truePDG"
+        additional_weight     = "(1.35051546*0.9)*(CC && (truePDG == 14 || truePDG == -14))"
+        other_param_names     = "trueE"
+        />
+</MCFile>
+    
