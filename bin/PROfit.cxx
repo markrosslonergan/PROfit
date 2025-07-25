@@ -1407,6 +1407,9 @@ int main(int argc, char* argv[])
     //***********************************************************************
     if(*protest_command){
         log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
+        PROspec cv = FillCVSpectrum(config, prop, true);
+        std::string filename = final_output_tag+"_fracional_systematics.pdf";
+        plotPriorFractionalSystematicBreakdown(config, cv, allcovsyst, filename);
 
         //***************************** END *********************************
     }
