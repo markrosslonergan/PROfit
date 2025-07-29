@@ -478,6 +478,7 @@ namespace PROfit{
                             : *post_channel_errband;
 
                        
+                        float ymin = 1e9, ymax = -1e9;
                         for(size_t i = 0; i < channel_nbins; ++i) {
                             float numerator = data_hist.GetBinContent(i+1);
                             float denonminator = 
@@ -492,10 +493,11 @@ namespace PROfit{
                             ratio_err->SetPointEYhigh(i, ratio_err->GetErrorYhigh(i)/ratio_err->GetPointY(i));
                             ratio_err->SetPointEYlow(i, ratio_err->GetErrorYlow(i)/ratio_err->GetPointY(i));
                             ratio_err->SetPointY(i, 1.0);
+                            ymin = std::min(ymin, rat);
+                            ymax = std::max(ymax, rat);
 
 
                         }
-                        float ymin = 1e9, ymax = -1e9;
                         for (int i = 0; i < ratio_err->GetN(); ++i) {
                             float y, eyh, eyl;
                             y = ratio_err->GetPointY(i);
@@ -504,19 +506,17 @@ namespace PROfit{
                             ymin = std::min(ymin, y - eyl);
                             ymax = std::max(ymax, y + eyh);
 
-                            //now data
-                            y = ratio->GetBinContent(i+1);
-                            ymin = std::min(ymin, y );
-                            ymax = std::max(ymax, y);
-
                         }
                         float yrange = ymax - ymin;
-                        float ylow = ymin - 0.15 * yrange;  // 15% padding below
-                        float yhigh = ymax + 0.15 * yrange; // 15% padding above
+                        float ylow = ymin - 0.05 * yrange;  // 15% padding below
+                        float yhigh = ymax + 0.05 * yrange; // 15% padding above
 
                         if(!posterrband){
-                            one->SetMinimum(std::max(0.5f,std::min(ylow,0.85f)));
-                            one->SetMaximum(std::min(1.5f,std::max(yhigh,1.148f)));
+                            //one->SetMinimum(std::max(0.5f,std::min(ylow,0.85f)));
+                            //one->SetMaximum(std::min(1.5f,std::max(yhigh,1.148f)));
+                            one->SetMinimum(std::min(ylow,0.85f));
+                            one->SetMaximum(std::max(yhigh,1.148f));
+
                         }else{
                             one->SetMinimum(std::min(ylow,0.85f));
                             one->SetMaximum(std::max(yhigh,1.148f));
