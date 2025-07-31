@@ -515,6 +515,9 @@ namespace PROfit {
                 }
 
 
+                // check to make sure if its in allowlist, it IS in files
+                std::vector<std::string> allowlist_check;
+
                 //grab eventweight branch
                 if(!gotWeights){
                     for(const TObject* branch: *chains[fid]->GetListOfBranches()) {
@@ -523,9 +526,11 @@ namespace PROfit {
                         if (std::find(inconfig.m_mcgen_variation_allowlist.begin(), inconfig.m_mcgen_variation_allowlist.end(), branch->GetName()) != inconfig.m_mcgen_variation_allowlist.end()) {
                             log<LOG_INFO>(L"%1% || Setting up eventweight map for this branch: %2% for fid %3$") % __func__ %  branch->GetName() % fid;
                             chains[fid]->SetBranchAddress(branch->GetName(), &(f_event_weights[fid][0][branch->GetName()]));
+                            allowlist_check.push_back(branch->GetName());
                         } else if(strlen(branch->GetName()) > 6 && strcmp(branch->GetName() + strlen(branch->GetName()) - 6, "_sigma") == 0) {
                             log<LOG_INFO>(L"%1% || Setting up knob val list using branch %2% for fid %3%") % __func__ % branch->GetName() % fid;
                             chains[fid]->SetBranchAddress(branch->GetName(), &(f_knob_vals[fid][0][branch->GetName()]));
+                            allowlist_check.push_back(branch->GetName());
                         }
                     }
                     if(inconfig.m_mcgen_numfriends[fid]>0){
@@ -539,6 +544,7 @@ namespace PROfit {
                                         log<LOG_INFO>(L"%1% || Setting up eventweight map for this branch: %2%") % __func__ %  branch->GetName();
 
                                         chains[fid]->SetBranchAddress(branch->GetName(), &(f_event_weights[fid][0][branch->GetName()]));
+                                        allowlist_check.push_back(branch->GetName());
 
 
                                     }else{
@@ -547,12 +553,24 @@ namespace PROfit {
                                 } else if(strlen(branch->GetName()) > 6 && strcmp(branch->GetName() + strlen(branch->GetName()) - 6, "_sigma") == 0) {
                                     log<LOG_INFO>(L"%1% || Setting up knob val list using branch %2%") % __func__ % branch->GetName();
                                     chains[fid]->SetBranchAddress(branch->GetName(), &(f_knob_vals[fid][0][branch->GetName()]));
+                                    allowlist_check.push_back(branch->GetName());
                                 }
                             }
                         }
                     }
                     gotWeights = true;
+                    if(branch_variable->GetIncludeSystematics()){
+                        for(const auto &variation: inconfig.m_mcgen_variation_allowlist){
+                            std::string type = inconfig.m_mcgen_variation_type_map.at(variation);
+                            if (std::find(allowlist_check.begin(), allowlist_check.end(), variation  ) == allowlist_check.end() && (type=="covariance" || type=="spline")) {
+                                log<LOG_ERROR>(L"%1% || ERROR! You have a variation named %2% in your allowlist, so you definitely want it, but its NOT found in the files. Is this a typo? FileID %3%") % __func__ % variation.c_str() %fid  ;
+                                throw std::runtime_error("Allowlist variation not in file.");
+                            }
+                        }
+                    }
                 }//
+
+
                 log<LOG_INFO>(L"%1% || This mcgen file has %2% friends.") % __func__ %  inconfig.m_mcgen_numfriends[fid];
 
             } //end of branch loop
@@ -608,7 +626,7 @@ namespace PROfit {
             for(auto& allow_sys : inconfig.m_mcgen_variation_type_map){
                 if(allow_sys.second=="norm"){
 
- 
+
                     map_systematic_num_universe[allow_sys.first] = 7;
                 }
             }
@@ -740,7 +758,7 @@ namespace PROfit {
                         s.mode == "covariance" ? inconfig.m_num_other_bins_total[i-1] :
                         s.binning == -2 ? inconfig.m_num_truebins_total : 
                         s.binning == -1 ? inconfig.m_num_bins_total  
-                                        : inconfig.m_num_other_bins_total[s.binning]); 
+                        : inconfig.m_num_other_bins_total[s.binning]); 
             }
         }
 
@@ -829,10 +847,10 @@ namespace PROfit {
 
                     for(int ib = 0; ib != num_branch; ++ib) {
 
-                    if(inconfig.m_mcgen_additional_weight_bool[fid][ib]){
-                        branches[ib]->branch_monte_carlo_weight_formula->UpdateFormulaLeaves();
-                        branches[ib]->branch_monte_carlo_weight_formula->GetNdata();
-                    }
+                        if(inconfig.m_mcgen_additional_weight_bool[fid][ib]){
+                            branches[ib]->branch_monte_carlo_weight_formula->UpdateFormulaLeaves();
+                            branches[ib]->branch_monte_carlo_weight_formula->GetNdata();
+                        }
                         branches[ib]->branch_true_pdg_formula->UpdateFormulaLeaves();
                         branches[ib]->branch_true_pdg_formula->GetNdata();
                         branches[ib]->branch_formula->UpdateFormulaLeaves();
@@ -1035,7 +1053,7 @@ namespace PROfit {
                         continue;
 
                     //find bins
-                     
+
                     int global_bin = FindGlobalBin(inconfig, reco_value, branch_fullname[ib]);
                     if(global_bin < 0 )  //out of range
                         continue;
@@ -1252,7 +1270,7 @@ namespace PROfit {
         for(size_t i = 0; i < other_params.size(); ++i) {
             other_bin_indices.push_back(FindGlobalOtherBin(inconfig, other_params[i], subchannel_index, i));
         }
-        
+
         if(global_bin < 0 )  //out of range
             return;
         if(global_true_bin < 0)
@@ -1305,6 +1323,9 @@ namespace PROfit {
                     size_t u = 0;
                     for(; u < syst_obj.knobval.size(); ++u)
                         if(syst_obj.knobval[u] == syst_obj.knob_index[is]) break;
+                    float w = static_cast<float>(map_iter->second->at(is));
+                    if(std::isnan(w) || std::isinf(w))
+                        w = 1;
                     syst_obj.FillUniverse(u, spline_bin, mc_weight * additional_weight * static_cast<float>(map_iter->second->at(is)));
                     for(auto so: other_syst_objs)
                         so->FillUniverse(u, spline_bin, mc_weight * additional_weight * static_cast<float>(map_iter->second->at(is)));

@@ -1011,15 +1011,16 @@ int main(int argc, char* argv[])
 
                 TFile fin(in.c_str());
                 // TODO: Check that axes and labels are the same
-                TH2D *surf = fin.Get<TH2D>("surf");
+                TH2D *surf = fin.Get<TH2D>("brazil_throw_surf_0");
                 if(!surf) {
-                    log<LOG_ERROR>(L"%1% || Could not find a TH2D called 'surf' in the file %2%. Terminating.")
+                    log<LOG_ERROR>(L"%1% || Could not find a TH2D called 'surf' in the file %2%. Skipping this file.")
                         % __func__ % in.c_str();
-                    return EXIT_FAILURE;
+                    continue;
+                    //return EXIT_FAILURE;
                 }
                 for(size_t i = 0; i < surface.nbinsx; ++i) {
                     for(size_t j = 0; j < surface.nbinsy; ++j) {
-                        brazil_band_surfaces.back().surface(i,j) = surf->GetBinContent(i,j);
+                        brazil_band_surfaces.back().surface(i,j) = surf->GetBinContent(i+1,j+1);
                     }
                 }
             }
@@ -1052,6 +1053,19 @@ int main(int argc, char* argv[])
             surf50.Write();
             surf84.Write();
             surf98.Write();
+            if(brazil_throws.size() != 0) {
+               int i = 0;
+               for(const auto &bbsurf: brazil_band_surfaces) {
+                 TH2D *surf = new TH2D(("brazil_throw_surf_"+std::to_string(i)).c_str(),(";"+xlabel+";"+ylabel).c_str(),surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data())     ;
+                 for(size_t j = 0; j < surface.nbinsx; ++j) {
+                     for(size_t k = 0; k < surface.nbinsy; ++k) {
+                       surf->SetBinContent(j+1,k+1, bbsurf.surface(j,k));
+                     }
+                 }
+                 surf->Write();
+                 ++i;
+               }
+             }
         }
 
         //***********************************************************************

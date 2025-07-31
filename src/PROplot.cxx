@@ -217,7 +217,9 @@ namespace PROfit{
                     std::vector<float> edges = other_index < 0 ? config.GetChannelBinEdges(0) : config.GetChannelOtherBinEdges(0, other_index);
                     std::string xtitle = other_index < 0 ? config.m_channel_units[channel] : config.m_channel_other_units[channel][other_index];
                     std::string hist_title = config.m_detector_plotnames[det]  + " "+ config.m_channel_plotnames[channel]+";"+xtitle+";"+ytitle;
-                    std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.5,0.6,0.89,0.89);
+                    //std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.11,0.75,0.89,0.89); 4
+                    std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.38,0.69,0.89,0.89);
+                    leg->SetNColumns(2);
                     leg->SetFillStyle(0);
                     leg->SetLineWidth(0);
                     TH1D cv_hist(std::to_string(global_channel_index).c_str(), hist_title.c_str(), channel_nbins, edges.data());
@@ -379,6 +381,7 @@ namespace PROfit{
                     /*******************/
                     /* Draw everything */
                     /*******************/
+                    double top_modifier = 1.35;
 
                     if(bool(opt&PlotOptions::DataMCRatio) || bool(opt&PlotOptions::DataPostfitRatio))
                         p1.cd();
@@ -386,12 +389,12 @@ namespace PROfit{
 
                     if(cv) {
                         if(bool(opt&PlotOptions::CVasStack)) {
-                            cvstack->SetMaximum(std::max(1.2*cvstack->GetMaximum(),1.2*data_hist.GetMaximum()));
+                            cvstack->SetMaximum(std::max(top_modifier*cvstack->GetMaximum(),top_modifier*data_hist.GetMaximum()));
                             cvstack->Draw("hist");
                             cv_hist.Draw("same hist");
 
                         } else {
-                            cv_hist.SetMaximum(1.2*cv_hist.GetMaximum());
+                            cv_hist.SetMaximum(top_modifier*cv_hist.GetMaximum());
 
                             cv_hist.Draw("hist");
                             cv_hist.GetYaxis()->SetTitleSize(0.06);  
@@ -435,7 +438,7 @@ namespace PROfit{
 
                         if(cv || best_fit) {
                             g->Draw("PE1 same");
-                            cv_hist.SetMaximum(std::max(cv_hist.GetMaximum(),1.2*datmax));
+                            cv_hist.SetMaximum(std::max(cv_hist.GetMaximum(),top_modifier*datmax));
 
                         } else {
                             g->Draw("PE1");
@@ -443,10 +446,19 @@ namespace PROfit{
                     }
 
                     if(texts.size()!=0) {
+                        TLine *dummy_line = new TLine(0,0,0.1,0);
+                        dummy_line->SetLineColor(kWhite);
+                        dummy_line->SetLineWidth(0);
                         if(texts.size()==1){
-                            texts.front().Draw("same");
+                            //texts.front().Draw("same");
+                            TText* text = (TText*)texts.front().GetListOfLines()->First();
+                            const char* label = text->GetTitle(); 
+                            leg->AddEntry(dummy_line,label,"l"); 
                         }else{
-                            texts[global_channel_index].Draw("same");
+                            //texts[global_channel_index].Draw("same");
+                            TText* text = (TText*)texts.at(global_channel_index).GetListOfLines()->First();
+                            const char* label = text->GetTitle(); 
+                            leg->AddEntry(dummy_line,label,"l"); 
                         }
                     }
 
@@ -466,6 +478,9 @@ namespace PROfit{
                             : *post_channel_errband;
 
 
+                       
+                        float ymin = 1e9, ymax = -1e9;
+
                         for(size_t i = 0; i < channel_nbins; ++i) {
                             float numerator = data_hist.GetBinContent(i+1);
                             float denonminator = 
@@ -480,10 +495,11 @@ namespace PROfit{
                             ratio_err->SetPointEYhigh(i, ratio_err->GetErrorYhigh(i)/ratio_err->GetPointY(i));
                             ratio_err->SetPointEYlow(i, ratio_err->GetErrorYlow(i)/ratio_err->GetPointY(i));
                             ratio_err->SetPointY(i, 1.0);
+                            ymin = std::min(ymin, rat);
+                            ymax = std::max(ymax, rat);
 
 
                         }
-                        float ymin = 1e9, ymax = -1e9;
                         for (int i = 0; i < ratio_err->GetN(); ++i) {
                             float y, eyh, eyl;
                             y = ratio_err->GetPointY(i);
@@ -491,14 +507,18 @@ namespace PROfit{
                             eyl = ratio_err->GetErrorYlow(i);
                             ymin = std::min(ymin, y - eyl);
                             ymax = std::max(ymax, y + eyh);
+
                         }
                         float yrange = ymax - ymin;
-                        float ylow = ymin - 0.15 * yrange;  // 15% padding below
-                        float yhigh = ymax + 0.15 * yrange; // 15% padding above
+                        float ylow = ymin - 0.05 * yrange;  // 15% padding below
+                        float yhigh = ymax + 0.05 * yrange; // 15% padding above
 
                         if(!posterrband){
-                            one->SetMinimum(std::max(0.5f,std::min(ylow,0.85f)));
-                            one->SetMaximum(std::min(1.5f,std::max(yhigh,1.148f)));
+                            //one->SetMinimum(std::max(0.5f,std::min(ylow,0.85f)));
+                            //one->SetMaximum(std::min(1.5f,std::max(yhigh,1.148f)));
+                            one->SetMinimum(std::min(ylow,0.85f));
+                            one->SetMaximum(std::max(yhigh,1.148f));
+
                         }else{
                             one->SetMinimum(std::min(ylow,0.85f));
                             one->SetMaximum(std::max(yhigh,1.148f));

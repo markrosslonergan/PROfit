@@ -143,7 +143,7 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
                 for(int i = 0; i < new_collapsed_stat_covariance.cols(); ++i) {
                     // If data bin is 0, this will be nan
                     if(std::isnan(new_collapsed_stat_covariance(i,i)))
-                        new_collapsed_stat_covariance(i,i) = mc_stat_covariance(i)/2;
+                        new_collapsed_stat_covariance(i,i) = mc_stat_covariance(i,i)/2;
                 }
             }
 
