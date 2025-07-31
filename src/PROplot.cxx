@@ -545,26 +545,20 @@ namespace PROfit{
     int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename) {
         //Input PROsyst needs to be the allsplinesyst for now
 
-
-        vector<int> colors = {
-            kAzure+1,       // Bright blue
-            kBlue+2,        // Classic blue
-            kRed+1,         // Bright red
-            kRed-7,         // Light pinkish-red
-            kPink-1,        // Dark pink
-            kGreen+3,       // Forest green
-            kGreen-5,       // Light mint
-            kTeal+2,        // Blue-green
-            kMagenta+2,     // Vivid purple
-            kMagenta-5,      // Lavender
-            kViolet+3,      // Deep violet
-            kPink+6,        // Raspberry
-            kOrange+7,      // Bright orange
-            kOrange-3,      // Peach
-            kYellow+1,      // Lemon
-            kOrange-5       // Gold
+        std::vector<int> colors = {
+            kAzure+1,      // Light blue
+            kRed+1,        // Bright red
+            kGreen+3,      // Medium green
+            kOrange+7,      // Deep orange
+            kBlue+2,        // Darker blue
+            kViolet+2,      // Purple/violet
+            kGray+1,         // Light gray
+            kYellow+2,      // Golden yellow
+            kTeal+3,        // Teal
+            kPink+2,        // Pink
+            kMagenta+2,     // Magenta
+            kSpring+5      // Blue-green
         };
-
 
         std::vector<int> line_styles = {
             1,  // Solid (base style)
@@ -587,9 +581,6 @@ namespace PROfit{
                 % tag_list.c_str();
         }
 
-        TCanvas c("c", "Systematics Comparison", 2500, 1600);  
-        c.Print((filename+"[").c_str());
-
         //This is for prior everthing of course
         std::map<std::string,std::vector<std::string>> used_tags;
         for(const auto &name: allsplinesyst.covar_names){
@@ -611,9 +602,12 @@ namespace PROfit{
 
 
 
-        int nTags = used_tags.size();
+        int nTags = used_tags.size()+1;
         int gridCols = std::ceil(std::sqrt(nTags));
         int gridRows = std::ceil(nTags / float(gridCols));
+
+        TCanvas c("c", "Systematics Comparison", gridCols*1600, gridRows*1200);  
+        c.Print((filename+"[").c_str());
         c.Divide(gridCols, gridRows);
 
         Eigen::MatrixXf diag = spec.Spec().array().matrix().asDiagonal(); 
@@ -629,14 +623,28 @@ namespace PROfit{
                     c.Divide(gridCols, gridRows);
 
                     int padIndex = 1;
+
+                    std::vector<float> bin_edges = config.GetChannelBinEdges(global_channel_index);
+                    size_t binstart = config.GetCollapsedGlobalBinStart(global_channel_index);
+                    size_t nbins = config.m_channel_num_bins[channel];
+                    std::vector<int> channel_bins(nbins);
+                    std::iota(channel_bins.begin(), channel_bins.end(), binstart);
+
+                    std::vector<TH1F*> vsums;
+                    std::vector<std::string> vnames;
                     for (const auto &[tag, vec] : used_tags) {
 
                         c.cd(padIndex++);
                         bool first=true;
 
-                        TLegend* leg = new TLegend(0.59, 0.59, 0.89, 0.89);
-                        leg->SetHeader(tag.c_str(), "C");  // Center-aligned header
+                        TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                        leg->SetNColumns(3);
+                        //leg->SetHeader(tag.c_str(), "C");  // Center-aligned header
 
+
+                        TH1F* hsum = new TH1F( ("Sum_"+tag+"_"+std::to_string(global_channel_index)).c_str(), tag.c_str(), bin_edges.size()-1, bin_edges.data());
+                        hsum->Reset();
+                        std::vector<TH1F*> hvec;
                         int i =0;
                         for(const auto & systname:vec){
 
@@ -645,11 +653,6 @@ namespace PROfit{
                             Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance);
                             Eigen::MatrixXf collapsed_frac_covariance = collapsed_diag.inverse()*collapsed_full_covariance*collapsed_diag.inverse();
 
-                            std::vector<float> bin_edges = config.GetChannelBinEdges(global_channel_index);
-                            size_t binstart = config.GetCollapsedGlobalBinStart(global_channel_index);
-                            size_t nbins = config.m_channel_num_bins[channel];
-                            std::vector<int> channel_bins(nbins);
-                            std::iota(channel_bins.begin(), channel_bins.end(), binstart);
 
                             //submatix ffractional
                             Eigen::MatrixXf channel_cov = collapsed_frac_covariance(channel_bins, channel_bins);
@@ -668,29 +671,86 @@ namespace PROfit{
                             int style_idx = (i / 4) % line_styles.size();  
                             i++;
 
-                            TH1F* h = new TH1F(Form("Channel %zu - %zu", global_channel_index, i),Form("Channel %zu - %zu", global_channel_index, i),bin_edges.size()-1, bin_edges.data());
+                            TH1F* h = new TH1F((tag+"_Channel_"+std::to_string(global_channel_index)+"_"+std::to_string(i)).c_str(), tag.c_str(), bin_edges.size()-1, bin_edges.data());
+
                             for (size_t i = 0; i < nbins; ++i) {
                                 h->SetBinContent(i+1, sqrt(channel_cov(i,i)));
+                                hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+channel_cov(i,i));
                             }
 
                             const std::string &plotname = config.m_mcgen_variation_plotname_map.at(systname);
-                            if(first){
-                                h->SetXTitle(config.m_channel_plotnames[channel].c_str());
-                                h->SetYTitle("Fractional Uncertainty");
-                                h->SetStats(0);  
-                                h->SetMaximum(0.2);
-                                h->SetMinimum(0);
-                                h->Draw("HIST");
-                                first=false;
-                            }else{
-                                h->Draw("HIST SAME");
-                            }
                             leg->AddEntry(h, plotname.c_str(), "l");
                             h->SetLineColor(colors[color_idx]);
                             h->SetLineStyle(line_styles[style_idx]);
+                            hvec.push_back(h);
+
+                        }//end syst
+                        for (size_t i = 0; i < nbins; ++i) {
+                            hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                         }
+                        leg->AddEntry(hsum,"Sum","l");
+
+                        hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+                        hsum->SetYTitle("Fractional Uncertainty");
+                        hsum->SetLineColor(kBlack);
+                        hsum->SetLineWidth(2);
+                        hsum->SetLineStyle(1);
+                        hsum->SetMinimum(0);
+                        hsum->SetStats(0);  
+                        hsum->Draw("HIST");
+                        hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                        gPad->Modified();
+                        gPad->Update();
+
+
+                        vsums.push_back(hsum);
+                        vnames.push_back(tag);
+                        for(auto &h:hvec) h->Draw("HIST SAME");
+
                         leg->Draw();
+                    }//end tag
+
+
+                    //and each sum of sums to wrap it off!
+                    c.cd(padIndex++);
+
+                    TH1F* hsum = new TH1F( ("USum_"+std::to_string(global_channel_index)).c_str(),"Summary!", bin_edges.size()-1, bin_edges.data());
+                    hsum->Reset();
+                    TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                    leg->SetNColumns(3);
+                    std::vector<TH1F*> hvec;
+                    for(size_t t=0; t< vsums.size(); t++){
+                        int color_idx = t % colors.size();
+                        for (size_t i = 0; i < nbins; ++i) {
+                            hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+pow(vsums.at(t)->GetBinContent(i+1),2));
+                        }
+                        TH1F * h = (TH1F*)vsums.at(t)->Clone((to_string(global_channel_index)+vnames[t]).c_str());
+                        leg->AddEntry(h, vnames[t].c_str(), "l");
+                        h->SetLineColor(colors[color_idx]);
+                        h->SetLineStyle(1);
+                        h->SetLineWidth(1);
+                        hvec.push_back(h);
                     }
+
+                    for (size_t i = 0; i < nbins; ++i) {
+                        hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
+                    }
+                    leg->AddEntry(hsum,"Sum","l");
+                    hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+                    hsum->SetTitle("Summary!");
+                    hsum->SetYTitle("Fractional Uncertainty");
+                    hsum->SetLineColor(kBlack);
+                    hsum->SetLineWidth(2);
+                    hsum->SetLineStyle(1);
+                    hsum->SetMinimum(0);
+                    hsum->SetStats(0);  
+                    hsum->Draw("HIST");
+                    hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                    gPad->Modified();
+                    gPad->Update();
+                    for(auto &h:hvec) h->Draw("HIST SAME");
+                    leg->Draw();
+
 
                     c.Print(filename.c_str());
                     global_channel_index++;
@@ -702,6 +762,5 @@ namespace PROfit{
 
         c.Print((filename+"]").c_str());
         return 0;
-    }
-
-};
+    };
+}

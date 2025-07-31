@@ -153,6 +153,7 @@ namespace PROfit {
     PROsyst PROsyst::allsplines2cov(const PROconfig &config, const PROpeller &prop, uint32_t seed) const {
         PROsyst ret;
         for(const auto &[name, spair]: syst_map) {
+
             const auto &[idx, stype] = spair;
             switch(stype) {
                 case SystType::Spline: {

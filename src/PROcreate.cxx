@@ -810,7 +810,7 @@ namespace PROfit {
             }
 
             // loop over all entries
-            size_t to_print = nevents / 5;
+            size_t to_print = nevents > 5 ? nevents / 5 : 1;
             if(to_print>50000)to_print=50000;
             int currentTreeNumber = -1;
 
