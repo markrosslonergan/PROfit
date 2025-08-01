@@ -1326,9 +1326,9 @@ namespace PROfit {
                     float w = static_cast<float>(map_iter->second->at(is));
                     if(std::isnan(w) || std::isinf(w))
                         w = 1;
-                    syst_obj.FillUniverse(u, spline_bin, mc_weight * additional_weight * static_cast<float>(map_iter->second->at(is)));
+                   syst_obj.FillUniverse(u, spline_bin, mc_weight * additional_weight * w);
                     for(auto so: other_syst_objs)
-                        so->FillUniverse(u, spline_bin, mc_weight * additional_weight * static_cast<float>(map_iter->second->at(is)));
+                        so->FillUniverse(u, spline_bin, mc_weight * additional_weight * w);
                     //log<LOG_INFO>(L"%1% || BLARG_S  %2% %3% %4%") % __func__ % additional_weight % mc_weight % static_cast<float>(map_iter->second->at(is));
                 }
 
