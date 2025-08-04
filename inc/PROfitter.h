@@ -242,6 +242,7 @@ namespace PROfit {
             PROfitterConfig fitconfig;
             LBFGSpp::LBFGSBSolver<float> solver;
             uint32_t seed;
+            std::map<std::string,size_t> exception_string_map;
 
             PROfitter(const Eigen::VectorXf ub, const Eigen::VectorXf lb, PROfitterConfig fitconfig_ = {}, uint32_t inseed = 0)
                 : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed)  {}

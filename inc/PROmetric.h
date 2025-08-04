@@ -24,10 +24,15 @@ public:
     virtual const PROmodel &GetModel() const = 0;
     virtual const PROsyst  &GetSysts() const = 0;
     virtual float getSingleChannelChi(size_t channel_index) = 0;
+    PROmetric() = default;
     virtual ~PROmetric() {}
     virtual void fixSpline(int,float)  = 0;
     virtual float Pull(const Eigen::VectorXf &systs) = 0;
     virtual int checkData()  = 0;
+
+    PROmetric(const PROmetric&) {}
+    PROmetric& operator=(const PROmetric&) { return *this; }
+
 
     size_t getCallCount() const { return call_count; }
     void resetCallCount() { call_count = 0; }

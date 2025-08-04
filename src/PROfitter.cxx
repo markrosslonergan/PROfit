@@ -137,6 +137,8 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
 
         } catch (const std::runtime_error &except) {
             log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
+            std::string msg = except.what();
+            exception_string_map[msg]++;
         }
     }
 
@@ -229,6 +231,9 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
 
             } catch (const std::runtime_error &except) {
                 log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
+                std::string msg = except.what();
+                exception_string_map[msg]++;
+
             }
         }
 
