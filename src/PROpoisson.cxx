@@ -135,3 +135,13 @@ float PROpoisson::getSingleChannelChi(size_t channel_index) {
     return value;
 }
 
+int PROpoisson::checkData(){
+    int zeroCount = (data.Spec().array() == 0.0f).count();
+    if(zeroCount>0){
+            log<LOG_ERROR>(L"%1% || ERROR: You asked to check data, and there is  %2% zero bins. Check binning?") % __func__ % zeroCount;
+            throw std::invalid_argument("Zero elements in data when checked.");
+    }
+
+    return 0;
+}
+

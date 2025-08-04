@@ -19,6 +19,7 @@
 #include "PROseed.h"
 #include "PROversion.h"
 #include "PROplot.h"
+#include "PROunblind.h"
 
 #include "CLI11.h"
 #include "LBFGSB.h"
@@ -182,8 +183,6 @@ int main(int argc, char* argv[])
 
     log<LOG_INFO>(L" %1% ") % getIcon().c_str()  ;
     std::string final_output_tag =analysis_tag +"_"+output_tag;
-
-
 
 
     log<LOG_INFO>(L"%1% || ##################################################################") % __func__  ;
@@ -1425,7 +1424,9 @@ int main(int argc, char* argv[])
     if(*protest_command){
         log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
 
+        PROunblind_Stage1(metric);
         //***************************** END *********************************
+        return 0;
     }
 
     std::ofstream global_fit_out;

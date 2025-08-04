@@ -91,7 +91,7 @@ namespace PROfit{
             void fixSpline(int fix, float valin);
 
             float getSingleChannelChi(size_t channel_index) ;
-                
+            int checkData();    
     };
 }
 #endif

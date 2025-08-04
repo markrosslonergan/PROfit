@@ -16,6 +16,7 @@ namespace PROfit {
         size_t MCMCburn = 25'000;
 
         PROfitterConfig(){};
+        PROfitterConfig(std::string fit_preset, bool isScan) : PROfitterConfig(std::map<std::string, float>{}, fit_preset, isScan){};
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){
 
             if(!isScan){
@@ -54,6 +55,18 @@ namespace PROfit {
                     n_max_local_retries = 8;
                     param.wolfe = 0.99;
                     param.ftol = 1e-8;
+                }else if(fit_preset == "unblind"){
+                    param.epsilon = 1e-6;
+                    param.max_iterations = 200'000;
+                    param.max_linesearch = 2500;
+                    param.delta = 1e-6;
+                    n_multistart = 10000;
+                    n_swarm_particles = 500;
+                    n_swarm_iterations = 1000;
+                    n_localfit=6;
+                    n_max_local_retries = 12;
+                    param.wolfe = 0.99;
+                    param.ftol = 1e-8;
                 }
 
             }else{
@@ -81,7 +94,7 @@ namespace PROfit {
                     n_swarm_iterations = 100;
                     n_localfit=2;
                     n_max_local_retries = 1;
-                }else if(fit_preset == "overkill"){
+                }else if(fit_preset == "overkill"|| fit_preset == "unblind"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 100'000;
                     param.max_linesearch = 500;

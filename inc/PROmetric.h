@@ -27,6 +27,7 @@ public:
     virtual ~PROmetric() {}
     virtual void fixSpline(int,float)  = 0;
     virtual float Pull(const Eigen::VectorXf &systs) = 0;
+    virtual int checkData()  = 0;
 };
 
 };
