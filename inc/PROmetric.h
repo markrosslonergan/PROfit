@@ -28,6 +28,13 @@ public:
     virtual void fixSpline(int,float)  = 0;
     virtual float Pull(const Eigen::VectorXf &systs) = 0;
     virtual int checkData()  = 0;
+
+    size_t getCallCount() const { return call_count; }
+    void resetCallCount() { call_count = 0; }
+
+
+protected:
+    mutable std::atomic<size_t> call_count{0};
 };
 
 };

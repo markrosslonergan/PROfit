@@ -4,7 +4,7 @@
 // STANDARD
 #include <string>
 #include <vector>
-
+#include <atomic>
 #include <Eigen/Eigen>
 
 // OUR INCLUDES

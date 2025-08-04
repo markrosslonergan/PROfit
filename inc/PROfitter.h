@@ -244,7 +244,7 @@ namespace PROfit {
             uint32_t seed;
 
             PROfitter(const Eigen::VectorXf ub, const Eigen::VectorXf lb, PROfitterConfig fitconfig_ = {}, uint32_t inseed = 0)
-                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed) {}
+                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed)  {}
 
             float Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt = Eigen::VectorXf());
 

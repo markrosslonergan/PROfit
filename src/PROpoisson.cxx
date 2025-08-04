@@ -66,6 +66,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
 
 
 float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
+    call_count++;
     size_t nparams = model.nparams+syst->GetNSplines();
     size_t nsyst = syst->GetNSplines();
     log<LOG_DEBUG>(L"%1% || nparams is %2%, nsyst is %3% ") % __func__ % nparams % nsyst;    
