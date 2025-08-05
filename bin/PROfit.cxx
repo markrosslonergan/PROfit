@@ -1346,10 +1346,11 @@ int main(int argc, char* argv[])
         std::vector<std::thread> threads;
         size_t todo = nuniv/FCthreads;
         size_t addone = FCthreads - nuniv%FCthreads;
+        bool gof_mode = false;
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent,gof_mode};
 
             threads.emplace_back([args]() {
                     PROfit::fc_worker(args);
@@ -1424,7 +1425,7 @@ int main(int argc, char* argv[])
     if(*protest_command){
         log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
 
-        PROunblind_Stage1(metric);
+        PROunblind_Stage1(config,prop,metric,myseed,nthread,final_output_tag);
         //***************************** END *********************************
         return 0;
     }

@@ -20,8 +20,14 @@ void fc_worker(fc_args args) {
     size_t nphys = model->nparams;
     //set physics to correct values
     for(size_t j=0; j<nphys; j++){
-        ub_osc(j) = model->ub(j);
-        lb_osc(j) = model->lb(j); 
+        if(args.gof_mode){
+            //keep phys param fixed
+            ub_osc(j) = args.phy_params(j);
+            lb_osc(j) = args.phy_params(j); 
+        }else{
+            ub_osc(j) = model->ub(j);
+            lb_osc(j) = model->lb(j); 
+        }
     }
     //upper lower bounds for splines
     for(size_t j = nphys; j < nparams; ++j) {
@@ -67,7 +73,8 @@ void fc_worker(fc_args args) {
 
         // No oscillations
         PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
-        float chi2_syst = fitter.Fit(*null_metric);
+        float chi2_syst = -999;
+        if(!args.gof_mode)chi2_syst = fitter.Fit(*null_metric);
 
         if(fitter.best_fit.size() == (int)(nparams - nphys))
             for(size_t i = nphys; i < nparams; ++i)
@@ -76,17 +83,16 @@ void fc_worker(fc_args args) {
         // With oscillations
         PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
         float chi2_osc = fitter_osc.Fit(*metric, seed_pt); 
-        //float chi2_osc = fitter_osc.Fit(*metric); 
 
         Eigen::VectorXf t = Eigen::VectorXf::Map(throws.data(), throws.size());
 
         args.out->push_back({
                 chi2_syst, chi2_osc, 
                 std::pow(10.0f, fitter_osc.best_fit(0)), std::pow(10.0f, fitter_osc.best_fit(1)), 
-                fitter.best_fit, fitter_osc.best_fit.segment(2, nparams-2), t
+                args.gof_mode ? Eigen::VectorXf() :fitter.best_fit , args.gof_mode ? Eigen::VectorXf() : fitter_osc.best_fit.segment(2, nparams-2) , t
         });
 
-        args.dchi2s->push_back(std::abs(chi2_syst - chi2_osc ));
+        args.dchi2s->push_back( args.gof_mode ? -999 :std::abs(chi2_syst - chi2_osc ));
         delete metric;
         delete null_metric;
     }

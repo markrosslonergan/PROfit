@@ -36,6 +36,7 @@ namespace PROfit {
         uint32_t seed;
         const int thread;
         const bool binned;
+        const bool gof_mode;
     };
 
     void fc_worker(fc_args args);

@@ -3,8 +3,11 @@
 namespace PROfit{
 
 
-    int PROunblind_Stage1(PROmetric *metric ){
-    
+    int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, size_t nthread, std::string final_output_tag){
+   
+        //manually remove any print outs
+        GLOBAL_LEVEL=LOG_WARNING;
+
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         //### 1 Number of Empty Bins in Data
         try{
@@ -24,6 +27,7 @@ namespace PROfit{
 
         //PROfitterConfig fitconfig2("unblind",false);
         PROfitterConfig fitconfig2("good",false);
+        PROfitterConfig scanfitconfig2("good",true);
 
         size_t nparams = metric->GetModel().nparams + metric->GetSysts().GetNSplines();
         size_t nphys = metric->GetModel().nparams;
@@ -40,7 +44,8 @@ namespace PROfit{
 
         PROfitter fitter(ub, lb, fitconfig2,2);
 
-        log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
+        log<LOG_ERROR>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
+        log<LOG_ERROR>(L"%1% || ####### (Note LOG level manually set to WARNING only) ######") % __func__; 
 
         float chi2 = fitter.Fit(*metric); 
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -108,15 +113,104 @@ namespace PROfit{
              }
        }
 
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
-        log<LOG_INFO>(L"%1% || at paramters: ###### (redacted for now) ") % __func__;
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        log<LOG_ERROR>(L"%1% || ########### Global Best Fit Results ############") % __func__;
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         
+        //manually remove any print outs
+        GLOBAL_LEVEL=LOG_INFO;
+
+        //get it all from feldman FC, modified to gof also        
+        size_t nuniv = 50;
+        log<LOG_ERROR>(L"%1% || -- Calculating frequentist pvalue using %2% samples   ") % __func__ % nuniv;
+        size_t FCthreads = nthread > nuniv ? nuniv : nthread;
+        Eigen::MatrixXf cv_vec = FillCVSpectrum(config, prop, false).Spec();
+        Eigen::MatrixXf L = metric->GetSysts().DecomposeFractionalCovariance(config, cv_vec);
+
+        std::vector<std::vector<float>> dchi2s;
+        dchi2s.reserve(FCthreads);
+        std::vector<std::vector<fc_out>> outs;
+        outs.reserve(FCthreads);
+        std::vector<std::thread> threads;
+        size_t todo = nuniv/FCthreads;
+        size_t addone = FCthreads - nuniv%FCthreads;
+        bool gof_mode = true;
+        for(size_t i = 0; i < nthread; i++) {
+            dchi2s.emplace_back();
+            outs.emplace_back();
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, false,gof_mode};
 
 
-        for(size_t i = 0; i< nparams; i++){
+            threads.emplace_back([args]() {
+                    PROfit::fc_worker(args);
+                    });
+        }
+        for(auto&& t: threads) {
+            t.join();
+        }
+
+        {
+            TFile fout((final_output_tag+"_unblind_BF_GOF.root").c_str(), "RECREATE");
+            fout.cd();
+            float chi2_osc, chi2_syst, best_dmsq, best_sinsq2t;
+            std::map<std::string, float> best_systs_osc, best_systs, syst_throw;
+            TTree tree("tree", "tree");
+            tree.Branch("chi2_osc", &chi2_osc); 
+            //tree.Branch("chi2_syst", &chi2_syst); 
+            tree.Branch("best_dmsq", &best_dmsq); 
+            tree.Branch("best_sinsq2t", &best_sinsq2t); 
+            //tree.Branch("best_systs_osc", &best_systs_osc); 
+            tree.Branch("best_systs", &best_systs); 
+            tree.Branch("syst_throw", &syst_throw);
+
+            for(const auto &out: outs) {
+                for(const auto &fco: out) {
+                    chi2_osc = fco.chi2_osc;
+                    //chi2_syst = fco.chi2_syst;
+                    best_dmsq = fco.dmsq;
+                    best_sinsq2t = fco.sinsq2tmm;
+                    for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
+                        best_systs_osc[metric->GetSysts().spline_names[i]] = fco.best_fit_osc(i);
+                        //best_systs[metric->GetSysts().spline_names[i]] = fco.best_fit_syst(i);
+                        syst_throw[metric->GetSysts().spline_names[i]] = fco.syst_throw(i);
+                    }
+                    tree.Fill();
+                }
+            }
+
+            tree.Write();
+        }
+        {
+            ofstream fcout(final_output_tag+"_unblind_BF_GOF.csv");
+            fcout << "chi2_osc,chi2_syst,best_dmsq,best_sinsq2t";
+            for(const std::string &name: metric->GetSysts().spline_names) {
+                fcout << ",best_" << name << "_osc,best_" << name << "," << name << "_throw";
+            }
+            fcout << "\r\n";
+
+            for(const auto &out: outs) {
+                for(const auto &fco: out) {
+                    fcout << fco.chi2_osc << "," << "," << fco.dmsq << "," << fco.sinsq2tmm;
+                    for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
+                        fcout << fco.best_fit_osc(i) << "," << fco.syst_throw(i);
+                    }
+                    fcout << "\r\n";
+                }
+            }
+        }
+        std::vector<float> flattened_gofchi2s;
+        for(const auto& out: outs) for(const auto& fco: out) flattened_gofchi2s.push_back(fco.chi2_osc);
+        std::sort(flattened_gofchi2s.begin(), flattened_gofchi2s.end());
+
+        auto it = std::lower_bound(flattened_gofchi2s.begin(), flattened_gofchi2s.end(), chi2);
+        size_t index =  std::distance(flattened_gofchi2s.begin(),it);
+        size_t count_above = flattened_gofchi2s.size()-index;
+        float pval = count_above/(float)nuniv;
+        log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
+ 
+        /*
+         for(size_t i = 0; i< nparams; i++){
 
             if(i<nphys){
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i);
@@ -124,7 +218,9 @@ namespace PROfit{
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
             }
         }
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        */
+
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
 
         return 0;
