@@ -23,6 +23,8 @@
 #include "TFile.h"
 namespace PROfit {
 
+    void getConfirmation(std::string first, std::string second);
+
 
   /* Function: Unblinding Proceedure v1 ICARUS numu dis
      * Note: Proceed in stages. Stage1 is a Global Fit. 

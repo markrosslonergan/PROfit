@@ -89,7 +89,7 @@ void fc_worker(fc_args args) {
         args.out->push_back({
                 chi2_syst, chi2_osc, 
                 std::pow(10.0f, fitter_osc.best_fit(0)), std::pow(10.0f, fitter_osc.best_fit(1)), 
-                args.gof_mode ? Eigen::VectorXf() :fitter.best_fit , args.gof_mode ? Eigen::VectorXf() : fitter_osc.best_fit.segment(2, nparams-2) , t
+                args.gof_mode ? Eigen::VectorXf() : fitter.best_fit , fitter_osc.best_fit.segment(2, nparams-2) , t
         });
 
         args.dchi2s->push_back( args.gof_mode ? -999 :std::abs(chi2_syst - chi2_osc ));

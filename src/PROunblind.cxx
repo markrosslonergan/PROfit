@@ -2,6 +2,28 @@
 
 namespace PROfit{
 
+    void getConfirmation(std::string first, std::string second){
+
+        while (true) {
+             log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % first.c_str();;
+             log<LOG_ERROR>(L"%1% || If you want to proceed please type \"proceed\" or type \"exit\" to quit.") % __func__;
+             std::string input;
+             std::getline(std::cin, input);
+             if (input == "exit") throw std::domain_error(std::string("Manually exited on confirmation command."));
+             if (input == "proceed") {
+                log<LOG_ERROR>(L"%1% || Proceeding..you have 3s to ctrl-c this!") % __func__;
+                std::this_thread::sleep_for(std::chrono::seconds(3));                                   
+                break;
+             } else {
+                log<LOG_ERROR>(L"%1% || Thats not one of the two options, try again!") % __func__;
+             }
+       
+
+        }
+
+       log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % second.c_str();;
+       return;
+    }
 
     int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, size_t nthread, std::string final_output_tag){
    
@@ -98,31 +120,21 @@ namespace PROfit{
        }
 
        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
-       while (true) {
-             log<LOG_ERROR>(L"%1% || Passed all auto checks, but please review the above info.") % __func__;
-             log<LOG_ERROR>(L"%1% || If you want to proceed please type \"proceed\" or type \"exit\" to quit.") % __func__;
-             std::string input;
-             std::getline(std::cin, input);
-             if (input == "exit") return 1;
-             if (input == "proceed") {
-                log<LOG_ERROR>(L"%1% || Proceeding..you have 3s to ctrl-c this!") % __func__;
-                std::this_thread::sleep_for(std::chrono::seconds(3));                                   
-                break;
-             } else {
-                log<LOG_ERROR>(L"%1% || Thats not one of the two options, try again!") % __func__;
-             }
-       }
+        getConfirmation("Passed all auto checks, but please review the above info.","Proceed to BF chi value reveal?");
+
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         
+        getConfirmation("############################################","Proceed to begin frequentist pval calc?");
+
         //manually remove any print outs
         GLOBAL_LEVEL=LOG_INFO;
 
         //get it all from feldman FC, modified to gof also        
-        size_t nuniv = 50;
+        size_t nuniv = 100;
         log<LOG_ERROR>(L"%1% || -- Calculating frequentist pvalue using %2% samples   ") % __func__ % nuniv;
         size_t FCthreads = nthread > nuniv ? nuniv : nthread;
         Eigen::MatrixXf cv_vec = FillCVSpectrum(config, prop, false).Spec();
@@ -150,6 +162,7 @@ namespace PROfit{
             t.join();
         }
 
+        log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
         {
             TFile fout((final_output_tag+"_unblind_BF_GOF.root").c_str(), "RECREATE");
             fout.cd();
@@ -160,8 +173,8 @@ namespace PROfit{
             //tree.Branch("chi2_syst", &chi2_syst); 
             tree.Branch("best_dmsq", &best_dmsq); 
             tree.Branch("best_sinsq2t", &best_sinsq2t); 
-            //tree.Branch("best_systs_osc", &best_systs_osc); 
-            tree.Branch("best_systs", &best_systs); 
+            tree.Branch("best_systs_osc", &best_systs_osc); 
+            //tree.Branch("best_systs", &best_systs); 
             tree.Branch("syst_throw", &syst_throw);
 
             for(const auto &out: outs) {
@@ -183,7 +196,7 @@ namespace PROfit{
         }
         {
             ofstream fcout(final_output_tag+"_unblind_BF_GOF.csv");
-            fcout << "chi2_osc,chi2_syst,best_dmsq,best_sinsq2t";
+            fcout << "chi2_osc,best_dmsq,best_sinsq2t";
             for(const std::string &name: metric->GetSysts().spline_names) {
                 fcout << ",best_" << name << "_osc,best_" << name << "," << name << "_throw";
             }
@@ -202,11 +215,13 @@ namespace PROfit{
         std::vector<float> flattened_gofchi2s;
         for(const auto& out: outs) for(const auto& fco: out) flattened_gofchi2s.push_back(fco.chi2_osc);
         std::sort(flattened_gofchi2s.begin(), flattened_gofchi2s.end());
-
+        log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_gofchi2s;
+        log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % chi2;
         auto it = std::lower_bound(flattened_gofchi2s.begin(), flattened_gofchi2s.end(), chi2);
         size_t index =  std::distance(flattened_gofchi2s.begin(),it);
         size_t count_above = flattened_gofchi2s.size()-index;
-        float pval = count_above/(float)nuniv;
+        float pval = (float)count_above/(float)nuniv;
+        log<LOG_ERROR>(L"%1% || Finished throws. %2% %3% %4%") % __func__ % __LINE__% index % count_above;
         log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
  
         /*
