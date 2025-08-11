@@ -15,8 +15,8 @@ void fc_worker(fc_args args) {
     size_t nparams = model->nparams + args.systs.GetNSplines();
     Eigen::VectorXf lb_osc = Eigen::VectorXf::Constant(nparams, -3.0);
     Eigen::VectorXf ub_osc = Eigen::VectorXf::Constant(nparams, 3.0);
-    Eigen::VectorXf lb = Eigen::VectorXf::Constant(args.systs.GetNSplines(), -3.0);
-    Eigen::VectorXf ub = Eigen::VectorXf::Constant(args.systs.GetNSplines(), 3.0);
+    Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+    Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
     size_t nphys = model->nparams;
     //set physics to correct values
     for(size_t j=0; j<nphys; j++){
@@ -28,13 +28,15 @@ void fc_worker(fc_args args) {
             ub_osc(j) = model->ub(j);
             lb_osc(j) = model->lb(j); 
         }
+        ub(j) = args.phy_params(j);
+        lb(j) = args.phy_params(j); 
     }
     //upper lower bounds for splines
     for(size_t j = nphys; j < nparams; ++j) {
         lb_osc(j) = args.systs.spline_lo[j-nphys];
         ub_osc(j) = args.systs.spline_hi[j-nphys];
-        lb(j-nphys) = args.systs.spline_lo[j-nphys];
-        ub(j-nphys) = args.systs.spline_hi[j-nphys];
+        lb(j) = args.systs.spline_lo[j-nphys];
+        ub(j) = args.systs.spline_hi[j-nphys];
     }
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
     Eigen::VectorXf seed_pt = Eigen::VectorXf::Zero(nparams);
@@ -56,16 +58,13 @@ void fc_worker(fc_args args) {
         PROspec newSpec = PROspec::PoissonVariation(PROspec(CollapseMatrix(args.config, shifted.Spec()) + args.L * throwC, CollapseMatrix(args.config, shifted.Error())), dseed(rng));
         PROdata data(newSpec.Spec(), newSpec.Error());
         //Metric Time
-        PROmetric *metric, *null_metric;
+        PROmetric *metric;
         if(args.chi2 == "PROchi") {
             metric = new PROchi("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-            null_metric = new PROchi("", args.config, args.prop, &args.systs, *null_model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
         } else if(args.chi2 == "PROCNP") {
             metric = new PROCNP("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-            null_metric = new PROCNP("", args.config, args.prop, &args.systs, *null_model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
         } else if(args.chi2 == "Poisson") {
             metric = new PROpoisson("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-            null_metric = new PROpoisson("", args.config, args.prop, &args.systs, *null_model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
         } else {
             log<LOG_ERROR>(L"%1% || Unrecognized chi2 function %2%") % __func__ % args.chi2.c_str();
             abort();
@@ -74,7 +73,7 @@ void fc_worker(fc_args args) {
         // No oscillations
         PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
         float chi2_syst = -999;
-        if(!args.gof_mode)chi2_syst = fitter.Fit(*null_metric);
+        if(!args.gof_mode)chi2_syst = fitter.Fit(*metric);
 
         if(fitter.best_fit.size() == (int)(nparams - nphys))
             for(size_t i = nphys; i < nparams; ++i)
@@ -94,7 +93,6 @@ void fc_worker(fc_args args) {
 
         args.dchi2s->push_back( args.gof_mode ? -999 :std::abs(chi2_syst - chi2_osc ));
         delete metric;
-        delete null_metric;
     }
 };
 
