@@ -20,14 +20,8 @@ void fc_worker(fc_args args) {
     size_t nphys = model->nparams;
     //set physics to correct values
     for(size_t j=0; j<nphys; j++){
-        if(args.gof_mode){
-            //keep phys param fixed
-            ub_osc(j) = args.phy_params(j);
-            lb_osc(j) = args.phy_params(j); 
-        }else{
-            ub_osc(j) = model->ub(j);
-            lb_osc(j) = model->lb(j); 
-        }
+        ub_osc(j) = model->ub(j);
+        lb_osc(j) = model->lb(j); 
         ub(j) = args.phy_params(j);
         lb(j) = args.phy_params(j); 
     }
@@ -72,8 +66,7 @@ void fc_worker(fc_args args) {
 
         // No oscillations
         PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
-        float chi2_syst = -999;
-        if(!args.gof_mode)chi2_syst = fitter.Fit(*metric);
+        float chi2_syst = fitter.Fit(*metric);
 
         if(fitter.best_fit.size() == (int)(nparams - nphys))
             for(size_t i = nphys; i < nparams; ++i)
@@ -81,7 +74,8 @@ void fc_worker(fc_args args) {
 
         // With oscillations
         PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
-        float chi2_osc = fitter_osc.Fit(*metric, seed_pt); 
+        float chi2_osc = -999;
+        if(!args.gof_mode) chi2_osc = fitter_osc.Fit(*metric, seed_pt); 
 
         Eigen::VectorXf t = Eigen::VectorXf::Map(throws.data(), throws.size());
 

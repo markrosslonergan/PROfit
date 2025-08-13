@@ -213,7 +213,7 @@ namespace PROfit{
             }
         }
         std::vector<float> flattened_gofchi2s;
-        for(const auto& out: outs) for(const auto& fco: out) flattened_gofchi2s.push_back(fco.chi2_osc);
+        for(const auto& out: outs) for(const auto& fco: out) flattened_gofchi2s.push_back(fco.chi2_syst);
         std::sort(flattened_gofchi2s.begin(), flattened_gofchi2s.end());
         log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_gofchi2s;
         log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % chi2;
