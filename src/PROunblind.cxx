@@ -131,7 +131,7 @@ namespace PROfit{
         getConfirmation("############################################","Proceed to begin frequentist pval calc?");
 
         //manually remove any print outs
-        GLOBAL_LEVEL=LOG_INFO;
+        //GLOBAL_LEVEL=LOG_INFO;
 
         //get it all from feldman FC, modified to gof also        
         size_t nuniv = 100;
