@@ -537,14 +537,14 @@ int main(int argc, char* argv[])
     //Metric Time
     PROmetric *metric, *null_metric;
     if(chi2 == "PROchi") {
-        metric = new PROchi("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-        null_metric = new PROchi("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
+        metric = new PROchi("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
+        null_metric = new PROchi("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
     } else if(chi2 == "PROCNP") {
-        metric = new PROCNP("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-        null_metric = new PROCNP("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
+        metric = new PROCNP("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
+        null_metric = new PROCNP("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
     } else if(chi2 == "Poisson") {
-        metric = new PROpoisson("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
-        null_metric = new PROpoisson("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
+        metric = new PROpoisson("", config, prop, &systs, *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
+        null_metric = new PROpoisson("", config, prop, &systs, *null_model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2, shapeonly);
     } else {
         log<LOG_ERROR>(L"%1% || Unrecognized chi2 function %2%") % __func__ % chi2.c_str();
         abort();

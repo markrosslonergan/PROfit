@@ -21,6 +21,7 @@
 // PROfit
 #include "PROconfig.h"
 #include "PROserial.h"
+#include "PROspec.h"
 
 namespace PROfit{
 
@@ -63,6 +64,10 @@ public:
     TH1D toTH1D(const PROconfig& inconfig, int channel_index, int other_index = -1) const;
 
     void toROOT(const PROconfig& inconfig, const std::string& output_name);
+
+    /* Function to normalize PROdata per subchannel to a given PROspec*/
+    Eigen::VectorXf Normalize(const PROconfig &inconfig, const PROspec &target_spec) const;
+
 
     void plotSpectrum(const PROconfig& inconfig, const std::string& output_name) const;
 
