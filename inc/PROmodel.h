@@ -70,6 +70,9 @@ public:
 
     /* Function: 3+1 numu->numue disapperance prob in SBL approx */
     float Pmumu(float dmsq, float sinsq2thmumu, float le) const{
+        thread_local std::unordered_map<std::tuple<float, float, float>, float> cache;
+        if(cache.find({dmsq, sinsq2thmumu, le}) != std::end(cache))
+            return cache.at({dmsq, sinsq2thmumu, le});
         dmsq = std::pow(10.0f, dmsq);
         sinsq2thmumu = std::pow(10.0f, sinsq2thmumu);
 
@@ -94,6 +97,7 @@ public:
             exit(EXIT_FAILURE);
         }
 
+        cache.at({dmsq, sinsq2thmumu, le}) = prob;
         return prob;
     }
 };
