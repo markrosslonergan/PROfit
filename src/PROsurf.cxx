@@ -493,7 +493,7 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
 
 }
 
-void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc, const Eigen::VectorXf& init_seed, const Eigen::VectorXf & true_params) {
+void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc, const Eigen::VectorXf& init_seed, const Eigen::VectorXf & true_params, bool mask_osc) {
 
     int nparams = systs.GetNSplines() + model.nparams*with_osc;
     int nBins = nparams;
@@ -520,6 +520,7 @@ void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel
 
     size_t zoom_shift = 0;
     for(size_t w = 0; w< graphs.size(); w++ ){
+        if(mask_osc && w < model.nparams) continue;
 
         c->cd(w+1+zoom_shift);
         std::string xval = w < model.nparams ? "Log_{10}(" + model.pretty_param_names[w]+")" :"#sigma Shift"  ;
@@ -618,12 +619,20 @@ void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel
     onesig.GetXaxis()->SetLabelSize(0);  // Hide default numerical labels
 
     onesig.SetTitle("");
-    onesig.Draw("A2");
+    TGraphAsymmErrors todraw = onesig;
+    if(mask_osc) {
+        for(size_t i = 0; i < model.nparams; ++i) {
+            todraw.SetPoint(i, 0,0);
+            todraw.SetPointError(i, 0, 0, 0, 0);
+        }
+    }
+    todraw.Draw("A2");
+    //onesig.Draw("A2");
     //onesig.GetYaxis()->SetTitle("#sigma Shift");
-    onesig.GetYaxis()->SetTitle("Posterior 1#sigma Error");
-    onesig.GetYaxis()->SetTitleOffset(0.8);
+    todraw.GetYaxis()->SetTitle("Posterior 1#sigma Error");
+    todraw.GetYaxis()->SetTitleOffset(0.8);
 
-    float y_min = onesig.GetMinimum();
+    float y_min = todraw.GetMinimum();
     for (size_t i = 0; i < barvalues.size(); ++i) {
         std::string label = i < model.nparams ? "Log_{10}(" + model.pretty_param_names[i]+")" : config.m_mcgen_variation_plotname_map.at(names[i]);
         TLatex* text = new TLatex(barvalues[i], y_min - 0.05, label.c_str());  // Position text below axis

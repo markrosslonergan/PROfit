@@ -129,7 +129,7 @@ namespace PROfit{
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         
-        getConfirmation("############################################","Proceed to begin frequentist pval calc?");
+        getConfirmation("Proceed to begin frequentist pval calc?","############################################");
 
         //manually remove any print outs
         //GLOBAL_LEVEL=LOG_INFO;
@@ -238,7 +238,7 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
-        getConfirmation("############################################","Proceed to begin profile with systematic results only?");
+        getConfirmation("Proceed to begin profile with systematic results only?","############################################");
 
         PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, fitconfig2, final_output_tag, chi2, true, nthread, best_fit);
 
@@ -266,7 +266,7 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
-        getConfirmation("############################################","Proceed to show +/- 1 sigma ranges for nuisance parameters?");
+        getConfirmation("Proceed to show +/- 1 sigma ranges for nuisance parameters?","############################################");
 
         log<LOG_ERROR>(L"%1% || Showing profile 1 sigma ranges for nuisance parameters in random order.") % __func__ ;
         for(size_t i = 0; i < permutation.size(); ++i) {
@@ -279,7 +279,10 @@ namespace PROfit{
         }
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
-        getConfirmation("############################################","Proceed to show full nuisance parameter profile results with names?");
+        getConfirmation("Proceed to show full nuisance parameter profile results with names?","############################################");
+
+        prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, final_output_tag,
+                   true, best_fit, Eigen::VectorXf(), true); 
 
         return 0;
     }
