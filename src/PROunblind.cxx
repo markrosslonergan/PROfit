@@ -180,13 +180,13 @@ namespace PROfit{
 
             for(const auto &out: outs) {
                 for(const auto &fco: out) {
-                    chi2_osc = fco.chi2_osc;
-                    //chi2_syst = fco.chi2_syst;
+                    //chi2_osc = fco.chi2_osc;
+                    chi2_syst = fco.chi2_syst;
                     best_dmsq = fco.dmsq;
                     best_sinsq2t = fco.sinsq2tmm;
                     for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
-                        best_systs_osc[metric->GetSysts().spline_names[i]] = fco.best_fit_osc(i);
-                        //best_systs[metric->GetSysts().spline_names[i]] = fco.best_fit_syst(i);
+                        //best_systs_osc[metric->GetSysts().spline_names[i]] = fco.best_fit_osc(i);
+                        best_systs[metric->GetSysts().spline_names[i]] = fco.best_fit_syst(i);
                         syst_throw[metric->GetSysts().spline_names[i]] = fco.syst_throw(i);
                     }
                     tree.Fill();
@@ -197,17 +197,17 @@ namespace PROfit{
         }
         {
             ofstream fcout(final_output_tag+"_unblind_BF_GOF.csv");
-            fcout << "chi2_osc,best_dmsq,best_sinsq2t";
+            fcout << "chi2_syst,best_dmsq,best_sinsq2t";
             for(const std::string &name: metric->GetSysts().spline_names) {
-                fcout << ",best_" << name << "_osc,best_" << name << "," << name << "_throw";
+                fcout << ",best_" << name << "_syst,best_" << name << "," << name << "_throw";
             }
             fcout << "\r\n";
 
             for(const auto &out: outs) {
                 for(const auto &fco: out) {
-                    fcout << fco.chi2_osc << "," << "," << fco.dmsq << "," << fco.sinsq2tmm;
+                    fcout << fco.chi2_syst << "," << "," << fco.dmsq << "," << fco.sinsq2tmm;
                     for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
-                        fcout << fco.best_fit_osc(i) << "," << fco.syst_throw(i);
+                        fcout << fco.best_fit_syst(i) << "," << fco.syst_throw(i);
                     }
                     fcout << "\r\n";
                 }
