@@ -78,18 +78,11 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
 
 
     Eigen::MatrixXf inverted_collapsed_full_covariance(config.m_num_bins_total_collapsed,config.m_num_bins_total_collapsed);
-    PROspec cv = FillRecoSpectra(config, peller, *syst, model, subvector1, strat != EventByEvent);
-    Eigen::MatrixXf collapsed_data_stat_covariance = data.Spec().array().matrix().asDiagonal();
-    Eigen::MatrixXf mc_stat_covariance = cv.Spec().array().matrix().asDiagonal();
-    Eigen::MatrixXf collapsed_mc_stat_covariance = CollapseMatrix(config, mc_stat_covariance);
-    
-    Eigen::MatrixXf collapsed_stat_covariance = 3 * (collapsed_data_stat_covariance.inverse() + 2 * collapsed_mc_stat_covariance.inverse()).inverse();
-    for(int i = 0; i < collapsed_stat_covariance.cols(); ++i) {
-        // If data bin is 0, this will be nan
-        if(std::isnan(collapsed_stat_covariance(i,i)))
-            collapsed_stat_covariance(i,i) = mc_stat_covariance(i,i)/2;
-    }
-
+    Eigen::VectorXf collapsed_cv = CollapseMatrix(config, FillRecoSpectra(config, peller, *syst, model, subvector1, strat != EventByEvent).Spec());
+    Eigen::MatrixXf collapsed_stat_covariance = Eigen::MatrixXf::Zero(data.Spec().size(), data.Spec().size());
+    for(long i = 0; i < data.Spec().size(); ++i)
+        collapsed_stat_covariance(i,i) = data.Spec()(i) == 0 ? collapsed_cv(i)/2 :
+            3 / (1.0 / data.Spec()(i) + 2.0 / collapsed_cv(i));
 
     Eigen::MatrixXf diag = result.Spec().array().matrix().asDiagonal(); 
     Eigen::MatrixXf full_covariance = diag*(syst->fractional_covariance)*diag;
@@ -111,7 +104,8 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
                          L"mc spec: %5%\ndata spec: %6%")
             % __func__ % covar_portion % pull % delta % CollapseMatrix(config, result.Spec())
             % data.Spec();
-        abort();
+        //abort();
+        throw std::runtime_error("CNP chi2 is nan.");
     }
 
 
@@ -136,16 +130,10 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
 
             Eigen::MatrixXf new_collapsed_stat_covariance = collapsed_stat_covariance;
             if(i < model.nparams) {
-                PROspec cv = FillRecoSpectra(config, peller, *syst, model, subvector1, strat != EventByEvent);
-                Eigen::MatrixXf collapsed_data_stat_covariance = data.Spec().array().matrix().asDiagonal();
-                Eigen::MatrixXf mc_stat_covariance = cv.Spec().array().matrix().asDiagonal();
-                Eigen::MatrixXf collapsed_mc_stat_covariance = CollapseMatrix(config, mc_stat_covariance);
-                new_collapsed_stat_covariance = 3 * (collapsed_data_stat_covariance.inverse() + 2 * collapsed_mc_stat_covariance.inverse()).inverse();
-                for(int i = 0; i < new_collapsed_stat_covariance.cols(); ++i) {
-                    // If data bin is 0, this will be nan
-                    if(std::isnan(new_collapsed_stat_covariance(i,i)))
-                        new_collapsed_stat_covariance(i,i) = mc_stat_covariance(i,i)/2;
-                }
+                Eigen::VectorXf collapsed_cv = CollapseMatrix(config, FillRecoSpectra(config, peller, *syst, model, subvector1, strat != EventByEvent).Spec());
+                for(long i = 0; i < data.Spec().size(); ++i)
+                    new_collapsed_stat_covariance(i,i) = data.Spec()(i) == 0 ? collapsed_cv(i)/2 :
+                        3 / (1.0 / data.Spec()(i) + 2.0 / collapsed_cv(i));
             }
 
             Eigen::MatrixXf diag = result.Spec().array().matrix().asDiagonal(); 

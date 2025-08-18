@@ -17,10 +17,6 @@ namespace PROfit {
             log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
             if(syst.mode == "spline" || syst.mode == "norm") {
                 FillSpline(syst);
-                spline_names.push_back(syst.systname); 
-                spline_lo.push_back(syst.knobval[0]);
-                spline_hi.push_back(syst.knobval.back());
-                spline_binnings.push_back(syst.binning);
                 ++n_splines;
             } else if(syst.mode == "covariance") {
                 this->CreateMatrix(syst);
@@ -486,6 +482,7 @@ namespace PROfit {
         ratios.reserve(syst.p_multi_spec.size());
         float cv_integral = syst.p_cv->Spec().sum() ;
 
+        std::vector<float> knobvals;
         bool found0 = false;
         for(size_t i = 0; i < syst.p_multi_spec.size(); ++i) {
             //log<LOG_ERROR>(L"%1% || p_multi_spec, knobval, i, cv (%2%): %3%") % __func__ % tolerance % val;
@@ -493,28 +490,33 @@ namespace PROfit {
 
             if(syst.knobval[i] > 0 && !found0) {
                 ratios.push_back(*syst.p_cv / *syst.p_cv);
+                knobvals.push_back(0);
                 found0 = true;
             }
             if(syst.knobval[i] == 0) found0 = true;
 
             float mod = shape_only ?  cv_integral/syst.p_multi_spec[i]->Spec().sum() : 1.0 ;
             ratios.push_back( ((*syst.p_multi_spec[i])*mod) / *syst.p_cv);
+            knobvals.push_back(syst.knobval[i]);
         }
-        if(!found0) ratios.push_back(*syst.p_cv / *syst.p_cv);
+        if(!found0) {
+            ratios.push_back(*syst.p_cv / *syst.p_cv);
+            knobvals.push_back(0);
+        }
         Spline spline_coeffs;
         spline_coeffs.reserve(syst.p_cv->GetNbins());
         for(size_t i = 0; i < syst.p_cv->GetNbins(); ++i) {
             std::vector<std::pair<float, std::array<float, 4>>> spline;
-            spline.reserve(syst.knobval.size());
+            spline.reserve(knobvals.size());
 
             // If only 2 points do a linear fit
             if(ratios.size() < 3) {
                 const float y1 = ratios[0].GetBinContent(i);
                 const float y2 = ratios[1].GetBinContent(i);
-                const float slope = (y2 - y1)/(syst.knobval[1] - syst.knobval[0]);
+                const float slope = (y2 - y1)/(knobvals[1] - knobvals[0]);
                 // Mirror about 0 for MCMC
-                spline.push_back({(float)(-syst.knobval[1]), {y2, -slope, 0, 0}});
-                spline.push_back({(float)syst.knobval[0], {slope * (float)syst.knobval[0] + y1, slope, 0, 0}});
+                spline.push_back({(float)(-knobvals[1]), {y2, -slope, 0, 0}});
+                spline.push_back({(float)knobvals[0], {slope * (float)knobvals[0] + y1, slope, 0, 0}});
                 spline_coeffs.push_back(spline);
                 continue;
             }
@@ -539,7 +541,7 @@ namespace PROfit {
                 {-2,  2, -1},
                 { 1,  0,  0}};
             const Eigen::Vector3f res = m * v;
-            spline.push_back({(float)syst.knobval[0], {res(2), res(1), res(0), 0}});
+            spline.push_back({(float)knobvals[0], {res(2), res(1), res(0), 0}});
 
             for(unsigned int shiftIdx = 1; shiftIdx < ratios.size()-2; ++shiftIdx){
                 const float y0 = ratios[shiftIdx-1].GetBinContent(i);
@@ -552,9 +554,9 @@ namespace PROfit {
                     { 0,  0,  1,  0},
                     { 1,  0,  0,  0}};
                 const Eigen::Vector4f res = m * v;
-                float knobval = syst.knobval[shiftIdx];
+                float knobval = knobvals[shiftIdx];
                 if(!found0 && knobval >= 0)
-                    knobval = syst.knobval[shiftIdx] == 1 ? 0 : syst.knobval[shiftIdx - 1];
+                    knobval = knobvals[shiftIdx] == 1 ? 0 : knobvals[shiftIdx - 1];
                 spline.push_back({knobval, {res(3), res(2), res(1), res(0)}});
             }
 
@@ -566,12 +568,16 @@ namespace PROfit {
                 { 0,  0,  1},
                 { 1,  0,  0}};
             const Eigen::Vector3f resp = mp * vp;
-            spline.push_back({(float)syst.knobval[syst.knobval.size() - 2], {resp(2), resp(1), resp(0), 0}});
+            spline.push_back({(float)knobvals[knobvals.size() - 2], {resp(2), resp(1), resp(0), 0}});
 
             spline_coeffs.push_back(spline);
         }
         syst_map[syst.systname] = {splines.size(), SystType::Spline};
         splines.push_back(spline_coeffs);
+        spline_names.push_back(syst.systname); 
+        spline_lo.push_back(knobvals[0]);
+        spline_hi.push_back(knobvals.back());
+        spline_binnings.push_back(syst.binning);
     }
 
     float PROsyst::GetSplineShift(int spline_num, float shift , int bin) const {
