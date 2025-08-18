@@ -1,4 +1,5 @@
 #include "PROunblind.h"
+#include "PROsurf.h"
 
 namespace PROfit{
 
@@ -237,6 +238,48 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
+        getConfirmation("############################################","Proceed to begin profile with systematic results only?");
+
+        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, fitconfig2, final_output_tag, chi2, true, nthread, best_fit);
+
+        log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
+        std::vector<size_t> permutation(metric->GetSysts().GetNSplines(), 0);
+        std::iota(permutation.begin(), permutation.end(), metric->GetModel().nparams);
+        std::shuffle(permutation.begin(), permutation.end(), myseed.global_rng);
+
+        size_t above2 = 0, above3 = 0;
+        for(size_t i = 0; i < permutation.size(); ++i) {
+            size_t idx = permutation[i];
+            float val = prof.onesig.GetPointY(idx);
+            if(val >= 2 || val <= -2) above2++;
+            if(val >= 3 || val <= -3) above3++;
+            if(val >= 3 || val <= -3)
+                log<LOG_ERROR>(L"\033[101m");
+            else if(val >= 2 || val <= -2)
+                log<LOG_ERROR>(L"\033[103m");
+            log<LOG_ERROR>(L"%1% || Parameter %2% profile minimum: %3%") % __func__ % i % val;
+            if(val >= 2 || val <= -2)
+                log<LOG_ERROR>(L"\033[0m");
+        }
+
+        log<LOG_ERROR>(L"%1% || Found %2% values pulled beyond 2 sigma and %3% values pulled beyond 3 sigma.") % __func__ % above2 % above3;
+
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+
+        getConfirmation("############################################","Proceed to show +/- 1 sigma ranges for nuisance parameters?");
+
+        log<LOG_ERROR>(L"%1% || Showing profile 1 sigma ranges for nuisance parameters in random order.") % __func__ ;
+        for(size_t i = 0; i < permutation.size(); ++i) {
+            size_t idx = permutation[i];
+            float val = prof.onesig.GetPointY(idx);
+            float p1 = prof.onesig.GetErrorYhigh(idx);
+            float m1 = prof.onesig.GetErrorYlow(idx);
+            log<LOG_ERROR>(L"%1% || Parameter %2% profile 1 sigma range: %3%(-%4%,+%5%)") 
+                % __func__ % i % val % m1 % p1;
+        }
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+
+        getConfirmation("############################################","Proceed to show full nuisance parameter profile results with names?");
 
         return 0;
     }
