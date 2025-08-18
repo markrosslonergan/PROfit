@@ -240,7 +240,7 @@ namespace PROfit{
 
         getConfirmation("Proceed to begin profile with systematic results only?","############################################");
 
-        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, fitconfig2, final_output_tag, chi2, true, nthread, best_fit);
+        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, best_fit);
 
         log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
         std::vector<size_t> permutation(metric->GetSysts().GetNSplines(), 0);
