@@ -385,8 +385,6 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
     int nparams = systs.GetNSplines() + model.nparams*with_osc;
     std::vector<float> physics_params; 
 
-    std::vector<std::unique_ptr<TGraph>> graphs; 
-
     //hack
     std::vector<float> priorX;
     std::vector<float> priorY;
@@ -450,15 +448,10 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
     //Analyze them, used in later section
     //plot 2sigma also? default no, as its messier
     bool twosig = false;
-    int nBins = nparams;
 
-    std::vector<float> bfvalues;
-    std::vector<float> values1_up;
-    std::vector<float> values1_down;
     std::vector<float> values1_errup;
     std::vector<float> values1_errdown;
 
-    std::vector<float> barvalues;
     std::vector<float> barvalues_err;
 
     std::vector<float> values2_up;
@@ -496,9 +489,28 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
         }
         count++;
     }
+    onesig = TGraphAsymmErrors(barvalues.size(),barvalues.data(), bfvalues.data(), barvalues_err.data(), barvalues_err.data(), values1_errdown.data(), values1_errup.data());
 
+}
 
+void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc, const Eigen::VectorXf& init_seed, const Eigen::VectorXf & true_params) {
 
+    int nparams = systs.GetNSplines() + model.nparams*with_osc;
+    int nBins = nparams;
+    std::vector<std::string> names;
+    if(with_osc) for(const auto& name: model.pretty_param_names) names.push_back(name);
+    for(const auto &name: systs.spline_names) names.push_back(name);
+
+    std::vector<float> priorX;
+    std::vector<float> priorY;
+
+    for(int i=0; i<=30;i++){
+        float which_value = -3.0+0.2*i;
+        priorX.push_back(which_value);
+        priorY.push_back(which_value*which_value);
+
+    }
+    std::unique_ptr<TGraph> gprior = std::make_unique<TGraph>(priorX.size(), priorX.data(), priorY.data());
 
     //First plot
     int depth = std::ceil((nparams+model.nparams)/4.0);
@@ -507,7 +519,7 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
 
 
     size_t zoom_shift = 0;
-    for(size_t w = 0; w< combinedResults.size(); w++ ){
+    for(size_t w = 0; w< graphs.size(); w++ ){
 
         c->cd(w+1+zoom_shift);
         std::string xval = w < model.nparams ? "Log_{10}(" + model.pretty_param_names[w]+")" :"#sigma Shift"  ;
@@ -596,24 +608,22 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
     float minVal = *std::min_element(values1_down.begin(), values1_down.end());
     float maxVal = *std::max_element(values1_up.begin(), values1_up.end());
 
-    TGraphAsymmErrors *h1 = new TGraphAsymmErrors(barvalues.size(),barvalues.data(), bfvalues.data(), barvalues_err.data(), barvalues_err.data(), values1_errdown.data(), values1_errup.data());
-    h1->SetFillColor(kBlue-7);
-    h1->SetStats(0);
-    //h1->SetMinimum(min(-1.2,minVal*1.2));
-    h1->SetMinimum(minVal*1.1);
-    h1->SetMaximum(maxVal*1.1);
+    onesig.SetFillColor(kBlue-7);
+    onesig.SetStats(0);
+    //onesig.SetMinimum(min(-1.2,minVal*1.2));
+    onesig.SetMinimum(minVal*1.1);
+    onesig.SetMaximum(maxVal*1.1);
 
-    h1->GetXaxis()->SetNdivisions(barvalues.size());  // Set number of tick marks
-    h1->GetXaxis()->SetLabelSize(0);  // Hide default numerical labels
+    onesig.GetXaxis()->SetNdivisions(barvalues.size());  // Set number of tick marks
+    onesig.GetXaxis()->SetLabelSize(0);  // Hide default numerical labels
 
-    h1->SetTitle("");
-    h1->Draw("A2");
-    //h1->GetYaxis()->SetTitle("#sigma Shift");
-    onesig = *h1;
-    h1->GetYaxis()->SetTitle("Posterior 1#sigma Error");
-    h1->GetYaxis()->SetTitleOffset(0.8);
+    onesig.SetTitle("");
+    onesig.Draw("A2");
+    //onesig.GetYaxis()->SetTitle("#sigma Shift");
+    onesig.GetYaxis()->SetTitle("Posterior 1#sigma Error");
+    onesig.GetYaxis()->SetTitleOffset(0.8);
 
-    float y_min = h1->GetMinimum();
+    float y_min = onesig.GetMinimum();
     for (size_t i = 0; i < barvalues.size(); ++i) {
         std::string label = i < model.nparams ? "Log_{10}(" + model.pretty_param_names[i]+")" : config.m_mcgen_variation_plotname_map.at(names[i]);
         TLatex* text = new TLatex(barvalues[i], y_min - 0.05, label.c_str());  // Position text below axis
@@ -625,14 +635,14 @@ PROfile::PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &
 
     c2->Update();
 
-    if (twosig) {
-        TGraphAsymmErrors *h2 = new TGraphAsymmErrors(barvalues.size(),barvalues.data(), bfvalues.data(), barvalues_err.data(), barvalues_err.data(), values2_down.data(), values2_up.data());
-        h2->SetFillColor(38);
-        h2->SetStats(0);
-        h2->SetTitle("");
-        h2->Draw("A2");
-        h2->GetYaxis()->SetTitle("");
-    }
+    //if (twosig) {
+    //    TGraphAsymmErrors *h2 = new TGraphAsymmErrors(barvalues.size(),barvalues.data(), bfvalues.data(), barvalues_err.data(), barvalues_err.data(), values2_down.data(), values2_up.data());
+    //    h2->SetFillColor(38);
+    //    h2->SetStats(0);
+    //    h2->SetTitle("");
+    //    h2->Draw("A2");
+    //    h2->GetYaxis()->SetTitle("");
+    //}
 
 
     TLine l(0,0,nBins+0.5,0);

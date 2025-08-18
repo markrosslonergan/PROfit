@@ -46,8 +46,16 @@ class PROfile {
         public:
 	PROmetric &metric;
     TGraphAsymmErrors onesig;
+    std::vector<std::unique_ptr<TGraph>> graphs; 
+    // Hack: Save these into class for now
+    std::vector<float> bfvalues;
+    std::vector<float> barvalues;
+    std::vector<float> values1_up;
+    std::vector<float> values1_down;
 
   PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, const PROfitterConfig &fitconfig, std::string filename, float minchi = 0, bool with_osc = false, int nThreads = 1, const Eigen::VectorXf& init_seed = Eigen::VectorXf(), const Eigen::VectorXf& true_params = Eigen::VectorXf() ) ;
+
+  void Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc = false, const Eigen::VectorXf& init_seed = Eigen::VectorXf(), const Eigen::VectorXf& true_params = Eigen::VectorXf() ) ;
 
     	std::vector<profOut> PROfilePointHelper(const PROsyst *systs, const PROfitterConfig &fitconfig, int offset, int stride, float minchi, bool with_osc, const Eigen::VectorXf& init_seed = Eigen::VectorXf(), uint32_t seed=0);
 };
