@@ -152,7 +152,7 @@ namespace PROfit{
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, false,gof_mode};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true,gof_mode};
 
 
             threads.emplace_back([args]() {
@@ -170,12 +170,12 @@ namespace PROfit{
             float chi2_osc, chi2_syst, best_dmsq, best_sinsq2t;
             std::map<std::string, float> best_systs_osc, best_systs, syst_throw;
             TTree tree("tree", "tree");
-            tree.Branch("chi2_osc", &chi2_osc); 
-            //tree.Branch("chi2_syst", &chi2_syst); 
+            //tree.Branch("chi2_osc", &chi2_osc); 
+            tree.Branch("chi2_syst", &chi2_syst); 
             //tree.Branch("best_dmsq", &best_dmsq); 
             //tree.Branch("best_sinsq2t", &best_sinsq2t); 
-            tree.Branch("best_systs_osc", &best_systs_osc); 
-            //tree.Branch("best_systs", &best_systs); 
+            //tree.Branch("best_systs_osc", &best_systs_osc); 
+            tree.Branch("best_systs", &best_systs); 
             tree.Branch("syst_throw", &syst_throw);
 
             for(const auto &out: outs) {
@@ -390,6 +390,88 @@ namespace PROfit{
         getConfirmation("Proceed to calculate FC pvalue?","############################################");
 
         log<LOG_ERROR>(L"FC pvalue not implemented yet.");
+        log<LOG_ERROR>(L"%1% || -- Calculating FC pvalue using %2% samples   ") % __func__ % nuniv;
+
+        std::vector<std::vector<float>> dchi2sFC;
+        dchi2sFC.reserve(FCthreads);
+        std::vector<std::vector<fc_out>> outsFC;
+        outsFC.reserve(FCthreads);
+        std::vector<std::thread> threadsFC;
+        gof_mode = false;
+        for(size_t i = 0; i < nthread; i++) {
+            dchi2sFC.emplace_back();
+            outsFC.emplace_back();
+            fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true,gof_mode};
+
+            threadsFC.emplace_back([args]() {
+                    PROfit::fc_worker(args);
+                    });
+        }
+        for(auto&& t: threadsFC) {
+            t.join();
+        }
+
+        log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
+        {
+            TFile fout((final_output_tag+"_unblind_BF_FC.root").c_str(), "RECREATE");
+            fout.cd();
+            float chi2_osc, chi2_syst, best_dmsq, best_sinsq2t;
+            std::map<std::string, float> best_systs_osc, best_systs, syst_throw;
+            TTree tree("tree", "tree");
+            tree.Branch("chi2_osc", &chi2_osc); 
+            tree.Branch("chi2_syst", &chi2_syst); 
+            tree.Branch("best_dmsq", &best_dmsq); 
+            tree.Branch("best_sinsq2t", &best_sinsq2t); 
+            tree.Branch("best_systs_osc", &best_systs_osc); 
+            tree.Branch("best_systs", &best_systs); 
+            tree.Branch("syst_throw", &syst_throw);
+
+            for(const auto &out: outsFC) {
+                for(const auto &fco: out) {
+                    chi2_osc = fco.chi2_osc;
+                    chi2_syst = fco.chi2_syst;
+                    best_dmsq = fco.dmsq;
+                    best_sinsq2t = fco.sinsq2tmm;
+                    for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
+                        best_systs_osc[metric->GetSysts().spline_names[i]] = fco.best_fit_osc(i);
+                        best_systs[metric->GetSysts().spline_names[i]] = fco.best_fit_syst(i);
+                        syst_throw[metric->GetSysts().spline_names[i]] = fco.syst_throw(i);
+                    }
+                    tree.Fill();
+                }
+            }
+
+            tree.Write();
+        }
+        {
+            ofstream fcout(final_output_tag+"_unblind_BF_FC.csv");
+            fcout << "chi2_osc,chi2_syst,best_dmsq,best_sinsq2t";
+            for(const std::string &name: metric->GetSysts().spline_names) {
+                fcout << ",best_" << name << "_osc,best_" << name << "," << name << "_throw";
+            }
+            fcout << "\r\n";
+
+            for(const auto &out: outsFC) {
+                for(const auto &fco: out) {
+                    fcout << fco.chi2_osc << "," << fco.chi2_syst << "," << fco.dmsq << "," << fco.sinsq2tmm;
+                    for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
+                        fcout << fco.best_fit_osc(i) << "," << fco.best_fit_syst(i) << "," << fco.syst_throw(i);
+                    }
+                    fcout << "\r\n";
+                }
+            }
+        }
+        std::vector<float> flattened_gofchi2sFC;
+        for(const auto& out: outsFC) for(const auto& fco: out) flattened_gofchi2sFC.push_back(fco.chi2_syst);
+        std::sort(flattened_gofchi2sFC.begin(), flattened_gofchi2sFC.end());
+        log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_gofchi2sFC;
+        log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % chi2;
+        auto itFC = std::lower_bound(flattened_gofchi2sFC.begin(), flattened_gofchi2sFC.end(), chi2);
+        size_t indexFC =  std::distance(flattened_gofchi2sFC.begin(),itFC);
+        size_t count_aboveFC = flattened_gofchi2sFC.size()-indexFC;
+        float pvalFC = (float)count_aboveFC/(float)nuniv;
+        log<LOG_ERROR>(L"%1% || Finished throws. %2% %3% %4%") % __func__ % __LINE__% indexFC % count_aboveFC;
+        log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
 
         getConfirmation("Proceed to calculate surface?","############################################");
 
