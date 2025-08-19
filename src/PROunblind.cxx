@@ -172,8 +172,8 @@ namespace PROfit{
             TTree tree("tree", "tree");
             tree.Branch("chi2_osc", &chi2_osc); 
             //tree.Branch("chi2_syst", &chi2_syst); 
-            tree.Branch("best_dmsq", &best_dmsq); 
-            tree.Branch("best_sinsq2t", &best_sinsq2t); 
+            //tree.Branch("best_dmsq", &best_dmsq); 
+            //tree.Branch("best_sinsq2t", &best_sinsq2t); 
             tree.Branch("best_systs_osc", &best_systs_osc); 
             //tree.Branch("best_systs", &best_systs); 
             tree.Branch("syst_throw", &syst_throw);
@@ -182,8 +182,8 @@ namespace PROfit{
                 for(const auto &fco: out) {
                     //chi2_osc = fco.chi2_osc;
                     chi2_syst = fco.chi2_syst;
-                    best_dmsq = fco.dmsq;
-                    best_sinsq2t = fco.sinsq2tmm;
+                    //best_dmsq = fco.dmsq;
+                    //best_sinsq2t = fco.sinsq2tmm;
                     for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
                         //best_systs_osc[metric->GetSysts().spline_names[i]] = fco.best_fit_osc(i);
                         best_systs[metric->GetSysts().spline_names[i]] = fco.best_fit_syst(i);
@@ -197,15 +197,15 @@ namespace PROfit{
         }
         {
             ofstream fcout(final_output_tag+"_unblind_BF_GOF.csv");
-            fcout << "chi2_syst,best_dmsq,best_sinsq2t";
+            fcout << "chi2_syst,";
             for(const std::string &name: metric->GetSysts().spline_names) {
-                fcout << ",best_" << name << "_syst,best_" << name << "," << name << "_throw";
+                fcout << "best_" << name << "_syst," << name << "_throw";
             }
             fcout << "\r\n";
 
             for(const auto &out: outs) {
                 for(const auto &fco: out) {
-                    fcout << fco.chi2_syst << "," << "," << fco.dmsq << "," << fco.sinsq2tmm;
+                    fcout << fco.chi2_syst << ",";
                     for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
                         fcout << fco.best_fit_syst(i) << "," << fco.syst_throw(i);
                     }
@@ -240,13 +240,37 @@ namespace PROfit{
 
         getConfirmation("Proceed to begin profile with systematic results only?","############################################");
 
-        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, best_fit);
-
-        log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
-        std::vector<size_t> permutation(metric->GetSysts().GetNSplines(), 0);
+        std::vector<int> permutation(metric->GetSysts().GetNSplines(), 0);
         std::iota(permutation.begin(), permutation.end(), metric->GetModel().nparams);
         std::shuffle(permutation.begin(), permutation.end(), myseed.global_rng);
+        Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(Eigen::VectorXi::Map(permutation.data(), permutation.size()));
 
+        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, best_fit);
+
+        std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
+        Metropolis mh(simple_target{*metric}, adaptive_proposal(*metric, dseed(PROseed::global_rng)), best_fit, dseed(PROseed::global_rng));
+
+        Eigen::MatrixXf covmat = Eigen::MatrixXf::Constant(nparams, nparams, 0);
+        size_t count = 0;
+        const auto action = [&](const Eigen::VectorXf &value) {
+            covmat += (value-best_fit) * (value-best_fit).transpose();
+            count += 1; 
+        };
+        mh.run(fitconfig2.MCMCburn,fitconfig2.MCMCiter, action);
+
+        covmat /= count;
+        Eigen::VectorXf inv_best_fit = best_fit.array().abs().max(1e-10f).inverse();
+        Eigen::MatrixXf fraccovmat = inv_best_fit.asDiagonal() * covmat * inv_best_fit.asDiagonal();
+
+        Eigen::VectorXf inv_sqrt_diag = fraccovmat.diagonal().array().abs().max(1e-10f).sqrt().inverse();
+        Eigen::MatrixXf corrmat = inv_sqrt_diag.asDiagonal() * fraccovmat * inv_sqrt_diag.asDiagonal();
+
+        size_t nspline = metric->GetSysts().GetNSplines();
+        Eigen::MatrixXf spline_corrmat = corrmat.block(metric->GetModel().nparams, metric->GetModel().nparams, nspline, nspline);
+        Eigen::MatrixXf permuted_spline_corrmat = perm * spline_corrmat * perm;
+
+
+        log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
         size_t above2 = 0, above3 = 0;
         for(size_t i = 0; i < permutation.size(); ++i) {
             size_t idx = permutation[i];
@@ -279,10 +303,97 @@ namespace PROfit{
         }
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
+        getConfirmation("Proceed to show correlation matrix for nuisance parameters without names?","############################################");
+
+        TH2D corrhist_perm("crhp", "", nspline, 0, nspline, nspline, 0, nspline);
+        for(size_t i = 0; i < nspline; ++i) {
+            for(size_t j = 0; j < nspline; ++j) {
+                corrhist_perm.SetBinContent(i+1, j+1, permuted_spline_corrmat(i,j));
+            }
+        }
+        corrhist_perm.SetMaximum(1);
+        corrhist_perm.SetMinimum(-1);
+        TCanvas c;
+        corrhist_perm.Draw("colz");
+        c.Print((final_output_tag + "_unblinding_unnamed_spline_corr.pdf").c_str());
+
         getConfirmation("Proceed to show full nuisance parameter profile results with names?","############################################");
 
-        prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, final_output_tag,
-                   true, best_fit, Eigen::VectorXf(), true); 
+        prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, 
+                final_output_tag+"_unblinding_nuisance", true, best_fit, Eigen::VectorXf(), true); 
+
+        TH2D corrhist("crh", "", nspline, 0, nspline, nspline, 0, nspline);
+        for(size_t i = 0; i < nspline; ++i) {
+            std::string label =
+                config.m_mcgen_variation_plotname_map.at(metric->GetSysts().spline_names[i]).c_str();
+            corrhist.GetXaxis()->SetBinLabel(i+1, label.c_str());
+            corrhist.GetYaxis()->SetBinLabel(i+1, label.c_str());
+            for(size_t j = 0; j < nspline; ++j) {
+                corrhist.SetBinContent(i+1, j+1, spline_corrmat(i,j));
+            }
+        }
+        corrhist.SetMaximum(1);
+        corrhist.SetMinimum(-1);
+        corrhist.Draw("colz");
+        c.Print((final_output_tag + "_unblinding_spline_corr.pdf").c_str());
+
+        getConfirmation("Proceed to show full BF result?","############################################");
+
+        ofstream global_fit_out;
+        global_fit_out.open(final_output_tag+"_unblinding_global_fit.txt");
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        log<LOG_ERROR>(L"%1% || ########### Global Best Fit Results ############") % __func__;
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
+        log<LOG_ERROR>(L"%1% || at paramters: ") % __func__;
+
+        global_fit_out << "Global best fit:\n";
+
+        bool use_phys = (size_t)best_fit.size() == metric->GetModel().nparams + metric->GetSysts().GetNSplines();
+        for(long i = 0; i < best_fit.size(); i++){
+
+            if(use_phys && i < (long)metric->GetModel().nparams){
+                log<LOG_ERROR>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+                global_fit_out << metric->GetModel().param_names[i]
+                    << " : " << best_fit(i) << "\n";
+            }else{
+                long idx = use_phys ? i - metric->GetModel().nparams : i;
+                log<LOG_ERROR>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetSysts().spline_names[idx].c_str() % best_fit(i);
+                global_fit_out << metric->GetSysts().spline_names[idx]
+                    << " : " << best_fit(i) << "\n";
+            }
+        }
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        global_fit_out.close();
+
+        getConfirmation("Proceed to show full profile result?","############################################");
+
+        prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, 
+                final_output_tag+"_unblinding", true, best_fit); 
+
+        TH2D corrhist_full("crhf", "", nparams, 0, nparams, nparams, 0, nparams);
+        for(size_t i = 0; i < nparams; ++i) {
+            std::string label = i < metric->GetModel().nparams 
+                ? metric->GetModel().pretty_param_names[i]
+                : config.m_mcgen_variation_plotname_map.at(metric->GetSysts().spline_names[i-metric->GetModel().nparams]).c_str();
+            corrhist_full.GetXaxis()->SetBinLabel(i+1, label.c_str());
+            corrhist_full.GetYaxis()->SetBinLabel(i+1, label.c_str());
+            for(size_t j = 0; j < nparams; ++j) {
+                corrhist_full.SetBinContent(i+1, j+1, corrmat(i,j));
+            }
+        }
+        corrhist_full.SetMaximum(1);
+        corrhist_full.SetMinimum(-1);
+        corrhist_full.Draw("colz");
+        c.Print((final_output_tag + "_unblinding_corr.pdf").c_str());
+
+        getConfirmation("Proceed to calculate FC pvalue?","############################################");
+
+        log<LOG_ERROR>(L"FC pvalue not implemented yet.");
+
+        getConfirmation("Proceed to calculate surface?","############################################");
+
+        log<LOG_ERROR>(L"Surface not implemented yet.");
 
         return 0;
     }
