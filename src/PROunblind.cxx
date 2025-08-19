@@ -1,5 +1,8 @@
 #include "PROunblind.h"
 #include "PROsurf.h"
+#include "PROplot.h"
+
+#include "TPaveText.h"
 
 namespace PROfit{
 
@@ -26,7 +29,7 @@ namespace PROfit{
        return;
     }
 
-    int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, size_t nthread, std::string final_output_tag){
+    int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, PROdata data, size_t nthread, std::string final_output_tag){
    
         //manually remove any print outs
         GLOBAL_LEVEL=LOG_WARNING;
@@ -243,7 +246,9 @@ namespace PROfit{
         std::vector<int> permutation(metric->GetSysts().GetNSplines(), 0);
         std::iota(permutation.begin(), permutation.end(), metric->GetModel().nparams);
         std::shuffle(permutation.begin(), permutation.end(), myseed.global_rng);
-        Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(Eigen::VectorXi::Map(permutation.data(), permutation.size()));
+        Eigen::VectorXi perm_vec = Eigen::VectorXi::Map(permutation.data(), permutation.size());
+        perm_vec = perm_vec.array() - metric->GetModel().nparams;
+        Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(perm_vec);
 
         PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, best_fit);
 
@@ -267,7 +272,7 @@ namespace PROfit{
 
         size_t nspline = metric->GetSysts().GetNSplines();
         Eigen::MatrixXf spline_corrmat = corrmat.block(metric->GetModel().nparams, metric->GetModel().nparams, nspline, nspline);
-        Eigen::MatrixXf permuted_spline_corrmat = perm * spline_corrmat * perm;
+        //Eigen::MatrixXf permuted_spline_corrmat = perm * spline_corrmat * perm;
 
 
         log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
@@ -303,19 +308,20 @@ namespace PROfit{
         }
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
-        getConfirmation("Proceed to show correlation matrix for nuisance parameters without names?","############################################");
+        //getConfirmation("Proceed to show correlation matrix for nuisance parameters without names?","############################################");
 
-        TH2D corrhist_perm("crhp", "", nspline, 0, nspline, nspline, 0, nspline);
-        for(size_t i = 0; i < nspline; ++i) {
-            for(size_t j = 0; j < nspline; ++j) {
-                corrhist_perm.SetBinContent(i+1, j+1, permuted_spline_corrmat(i,j));
-            }
-        }
-        corrhist_perm.SetMaximum(1);
-        corrhist_perm.SetMinimum(-1);
         TCanvas c;
-        corrhist_perm.Draw("colz");
-        c.Print((final_output_tag + "_unblinding_unnamed_spline_corr.pdf").c_str());
+        // Not working right now
+        //TH2D corrhist_perm("crhp", "", nspline, 0, nspline, nspline, 0, nspline);
+        //for(size_t i = 0; i < nspline; ++i) {
+        //    for(size_t j = 0; j < nspline; ++j) {
+        //        corrhist_perm.SetBinContent(i+1, j+1, permuted_spline_corrmat(i,j));
+        //    }
+        //}
+        //corrhist_perm.SetMaximum(1);
+        //corrhist_perm.SetMinimum(-1);
+        //corrhist_perm.Draw("colz");
+        //c.Print((final_output_tag + "_unblinding_unnamed_spline_corr.pdf").c_str());
 
         getConfirmation("Proceed to show full nuisance parameter profile results with names?","############################################");
 
@@ -336,6 +342,38 @@ namespace PROfit{
         corrhist.SetMinimum(-1);
         corrhist.Draw("colz");
         c.Print((final_output_tag + "_unblinding_spline_corr.pdf").c_str());
+
+        std::vector<TH1D> priors, posteriors;
+        Eigen::MatrixXf prior_covariance, spline_covariance;
+        // Fix physics parameters
+        std::vector<int> fixed_pars;
+        for(size_t i = 0; i < metric->GetModel().nparams; ++i) fixed_pars.push_back(i);
+        Metropolis mh_post(simple_target{*metric}, adaptive_proposal(*metric, dseed(PROseed::global_rng), fixed_pars), best_fit, dseed(PROseed::global_rng));
+        log<LOG_INFO>(L"%1% || Starting global getPostFitErrorBand() ") % __func__;
+        std::unique_ptr<TGraphAsymmErrors> post_err_band = getMCMCErrorBand(mh_post, fitconfig2.MCMCburn, fitconfig2.MCMCiter, config, prop, *metric, best_fit, posteriors, spline_covariance);
+
+        std::string hname = "#chi^{2}/ndof = " + to_string_prec(chi2,3) + "/" + to_string(config.m_num_bins_total_collapsed);
+        PROspec cv = FillCVSpectrum(config, prop, true);
+        PROspec bf = FillRecoSpectra(config, prop, metric->GetSysts(), metric->GetModel(), best_fit, true);
+        TH1D post_hist("psth", hname.c_str(), config.m_num_bins_total_collapsed, config.m_channel_bin_edges[0].data());
+        TH1D pre_hist("preh", hname.c_str(), config.m_num_bins_total_collapsed, config.m_channel_bin_edges[0].data());
+        for(size_t i = 0; i < config.m_num_bins_total_collapsed; ++i) {
+            post_hist.SetBinContent(i+1, bf.Spec()(i));
+            pre_hist.SetBinContent(i+1, cv.Spec()(i));
+        }
+
+        std::unique_ptr<TGraphAsymmErrors> err_band = getErrorBand(config, prop, metric->GetSysts());
+
+        std::vector<TPaveText> texts;
+        TPaveText chi2text(0.55, 0.50, 0.85, 0.58, "NDC");
+        chi2text.AddText(hname.c_str());
+        chi2text.SetFillColor(0);
+        chi2text.SetBorderSize(0);
+        chi2text.SetTextAlign(12);
+        //chi2text.SetTextSize(0.035); 
+        texts.push_back(chi2text);
+
+        plot_channels((final_output_tag+"_unblinding_hist.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts);
 
         getConfirmation("Proceed to show full BF result?","############################################");
 
@@ -389,7 +427,6 @@ namespace PROfit{
 
         getConfirmation("Proceed to calculate FC pvalue?","############################################");
 
-        log<LOG_ERROR>(L"FC pvalue not implemented yet.");
         log<LOG_ERROR>(L"%1% || -- Calculating FC pvalue using %2% samples   ") % __func__ % nuniv;
 
         std::vector<std::vector<float>> dchi2sFC;

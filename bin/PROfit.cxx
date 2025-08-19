@@ -1428,7 +1428,7 @@ int main(int argc, char* argv[])
     if(*protest_command){
         log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
 
-        PROunblind_Stage1(config,prop,metric,myseed,nthread,final_output_tag);
+        PROunblind_Stage1(config,prop,metric,myseed,data,nthread,final_output_tag);
         //***************************** END *********************************
         return 0;
     }
