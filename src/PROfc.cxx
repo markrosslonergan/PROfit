@@ -64,14 +64,14 @@ void fc_worker(fc_args args) {
             abort();
         }
 
-        // No oscillations
+        // No oscillations, fix the values at the test point, and fit nuisennce only
         PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
         float chi2_syst = fitter.Fit(*metric);
 
         for(size_t i = nphys; i < nparams; ++i)
             seed_pt(i) = fitter.best_fit(i);
 
-        // With oscillations
+        // With oscillations, aka global best fit over nuisence and osc param
         PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
         float chi2_osc = -999;
         if(!args.gof_mode) chi2_osc = fitter_osc.Fit(*metric, seed_pt); 

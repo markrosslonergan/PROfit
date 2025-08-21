@@ -498,17 +498,18 @@ namespace PROfit{
                 }
             }
         }
-        std::vector<float> flattened_gofchi2sFC;
-        for(const auto& out: outsFC) for(const auto& fco: out) flattened_gofchi2sFC.push_back(fco.chi2_syst);
-        std::sort(flattened_gofchi2sFC.begin(), flattened_gofchi2sFC.end());
-        log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_gofchi2sFC;
-        log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % chi2;
-        auto itFC = std::lower_bound(flattened_gofchi2sFC.begin(), flattened_gofchi2sFC.end(), chi2);
-        size_t indexFC =  std::distance(flattened_gofchi2sFC.begin(),itFC);
-        size_t count_aboveFC = flattened_gofchi2sFC.size()-indexFC;
+        std::vector<float> flattened_deltachi2sFC;
+        for(const auto& out: outsFC) for(const auto& fco: out) flattened_deltachi2sFC.push_back(fco.chi2_syst-fco.chi2_osc);
+        std::sort(flattened_deltachi2sFC.begin(), flattened_deltachi2sFC.end());
+        log<LOG_ERROR>(L"%1% || All Delta Chis: %2% ") % __func__ % flattened_deltachi2sFC;
+        log<LOG_ERROR>(L"%1% || Delta chi @ min: %2% ") % __func__ % chi2;
+        auto itFC = std::lower_bound(flattened_deltachi2sFC.begin(), flattened_deltachi2sFC.end(), chi2);
+        size_t indexFC =  std::distance(flattened_deltachi2sFC.begin(),itFC);
+        size_t count_aboveFC = flattened_deltachi2sFC.size()-indexFC;
         float pvalFC = (float)count_aboveFC/(float)nuniv;
+        
         log<LOG_ERROR>(L"%1% || Finished throws. %2% %3% %4%") % __func__ % __LINE__% indexFC % count_aboveFC;
-        log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
+        log<LOG_ERROR>(L"%1% || FC Corrected pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
 
         getConfirmation("Proceed to calculate surface?","############################################");
 
