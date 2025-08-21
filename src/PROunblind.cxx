@@ -132,7 +132,7 @@ namespace PROfit{
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         
-        getConfirmation("Proceed to begin frequentist pval calc?","############################################");
+        getConfirmation(std::string("You are using "+std::to_string(nthread)+" threads, make sure this is what you want as this next step could be slow.\nProceed to begin frequentist pval calc?"),"############################################");
 
         //manually remove any print outs
         //GLOBAL_LEVEL=LOG_INFO;
@@ -438,7 +438,7 @@ namespace PROfit{
         for(size_t i = 0; i < nthread; i++) {
             dchi2sFC.emplace_back();
             outsFC.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true,gof_mode};
+            fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true, gof_mode};
 
             threadsFC.emplace_back([args]() {
                     PROfit::fc_worker(args);

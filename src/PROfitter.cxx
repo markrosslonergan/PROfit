@@ -143,9 +143,9 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
     }
 
     if (!success) {
-        log<LOG_WARNING>(L"%1% || All minimization attempts failed, checking how good we got, otherwise falling back to PSO best") % __func__;
+        log<LOG_WARNING>(L"%1% || All minimization attempts failed to converge, using best internal minimum or best PSO value found.") % __func__;
 
-        log<LOG_WARNING>(L"%1% || PSO chi %2%  and local: %3% ") % __func__ % PSO.getGlobalBestScore() % fx;
+        //log<LOG_WARNING>(L"%1% || PSO chi %2%  and local: %3% ") % __func__ % PSO.getGlobalBestScore() % fx;
         if (fx < chimin) {
              best_fit = x;
              chimin = fx;
@@ -238,7 +238,7 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
         }
 
         if (!success) {
-            log<LOG_WARNING>(L"%1% || All minimization attempts failed. Hopefully the PSO worked above.") % __func__;
+            log<LOG_WARNING>(L"%1% || LBFGSB minimization attempts failed to fully converge. Using best found minimum or best PSO minimum.") % __func__;
               if (fx < chimin) {
                     best_fit = x;
                     chimin = fx;
