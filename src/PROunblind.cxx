@@ -429,6 +429,22 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || -- Calculating FC pvalue using %2% samples   ") % __func__ % nuniv;
 
+        //first calc null point chi
+        Eigen::VectorXf BKGparams = Eigen::VectorXf::Constant(metric->GetModel().nparams + metric->GetSysts().GetNSplines(), 0);
+        for(long j = 0; j < metric->GetModel().nparams; ++j) {
+            BKGparams(j) = metric->GetModel().default_val(j);
+        }//What about shifts? make a defauly function of metric I think
+
+        for(size_t i = 0; i < nphys; ++i) {
+            lb(i) = BKGparams(i);
+            ub(i) = BKGparams(i);
+        }
+        PROfitter BKGfitter(ub, lb, fitconfig2,2);
+        float chi2_bkg = BKGfitter.Fit(*metric); 
+        Eigen::VectorXf best_fit_bkg = BKGfitter.best_fit;
+
+
+
         std::vector<std::vector<float>> dchi2sFC;
         dchi2sFC.reserve(FCthreads);
         std::vector<std::vector<fc_out>> outsFC;
@@ -438,7 +454,7 @@ namespace PROfit{
         for(size_t i = 0; i < nthread; i++) {
             dchi2sFC.emplace_back();
             outsFC.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true, gof_mode};
+            fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", BKGparams, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true, gof_mode};
 
             threadsFC.emplace_back([args]() {
                     PROfit::fc_worker(args);
@@ -502,8 +518,8 @@ namespace PROfit{
         for(const auto& out: outsFC) for(const auto& fco: out) flattened_deltachi2sFC.push_back(fco.chi2_syst-fco.chi2_osc);
         std::sort(flattened_deltachi2sFC.begin(), flattened_deltachi2sFC.end());
         log<LOG_ERROR>(L"%1% || All Delta Chis: %2% ") % __func__ % flattened_deltachi2sFC;
-        log<LOG_ERROR>(L"%1% || Delta chi @ min: %2% ") % __func__ % chi2;
-        auto itFC = std::lower_bound(flattened_deltachi2sFC.begin(), flattened_deltachi2sFC.end(), chi2);
+        log<LOG_ERROR>(L"%1% || Delta chi bkg-min: %2% ") % __func__ % float(chi2_bkg - chi2);
+        auto itFC = std::lower_bound(flattened_deltachi2sFC.begin(), flattened_deltachi2sFC.end(), float(chi2_bkg-chi2));
         size_t indexFC =  std::distance(flattened_deltachi2sFC.begin(),itFC);
         size_t count_aboveFC = flattened_deltachi2sFC.size()-indexFC;
         float pvalFC = (float)count_aboveFC/(float)nuniv;
