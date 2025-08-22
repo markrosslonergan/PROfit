@@ -40,8 +40,9 @@ std::vector<int> sorted_indices(const std::vector<float>& vec) {
 }
 
 float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
-    const std::vector<Eigen::VectorXf> seed_points = {seed_pt};
-    Fit(metric,seed_points);
+    const std::vector<Eigen::VectorXf> seed_points = seed_pt.size() > 0 ? std::vector<Eigen::VectorXf>{seed_pt} : std::vector<Eigen::VectorXf>{};
+    return Fit(metric, seed_points);
+
 }
 
 float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points ) {
@@ -65,7 +66,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             }
         }
     }
-    if(seed_points.size()>0 && seed_points.front().norm()>0){
+    if(seed_points.size()>0 && seed_points.front().size()>0){
         log<LOG_INFO>(L"%1% || Seed point passed in. Being included.") % __func__  ;
         for(auto & pt: seed_points){
             std::vector<float> std_vec(pt.data(), pt.data() + pt.size());
@@ -166,7 +167,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
 
     int fudge = 0;
-    if(seed_points.size()>0 && seed_points.front().norm()>0){
+    if(seed_points.size()>0 && seed_points.front().size()>0){
         fudge = seed_points.size();
         log<LOG_INFO>(L"%1% || Starting local fit of seed point. ") % __func__ ;
 
