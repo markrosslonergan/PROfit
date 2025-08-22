@@ -33,7 +33,9 @@ namespace PROfit {
             ub(j) = args.systs.spline_hi[j-nphys];
         }
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
-        Eigen::VectorXf seed_pt = Eigen::VectorXf::Zero(nparams);
+        Eigen::VectorXf cached_seed_syst = Eigen::VectorXf::Zero(nparams);
+        Eigen::VectorXf cached_seed_osc = Eigen::VectorXf::Zero(nparams);
+        
         for(size_t u = 0; u < args.todo; ++u) {
             log<LOG_INFO>(L"%1% | Thread #%2% Throw #%3%") % __func__ % args.thread % u;
             std::normal_distribution<float> d;
@@ -66,15 +68,16 @@ namespace PROfit {
 
             // No oscillations, fix the values at the test point, and fit nuisennce only
             PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
-            float chi2_syst = fitter.Fit(*metric);
-
-            for(size_t i = nphys; i < nparams; ++i)
-                seed_pt(i) = fitter.best_fit(i);
+            float chi2_syst = fitter.Fit(*metric,cached_seed_syst);
+            cached_seed_syst = fitter.best_fit;
 
             // With oscillations, aka global best fit over nuisence and osc param
             PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
             float chi2_osc = -999;
-            if(!args.gof_mode) chi2_osc = fitter_osc.Fit(*metric, seed_pt); 
+            if(!args.gof_mode){
+                std::vector<Eigen::VectorXf> seed_points = {cached_seed_syst, cached_seed_osc};
+                chi2_osc = fitter_osc.Fit(*metric, seed_points); 
+            }
 
             if(chi2_syst < chi2_osc && !args.gof_mode) {
                 log<LOG_WARNING>(L"%1% || Negative delta chi2 detected! chi2_syst=%2% < chi2_osc=%3%") % __func__ % chi2_syst % chi2_osc;
@@ -110,7 +113,7 @@ namespace PROfit {
 
                 }
             } // end of cross-checks
-
+            cached_seed_osc = fitter_osc.best_fit;    
 
             Eigen::VectorXf t = Eigen::VectorXf::Map(throws.data(), throws.size());
 
