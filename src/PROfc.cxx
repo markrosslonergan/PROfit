@@ -80,16 +80,9 @@ namespace PROfit {
                 log<LOG_WARNING>(L"%1% || Negative delta chi2 detected! chi2_syst=%2% < chi2_osc=%3%") % __func__ % chi2_syst % chi2_osc;
                 //Re-fit oscillation hypothesis using syst solution as seed
                 log<LOG_INFO>(L"%1% || Attempting refit of oscillation hypothesis with syst solution as seed") % __func__;
-                Eigen::VectorXf crosscheck_seed = Eigen::VectorXf::Zero(nparams);
-                for(size_t i = 0; i < nphys; ++i) {
-                    crosscheck_seed(i) = args.phy_params(i);
-                }
-                for(size_t i = nphys; i < nparams; ++i) {
-                    crosscheck_seed(i) = fitter.best_fit(i - nphys);
-                }
 
                 PROfitter fitter_osc_retry(ub_osc, lb_osc, args.fitconfig, dseed(rng));
-                float chi2_osc_retry = fitter_osc_retry.Fit(*metric, crosscheck_seed);
+                float chi2_osc_retry = fitter_osc_retry.Fit(*metric, fitter.best_fit);
 
                 if(chi2_osc_retry < chi2_osc) {
                     log<LOG_INFO>(L"%1% || Refit improved chi2_osc from %2% to %3%") 
@@ -106,7 +99,7 @@ namespace PROfit {
                     enhanced_config.n_localfit = std::max(5, enhanced_config.n_localfit + 2);
 
                     PROfitter fitter_osc_enhanced(ub_osc, lb_osc, enhanced_config, dseed(rng));
-                    float chi2_osc_enhanced = fitter_osc_enhanced.Fit(*metric);
+                    float chi2_osc_enhanced = fitter_osc_enhanced.Fit(*metric, fitter.best_fit);
 
                     if(chi2_osc_enhanced < chi2_osc) {
                         log<LOG_INFO>(L"%1% || Enhanced search improved chi2_osc from %2% to %3%") 
