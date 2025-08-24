@@ -188,6 +188,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             tlb[which_spline] = which_value;
             tub[which_spline] = which_value;
 
+            local_metric->setBounds(tlb,tub);
             local_metric->fixSpline(which_spline,which_value);
 
             if(reset==cnt) last_bf = init_seed;
@@ -199,6 +200,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             }
             output.knob_chis.push_back(fx - minchi);
             last_bf = fitter.best_fit;
+            local_metric->freeParams(); 
 
 
             std::string spec_string = "";
