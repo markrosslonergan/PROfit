@@ -68,7 +68,7 @@ namespace PROfit{
             ub(i) = metric->GetSysts().spline_hi[i-nphys];
         }
 
-        PROfitter fitter(ub, lb, fitconfig2,2);
+        PROfitter fitter(ub, lb, fitconfig2);//,2);
         metric->setBounds(lb,ub);
         log<LOG_ERROR>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
         log<LOG_ERROR>(L"%1% || ####### (Note LOG level manually set to WARNING only) ######") % __func__; 

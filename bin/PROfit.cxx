@@ -603,7 +603,7 @@ int main(int argc, char* argv[])
 
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
 
-
+        metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
         global_fit_chi2 = chi2;
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -626,6 +626,7 @@ int main(int argc, char* argv[])
             }
         }
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        exit(EXIT_FAILURE);
 
         // TODO: Not sure I understand this covariance matrix
         log<LOG_INFO>(L"%1% || Starting a metropolis hastings chain to estimate the covariace matrix aroud the above best fit. Run and Burn is (%2%,%3%);") % __func__%fitconfig.MCMCiter % fitconfig.MCMCburn;

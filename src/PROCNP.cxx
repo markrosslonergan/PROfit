@@ -129,15 +129,15 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
                 h = sqrt_eps;
             }
             //h = std::max(h, 1e-5f);
-            h = 1e-4f;
+            h = 1e-4f;//1e-4f;
 
             // For physics parameters in log space, use larger steps
             if(i < model.nparams) {
                 //h = std::max(h, 1e-3f);
-                h = 1e-3f;
+                h = 1e-3f;//1e-3;
             }
 
-            float boundary_tol = 1e-6;
+            float boundary_tol = 2.0f*std::numeric_limits<float>::epsilon();
             bool at_lower = (param(i) - lb(i)) < boundary_tol;
             bool at_upper = (ub(i) - param(i)) < boundary_tol;
         
@@ -178,8 +178,8 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
                 gradient(i) = sign*(chi2_oneside - value) / h;
 
                 // If gradient suggests going further out of bounds, set to zero
-                if(sign*gradient(i) >= 0) {
-                    gradient(i) = -sign*0.01f;  // Minimum is at boundary, really (small bounce)
+                if(sign*gradient(i) > 0) {
+                    gradient(i) = 0.0f;//-sign*h/2.0f;  // Minimum is at boundary, really (small bounce)
                 }
             }else{
 

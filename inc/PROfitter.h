@@ -40,19 +40,20 @@ namespace PROfit {
                     param.ftol = 1e-8;
 
                     
-                    param.epsilon = 1e-4;           // OK for float
-                    param.epsilon_rel = 1e-4;           // OK for float
-                    param.wolfe = 0.99;              // Keep
-                    param.ftol = 1e-5;              // Was 1e-8, too strict for float
-                    param.max_iterations = 10'000;  // Keep
+                    param.epsilon = 1e-5;           // OK for float
+                    param.epsilon_rel = 1e-5;           // OK for float
+                    param.wolfe = 0.90;              // Keep
+                    param.ftol = 1e-4;              
+                    param.max_iterations = 0;  // Keep
                     param.max_linesearch = 20;      // Reduce from 40
-                    param.delta = 1e-5;             // OK for float
+                    param.delta = 1e-10;             // OK for float
+                    param.max_submin = 20;
 
-                    n_multistart = 3000;            // Keep
-                    n_swarm_particles = 45;         // Keep
-                    n_swarm_iterations = 250;       // Keep
-                    n_localfit = 3;                 // Keep
-                    n_max_local_retries = 4;        // Keep
+                    n_multistart = 100000;//100000;//3000;            // Keep
+                    n_swarm_particles = 200;//200;//45;         // Keep
+                    n_swarm_iterations = 500;//500;//250;       // Keep
+                    n_localfit = 20; //3;                // Keep
+                    n_max_local_retries = 2;//4;        // Keep
 
                                    
                 }else if (fit_preset == "fast"){
@@ -72,11 +73,23 @@ namespace PROfit {
                     param.delta = 1e-6;
                     n_multistart = 3000;
                     n_swarm_particles = 100;
-                    n_swarm_iterations = 250;
+                    n_swarm_iterations = 450;
                     n_localfit=4;
                     n_max_local_retries = 8;
                     param.wolfe = 0.9;
                     param.ftol = 1e-8;
+
+
+
+                    param.epsilon = 1e-4;           // OK for float
+                    param.epsilon_rel = 1e-4;           // OK for float
+                    param.wolfe = 0.95;              // Keep
+                    param.ftol = 1e-5;              // Was 1e-8, too strict for float
+                    param.max_iterations = 100'000;  // Keep
+                    param.max_linesearch = 20;      // Reduce from 40
+                    param.delta = 1e-5;             // OK for float
+
+
                 }else if(fit_preset == "unblind"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 200'000;
@@ -110,17 +123,12 @@ namespace PROfit {
 
                     param.epsilon = 1e-4;           // OK for float
                     param.epsilon_rel = 1e-4;           // OK for float
-                    param.wolfe = 0.9;              // Keep
+                    param.wolfe = 0.99;              // Keep
                     param.ftol = 1e-5;              // Was 1e-8, too strict for float
                     param.max_iterations = 10'000;  // Keep
                     param.max_linesearch = 20;      // Reduce from 40
                     param.delta = 1e-5;             // OK for float
 
-                    n_multistart = 1500;            // Keep
-                    n_swarm_particles = 45;         // Keep
-                    n_swarm_iterations = 250;       // Keep
-                    n_localfit = 2;                 // Keep
-                    n_max_local_retries = 3;        // Keep
                     
                 }else if (fit_preset == "fast"){
                     param.epsilon = 1e-6;
