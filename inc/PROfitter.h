@@ -275,11 +275,15 @@ namespace PROfit {
             uint32_t seed;
             std::map<std::string,size_t> exception_string_map;
 
+            std::vector<Eigen::VectorXf> freq_seed_points;
+            std::vector<float> freq_seed_values;
+
             PROfitter(const Eigen::VectorXf ub, const Eigen::VectorXf lb, PROfitterConfig fitconfig_ = {}, uint32_t inseed = 0)
                 : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed)  {}
 
             float Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt = Eigen::VectorXf());
             float Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points );
+            int calcFreqSeedPoints(PROmetric &metric);
 
             Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
             float FinalGradientNorm() const {return solver.final_grad_norm();}

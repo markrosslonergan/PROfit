@@ -170,7 +170,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                         }
                     }
 
-                                        // Check condition number (gradient vs parameter scales)
+                    // Check condition number (gradient vs parameter scales)
                     float max_grad = grad.cwiseAbs().maxCoeff();
                     float min_grad = grad.cwiseAbs().minCoeff();
                     if(min_grad > 0 && max_grad / min_grad > 1e6) {
@@ -257,7 +257,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     niter = solver.minimize(metric, x, fx, lb, ub);
                     chi2s_localfits.push_back(fx);
 
-            
+
                     log<LOG_WARNING>(L"%1% || Min worked (seed)") % __func__;
                     log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
                     if (fx < chimin) {
@@ -309,7 +309,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 chi2s_localfits.push_back(fx);
 
                 log<LOG_WARNING>(L"%1% || Min worked (latin)") % __func__;
-                    log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
+                log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
 
                 if (fx < chimin) {
                     best_fit = x;
@@ -354,5 +354,130 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     log<LOG_INFO>(L"%1% || FINAL is  : %2% ") % __func__ % spec_string.c_str();
 
     return chimin;
+}
+
+
+int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
+    freq_seed_points.clear();
+    freq_seed_values.clear();
+
+    if(best_fit.size()==0){
+        return 0;
+    }
+
+    size_t nparams = metric.GetModel().nparams + metric.GetSysts().GetNSplines();
+    size_t nphys = metric.GetModel().nparams;
+
+    Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+    Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+
+    std::vector<float> chivalues;
+    std::vector<float> chipos;
+
+    //STEP 1, fix all syst values at best fit, and vary only physics
+    Eigen::VectorXf test_point = best_fit;
+    Eigen::VectorXf grad = Eigen::VectorXf::Constant(best_fit.size(),0);
+    lb = best_fit;
+    ub = best_fit;
+
+    size_t osc_par = 0;
+    for(size_t i=0; i<nphys;i++){
+        if(i==osc_par)continue;
+        lb(i)=metric.GetModel().lb(i);
+        ub(i)=metric.GetModel().ub(i);
+    }
+
+    for(float k=lb(osc_par); k<=ub(osc_par);k+=0.01){
+        test_point(osc_par)=k;
+        lb(osc_par)=k;
+        ub(osc_par)=k;
+        metric.setBounds(lb,ub);
+
+        //simple chi at best fit
+        float chi_simple = metric(test_point,grad,false);
+
+        float fx = -9;
+        LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+        try{
+            int niter = solver.minimize(metric, test_point, fx, lb, ub);
+        } catch (const std::runtime_error &except) {
+            std::string msg = except.what();
+            exception_string_map[msg]++;
+        }
+        chivalues.push_back(fx);
+        chipos.push_back(k);
+    }
+
+    //#STEP 2 very simple minima finder in 1D
+    std::vector<float> minima_dm;
+    std::vector<float> minima_sin;
+    for (int i = 2; i < chivalues.size()-2; ++i) {
+        if (chivalues.at(i) < chivalues.at(i-1) && chivalues.at(i) < chivalues.at(i-2) && chivalues.at(i) < chivalues.at(i+1) && chivalues.at(i)< chivalues.at(i+2)) {
+            log<LOG_INFO>(L"%1% || Local Minima found at position %2% with chi value of %3% ") %__func__% chipos.at(i) %  chivalues.at(i);
+            minima_dm.push_back(chipos.at(i));
+            minima_sin.push_back(chivalues.at(i));
+        }
+    }
+
+    //STEP 3, loop over all mimima and do twofold minimzation. 
+    //First with minima fixed to get BF of other values, then fully free.
+    for(int p=0;p<minima_dm.size();p++){
+        log<LOG_INFO>(L"%1% || ##################  ") %__func__;
+
+        for(size_t i = 0; i < nphys; ++i) {
+            lb(i) = metric.GetModel().lb(i);
+            ub(i) = metric.GetModel().ub(i);
+        }
+        for(size_t i = nphys; i < nparams; ++i) {
+            lb(i) = metric.GetSysts().spline_lo[i-nphys];
+            ub(i) = metric.GetSysts().spline_hi[i-nphys];
+        }
+
+        //fix dm at minima
+        lb(osc_par)=minima_dm.at(p);
+        ub(osc_par)=minima_dm.at(p);
+
+        metric.setBounds(lb,ub);
+
+        //Best fit, with minima points
+        Eigen::VectorXf test_minima = best_fit;
+        test_minima(osc_par) = minima_dm.at(p);
+        test_minima(1) = minima_sin.at(p);
+
+        float fx;
+        LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+        try{
+            int niter = solver.minimize(metric, test_minima, fx, lb, ub);
+        } catch (const std::runtime_error &except) {
+            std::string msg = except.what();
+            exception_string_map[msg]++;
+        }
+
+        log<LOG_INFO>(L"%1% || FIXED freq MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
+        log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  test_minima;
+
+        //free the freq 
+        lb(osc_par)=metric.GetModel().lb(osc_par);
+        ub(osc_par)=metric.GetModel().ub(osc_par);
+        metric.setBounds(lb,ub);
+
+        try{
+            int niter = solver.minimize(metric, test_minima, fx, lb, ub);
+        } catch (const std::runtime_error &except) {
+            std::string msg = except.what();
+            exception_string_map[msg]++;
+        }
+
+        log<LOG_INFO>(L"%1% || FLOAT freq MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
+        log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  test_minima;
+        log<LOG_INFO>(L"%1% || ##################  ") %__func__;
+
+        freq_seed_points.push_back(test_minima);
+        freq_seed_values.push_back(fx);
+    }
+
+    log<LOG_INFO>(L"%1% || We have calculated %2% frequency seed points and saved for future use! ") %__func__% freq_seed_values.size();
+
+    return freq_seed_values.size();
 }
 

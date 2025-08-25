@@ -1551,10 +1551,10 @@ int main(int argc, char* argv[])
 
             }
 
+            log<LOG_INFO>(L"%1% || ##################  ") %__func__;
             log<LOG_INFO>(L"%1% || FIXED MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
             log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  x;
 
-            log<LOG_INFO>(L"%1% || ##################  ") %__func__;
             
             lb(0)=-2;
             ub(0)=2;
@@ -1569,6 +1569,7 @@ int main(int argc, char* argv[])
             log<LOG_INFO>(L"%1% || FLOAT MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
             log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  x;
 
+            log<LOG_INFO>(L"%1% || ##################  ") %__func__;
         }
 
 
