@@ -550,26 +550,26 @@ int main(int argc, char* argv[])
     }
 
     //Covariance colors, move this eslewher
-        const Int_t NCont = 255;
-        const Int_t NRGBs = 9;  // Reduced control points for smoother white stretch
-        Double_t stops[NRGBs] = {
-            0.0,    // -1.0 (dark blue)
-            0.075,    // -0.6 (transition to white)
-            0.3,    // -0.2 (mostly white)
-            0.4,   // -0.04 (almost pure white)
-            0.5,    //  0.0 (pure white)
-            0.6,   // +0.04 (almost pure white)
-            0.7,    // +0.2 (transition to red)
-            0.925,    // +0.6 (strong red)
-            1.0     // +1.0 (dark red)
-        };
+    const Int_t NCont = 255;
+    const Int_t NRGBs = 9;  // Reduced control points for smoother white stretch
+    Double_t stops[NRGBs] = {
+        0.0,    // -1.0 (dark blue)
+        0.075,    // -0.6 (transition to white)
+        0.3,    // -0.2 (mostly white)
+        0.4,   // -0.04 (almost pure white)
+        0.5,    //  0.0 (pure white)
+        0.6,   // +0.04 (almost pure white)
+        0.7,    // +0.2 (transition to red)
+        0.925,    // +0.6 (strong red)
+        1.0     // +1.0 (dark red)
+    };
 
-        Double_t red[NRGBs]   = {0.00,0.259,0.824, 0.949, 1.0, 0.988, 0.980, 0.918,0.839};
-        Double_t green[NRGBs] = {0.341,0.404,0.890, 0.961, 1.0, 0.933, 0.824, 0.263,0.125};
-        Double_t blue[NRGBs]  = {0.906,0.824,0.989, 0.980, 1.0, 0.929, 0.812, 0.208,0.024};
+    Double_t red[NRGBs]   = {0.00,0.259,0.824, 0.949, 1.0, 0.988, 0.980, 0.918,0.839};
+    Double_t green[NRGBs] = {0.341,0.404,0.890, 0.961, 1.0, 0.933, 0.824, 0.263,0.125};
+    Double_t blue[NRGBs]  = {0.906,0.824,0.989, 0.980, 1.0, 0.929, 0.812, 0.208,0.024};
 
-        TColor::CreateGradientColorTable(NRGBs, stops, red, green, blue, NCont);
-        gStyle->SetNumberContours(NCont);
+    TColor::CreateGradientColorTable(NRGBs, stops, red, green, blue, NCont);
+    gStyle->SetNumberContours(NCont);
 
 
     // Need a second one for case where we do syst_only profile and surface in same command
@@ -1056,18 +1056,18 @@ int main(int argc, char* argv[])
             surf84.Write();
             surf98.Write();
             if(brazil_throws.size() != 0) {
-               int i = 0;
-               for(const auto &bbsurf: brazil_band_surfaces) {
-                 TH2D *surf = new TH2D(("brazil_throw_surf_"+std::to_string(i)).c_str(),(";"+xlabel+";"+ylabel).c_str(),surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data())     ;
-                 for(size_t j = 0; j < surface.nbinsx; ++j) {
-                     for(size_t k = 0; k < surface.nbinsy; ++k) {
-                       surf->SetBinContent(j+1,k+1, bbsurf.surface(j,k));
-                     }
-                 }
-                 surf->Write();
-                 ++i;
-               }
-             }
+                int i = 0;
+                for(const auto &bbsurf: brazil_band_surfaces) {
+                    TH2D *surf = new TH2D(("brazil_throw_surf_"+std::to_string(i)).c_str(),(";"+xlabel+";"+ylabel).c_str(),surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data())     ;
+                    for(size_t j = 0; j < surface.nbinsx; ++j) {
+                        for(size_t k = 0; k < surface.nbinsy; ++k) {
+                            surf->SetBinContent(j+1,k+1, bbsurf.surface(j,k));
+                        }
+                    }
+                    surf->Write();
+                    ++i;
+                }
+            }
         }
 
         //***********************************************************************
@@ -1428,16 +1428,16 @@ int main(int argc, char* argv[])
     if(*protest_command){
         log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
         std::vector<float> dataA = {1.147783,-0.544765,0.105114,0.000000,0.012632,0.157009,0.112737,0.028015,0.013224,-0.007159,0.725420,0.109315,0.010174,0.256261,-0.227993,0.247308,-0.276743,-0.109589,-0.118462,-0.171564,0.240084,-0.028643,-0.045301,-0.049076,0.121725,0.062961,0.098660,0.113568};
-        
-        std::vector<float> dataB = {0.473843,-0.830206,0.033776,0.090911,0.049776,0.000424,0.053759,-0.116555,0.287931,0.259205,0.277881,0.279729,0.025432,-0.038683,0.028922,0.028664,0.081903,0.474689,-0.435970,-0.410814,0.031188,-0.040896,-0.147286,-0.066111,0.181461,-0.039330,0.034514,0.058135};
-        
-        std::vector<float> dataC = {1.147783,-0.830206,0.0,0.0,0.0,0.000,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
-        
-         Eigen::VectorXf ptA = Eigen::Map<Eigen::VectorXf>(dataA.data(), dataA.size());
-         Eigen::VectorXf ptB = Eigen::Map<Eigen::VectorXf>(dataB.data(), dataB.size());
-         Eigen::VectorXf ptC = Eigen::Map<Eigen::VectorXf>(dataC.data(), dataC.size());
 
-         Eigen::VectorXf grad = Eigen::VectorXf::Constant(ptA.size(),0.0);
+        std::vector<float> dataB = {0.473843,-0.830206,0.033776,0.090911,0.049776,0.000424,0.053759,-0.116555,0.287931,0.259205,0.277881,0.279729,0.025432,-0.038683,0.028922,0.028664,0.081903,0.474689,-0.435970,-0.410814,0.031188,-0.040896,-0.147286,-0.066111,0.181461,-0.039330,0.034514,0.058135};
+
+        std::vector<float> dataC = {1.147783,-0.830206,0.0,0.0,0.0,0.000,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
+
+        Eigen::VectorXf ptA = Eigen::Map<Eigen::VectorXf>(dataA.data(), dataA.size());
+        Eigen::VectorXf ptB = Eigen::Map<Eigen::VectorXf>(dataB.data(), dataB.size());
+        Eigen::VectorXf ptC = Eigen::Map<Eigen::VectorXf>(dataC.data(), dataC.size());
+
+        Eigen::VectorXf grad = Eigen::VectorXf::Constant(ptA.size(),0.0);
 
         PROmetric *metric_to_use = systs_only_profile ? null_metric : metric;
         size_t nparams = metric_to_use->GetModel().nparams + metric_to_use->GetSysts().GetNSplines();
@@ -1455,78 +1455,148 @@ int main(int argc, char* argv[])
         }
         metric_to_use->setBounds(lb,ub);
 
-         float chiA = (*metric_to_use)(ptA,grad);
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-         log<LOG_INFO>(L"%1% || Point A (%2%) \n --- has chi^2 (%3%)") %__func__% ptA % chiA;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+        float chiA = (*metric_to_use)(ptA,grad);
+        log<LOG_INFO>(L"%1% || ############### )") %__func__;
+        log<LOG_INFO>(L"%1% || Point A (%2%) \n --- has chi^2 (%3%)") %__func__% ptA % chiA;
+        log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
 
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+        log<LOG_INFO>(L"%1% || ############### )") %__func__;
 
-         float chiB = (*metric_to_use)(ptB,grad);
-         log<LOG_INFO>(L"%1% || Point B (%2%) \n --- has chi^2 (%3%)") %__func__% ptB % chiB;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-         
-
-         float chiC = (*metric_to_use)(ptC,grad);
-         log<LOG_INFO>(L"%1% || Point C (%2%) \n --- has chi^2 (%3%)") %__func__% ptC % chiC;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+        float chiB = (*metric_to_use)(ptB,grad);
+        log<LOG_INFO>(L"%1% || Point B (%2%) \n --- has chi^2 (%3%)") %__func__% ptB % chiB;
+        log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+        log<LOG_INFO>(L"%1% || ############### )") %__func__;
 
 
-         for(float k=-0.2; k<1.5;k+=0.01){
-           ptB(0)=k;
-           ptC(0)=k;
-           float chiB = (*metric_to_use)(ptB,grad,false);
-           float chiC = (*metric_to_use)(ptC,grad,false);
+        float chiC = (*metric_to_use)(ptC,grad);
+        log<LOG_INFO>(L"%1% || Point C (%2%) \n --- has chi^2 (%3%)") %__func__% ptC % chiC;
+        log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+        log<LOG_INFO>(L"%1% || ############### )") %__func__;
 
-             float fx = -9;
-             Eigen::VectorXf x = ptC;
-             Eigen::VectorXf lb = x;
-             Eigen::VectorXf ub = x;
-             lb(1)=-3;
-             ub(1)=0;
-             metric_to_use->setBounds(lb,ub);
 
-             LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
-             int niter = solver.minimize(*metric_to_use, x, fx, lb, ub);
-             float chiD = fx;
+        std::vector<float> values;
+        std::vector<float> xs;
+        for(float k=-0.2; k<1.5;k+=0.005){
+            ptB(0)=k;
+            ptC(0)=k;
+            float chiB = (*metric_to_use)(ptB,grad,false);
+            float chiC = (*metric_to_use)(ptC,grad,false);
+
+            float fx = -9;
+            Eigen::VectorXf x = ptC;
+            Eigen::VectorXf lb = x;
+            Eigen::VectorXf ub = x;
+            lb(1)=-3;
+            ub(1)=0;
+            metric_to_use->setBounds(lb,ub);
+
+            LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+            try{
+                int niter = solver.minimize(*metric_to_use, x, fx, lb, ub);
+            } catch (const std::runtime_error &except) {
+                log<LOG_WARNING>(L"%1% || Usual %2%") % __func__ % except.what();
+
+            }
+
+            float chiD = fx;
 
             log<LOG_INFO>(L"%1% || PARP %2%  : %3% : %4%  : %5% @ %6%") %__func__% k % chiB % chiC % chiD % x(1);
-         }
+            values.push_back(chiD);
+            xs.push_back(k);
+        }
 
-         for(float k=-0.2; k<1.5;k+=0.01){
-                         ptB(0)=k;
-           ptC(0)=k;
-           float chiB = (*metric_to_use)(ptB,grad,false);
-           float chiC = (*metric_to_use)(ptC,grad,false);
-           log<LOG_INFO>(L"%1% || PARP %2%  : %3% : %4% )") %__func__% k % chiB % chiC;
-         }
+
+        std::vector<float> minima_dm;
+        std::vector<float> minima_sin;
+        for (int i = 2; i < values.size()-2; ++i) {
+            if (values.at(i) < values.at(i-1) && values.at(i) < values.at(i-2) && values.at(i) < values.at(i+1) && values.at(i)< values.at(i+2)) {
+                log<LOG_INFO>(L"%1% || MINIMA at %2%  value %3% ") %__func__% xs.at(i) %  values.at(i);
+                minima_dm.push_back(xs.at(i));
+                minima_sin.push_back(values.at(i));
+            }
+        }
+
+        log<LOG_INFO>(L"%1% || ##################  ") %__func__;
+        for(int p=0;p<minima_dm.size();p++){
+
+            size_t nparams = metric_to_use->GetModel().nparams + metric_to_use->GetSysts().GetNSplines();
+            size_t nphys = metric_to_use->GetModel().nparams;
+            Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+            Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+            
+            for(size_t i = 0; i < nphys; ++i) {
+                lb(i) = metric_to_use->GetModel().lb(i);
+                ub(i) = metric_to_use->GetModel().ub(i);
+            }
+            for(size_t i = nphys; i < nparams; ++i) {
+                lb(i) = metric_to_use->GetSysts().spline_lo[i-nphys];
+                ub(i) = metric_to_use->GetSysts().spline_hi[i-nphys];
+            }
+
+            //fix dm at minima
+            lb(0)=minima_dm.at(p);
+            ub(0)=minima_dm.at(p);
+
+            metric_to_use->setBounds(lb,ub);
+
+            Eigen::VectorXf x = ptC;
+            x(0) = minima_dm.at(p);
+            x(1) = minima_sin.at(p);
+            float fx;
+            LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+            try{
+                int niter = solver.minimize(*metric_to_use, x, fx, lb, ub);
+            } catch (const std::runtime_error &except) {
+                log<LOG_WARNING>(L"%1% || Usual %2%") % __func__ % except.what();
+
+            }
+
+            log<LOG_INFO>(L"%1% || FIXED MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
+            log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  x;
+
+            log<LOG_INFO>(L"%1% || ##################  ") %__func__;
+            
+            lb(0)=-2;
+            ub(0)=2;
+            metric_to_use->setBounds(lb,ub);
+
+            try{
+                int niter = solver.minimize(*metric_to_use, x, fx, lb, ub);
+            } catch (const std::runtime_error &except) {
+                log<LOG_WARNING>(L"%1% || Usual %2%") % __func__ % except.what();
+
+            }
+            log<LOG_INFO>(L"%1% || FLOAT MINIMA number %2% (@ %3%) has chi %4% ") %__func__% p % minima_dm.at(p) % fx;
+            log<LOG_INFO>(L"%1% || -- at bf pt %2%  ") %__func__%  x;
+
+        }
+
+
 
         exit(EXIT_FAILURE);
-        
+
         PROfitter fitter(ub, lb, fitconfig);
 
 
-       /* log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit A seed ############") % __func__;
-        float chi2 = fitter.Fit(*metric_to_use, ptA); 
-        Eigen::VectorXf best_fit = fitter.best_fit;
+        /* log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit A seed ############") % __func__;
+           float chi2 = fitter.Fit(*metric_to_use, ptA); 
+           Eigen::VectorXf best_fit = fitter.best_fit;
 
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || ########### Global Best Fit A Results ############") % __func__;
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
-        log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
+           log<LOG_INFO>(L"%1% || ################################################") % __func__;
+           log<LOG_INFO>(L"%1% || ########### Global Best Fit A Results ############") % __func__;
+           log<LOG_INFO>(L"%1% || ################################################") % __func__;
+           log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
+           log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
 
-        for(size_t i = 0; i< nparams; i++){
+           for(size_t i = 0; i< nparams; i++){
 
-            if(i<nphys){
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetModel().pretty_param_names[i].c_str() % best_fit(i);
-            }else{
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
-            }
-        }
-        */
+           if(i<nphys){
+           log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+           }else{
+           log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
+           }
+           }
+           */
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit B seed ############") % __func__;
         float chi2 = fitter.Fit(*metric_to_use); 
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -1548,24 +1618,24 @@ int main(int argc, char* argv[])
 
         /*
          * log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit C seed ############") % __func__;
-        chi2 = fitter.Fit(*metric_to_use, ptC); 
-        best_fit = fitter.best_fit;
+         chi2 = fitter.Fit(*metric_to_use, ptC); 
+         best_fit = fitter.best_fit;
 
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || ########### Global Best Fit C Results ############") % __func__;
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
-        log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
+         log<LOG_INFO>(L"%1% || ################################################") % __func__;
+         log<LOG_INFO>(L"%1% || ########### Global Best Fit C Results ############") % __func__;
+         log<LOG_INFO>(L"%1% || ################################################") % __func__;
+         log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
+         log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
 
-        for(size_t i = 0; i< nparams; i++){
+         for(size_t i = 0; i< nparams; i++){
 
-            if(i<nphys){
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetModel().pretty_param_names[i].c_str() % best_fit(i);
-            }else{
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
-            }
-        }
-        */
+         if(i<nphys){
+         log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+         }else{
+         log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
+         }
+         }
+         */
 
 
         return 0;
