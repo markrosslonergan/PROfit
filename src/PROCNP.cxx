@@ -110,7 +110,7 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
 
 
     if(rungradient){
-        float dval = 1e-4;
+        float dval = 1e-4
         for (size_t i = 0; i < model.nparams+syst->GetNSplines(); i++) {
             //Eigen::VectorXf tmpParams = last_param;
             Eigen::VectorXf tmpParams = param;

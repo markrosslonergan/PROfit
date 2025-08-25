@@ -170,6 +170,8 @@ namespace PROfit {
                             % __func__ % value;
                         exit(EXIT_FAILURE);
                     }
+                } else if(param_name == "n_max_local_retries") {
+                    n_max_local_retries = value;
                 }else if(param_name == "n_swarm_particles") {
                     n_swarm_particles = value;
                     if(n_swarm_particles < 1) {

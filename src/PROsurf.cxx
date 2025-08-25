@@ -175,6 +175,12 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
         }else{
             //if its physics, 
                 test_values = combined_sparse_dense(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), init_seed(which_spline), nstep, nstep*0.8, 0.2 );
+                if(which_spline==0){
+                   test_values.clear();
+                   for(float ll=0.4; ll<1.2; ll+=0.005){
+                       test_values.push_back(ll);
+                   }
+                }
         }
 
 
