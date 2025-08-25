@@ -603,7 +603,7 @@ int main(int argc, char* argv[])
 
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
 
-
+        metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
         global_fit_chi2 = chi2;
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -626,6 +626,7 @@ int main(int argc, char* argv[])
             }
         }
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        exit(EXIT_FAILURE);
 
         // TODO: Not sure I understand this covariance matrix
         log<LOG_INFO>(L"%1% || Starting a metropolis hastings chain to estimate the covariace matrix aroud the above best fit. Run and Burn is (%2%,%3%);") % __func__%fitconfig.MCMCiter % fitconfig.MCMCburn;
@@ -1438,26 +1439,6 @@ int main(int argc, char* argv[])
          Eigen::VectorXf ptC = Eigen::Map<Eigen::VectorXf>(dataC.data(), dataC.size());
 
          Eigen::VectorXf grad = Eigen::VectorXf::Constant(ptA.size(),0.0);
-         
-         float chiA = (*metric)(ptA,grad);
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-         log<LOG_INFO>(L"%1% || Point A (%2%) \n --- has chi^2 (%3%)") %__func__% ptA % chiA;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
-
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-
-         float chiB = (*metric)(ptB,grad);
-         log<LOG_INFO>(L"%1% || Point B (%2%) \n --- has chi^2 (%3%)") %__func__% ptB % chiB;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-         
-
-         float chiC = (*metric)(ptC,grad);
-         log<LOG_INFO>(L"%1% || Point C (%2%) \n --- has chi^2 (%3%)") %__func__% ptC % chiC;
-         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
-         log<LOG_INFO>(L"%1% || ############### )") %__func__;
-
-
 
         PROmetric *metric_to_use = systs_only_profile ? null_metric : metric;
         size_t nparams = metric_to_use->GetModel().nparams + metric_to_use->GetSysts().GetNSplines();
@@ -1473,6 +1454,29 @@ int main(int argc, char* argv[])
             ub(i) = metric_to_use->GetSysts().spline_hi[i-nphys];
 
         }
+        metric_to_use->setBounds(lb,ub);
+
+         float chiA = (*metric_to_use)(ptA,grad);
+         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+         log<LOG_INFO>(L"%1% || Point A (%2%) \n --- has chi^2 (%3%)") %__func__% ptA % chiA;
+         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+
+         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+
+         float chiB = (*metric_to_use)(ptB,grad);
+         log<LOG_INFO>(L"%1% || Point B (%2%) \n --- has chi^2 (%3%)") %__func__% ptB % chiB;
+         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+         
+
+         float chiC = (*metric_to_use)(ptC,grad);
+         log<LOG_INFO>(L"%1% || Point C (%2%) \n --- has chi^2 (%3%)") %__func__% ptC % chiC;
+         log<LOG_INFO>(L"%1% || -- and grad (%2%) )") %__func__% grad;
+         log<LOG_INFO>(L"%1% || ############### )") %__func__;
+
+
+
+        
         PROfitter fitter(ub, lb, fitconfig);
         
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit A seed ############") % __func__;

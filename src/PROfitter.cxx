@@ -126,7 +126,84 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         try {
             x = PSO.getGlobalBestPosition();
             log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
-            niter = solver.minimize(metric, x, fx, lb, ub);
+
+
+
+            //NEW NEW
+            try {
+                niter = solver.minimize(metric, x, fx, lb, ub);
+            } catch(const std::runtime_error &e) {
+                std::string error_msg = e.what();
+
+                if(error_msg.find("line search step became smaller") != std::string::npos) {
+                    log<LOG_ERROR>(L"%1% || Line search failure detected! Debugging info:") % __func__;
+
+                    // Evaluate function and gradient at current point
+                    Eigen::VectorXf grad(x.size());
+                    float f_current = metric(x, grad, true);
+
+                    log<LOG_ERROR>(L"%1% || Current position x: %2%") % __func__ % x;
+                    log<LOG_ERROR>(L"%1% || Current f(x): %2%") % __func__ % f_current;
+                    log<LOG_ERROR>(L"%1% || Gradient norm: %2%") % __func__ % grad.norm();
+                    log<LOG_ERROR>(L"%1% || Gradient: %2%") % __func__ % grad;
+
+                    // Check for NaN or Inf
+                    if(!std::isfinite(f_current)) {
+                        log<LOG_ERROR>(L"%1% || ERROR: Function value is NaN or Inf!") % __func__;
+                    }
+                    if(grad.hasNaN()) {
+                        log<LOG_ERROR>(L"%1% || ERROR: Gradient contains NaN!") % __func__;
+                    }
+                    if((grad.array().abs() > 1e10).any()) {
+                        log<LOG_ERROR>(L"%1% || WARNING: Gradient has extremely large values!") % __func__;
+                    }
+
+                    // Check proximity to bounds
+                    log<LOG_ERROR>(L"%1% || Boundary proximity check:") % __func__;
+                    for(int i = 0; i < x.size(); ++i) {
+                        float dist_to_lower = x(i) - lb(i);
+                        float dist_to_upper = ub(i) - x(i);
+
+                        if(dist_to_lower < 1e-6 || dist_to_upper < 1e-6) {
+                            log<LOG_ERROR>(L"%1% ||   Param[%2%] near boundary: x=%3%, bounds=[%4%, %5%], distances=[%6%, %7%]")
+                                % __func__ % i % x(i) % lb(i) % ub(i) % dist_to_lower % dist_to_upper;
+                        }
+                    }
+
+                                        // Check condition number (gradient vs parameter scales)
+                    float max_grad = grad.cwiseAbs().maxCoeff();
+                    float min_grad = grad.cwiseAbs().minCoeff();
+                    if(min_grad > 0 && max_grad / min_grad > 1e6) {
+                        log<LOG_ERROR>(L"%1% || WARNING: Poorly scaled problem! Gradient range: [%2%, %3%], ratio: %4%")
+                            % __func__ % min_grad % max_grad % (max_grad/min_grad);
+                    }
+
+                    // Log solver parameters
+                    log<LOG_ERROR>(L"%1% || Solver parameters:") % __func__;
+                    log<LOG_ERROR>(L"%1% ||   ftol=%2%, wolfe=%3%, min_step=%4%, max_linesearch=%5%")
+                        % __func__ % fitconfig.param.ftol % fitconfig.param.wolfe % fitconfig.param.min_step % fitconfig.param.max_linesearch;
+
+                    // Try to diagnose the specific issue
+                    if(grad.norm() < 1e-10) {
+                        log<LOG_ERROR>(L"%1% || DIAGNOSIS: Gradient near zero - might be at a stationary point") % __func__;
+                    } else if(max_grad / min_grad > 1e6) {
+                        log<LOG_ERROR>(L"%1% || DIAGNOSIS: Poorly scaled parameters - consider rescaling") % __func__;
+                    } else if(f_current < -1e10 || f_current > 1e10) {
+                        log<LOG_ERROR>(L"%1% || DIAGNOSIS: Function value out of reasonable range") % __func__;
+                    } else {
+                        log<LOG_ERROR>(L"%1% || DIAGNOSIS: Likely too strict tolerances (ftol=%2%) or gradient calculation issues") 
+                            % __func__ % fitconfig.param.ftol;
+                    }
+
+                    // Re-throw the exception after logging
+                    throw;
+
+                } else {
+                    // Different error, just re-throw
+                    throw;
+                }
+            }
+
             chi2s_localfits.push_back(fx);
 
             if (fx < chimin) {
@@ -155,8 +232,8 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
         //log<LOG_WARNING>(L"%1% || PSO chi %2%  and local: %3% ") % __func__ % PSO.getGlobalBestScore() % fx;
         if (fx < chimin) {
-             best_fit = x;
-             chimin = fx;
+            best_fit = x;
+            chimin = fx;
         }
         if(PSO.getGlobalBestScore()< chimin){
             best_fit = PSO.getGlobalBestPosition();
@@ -172,37 +249,37 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         log<LOG_INFO>(L"%1% || Starting local fit of seed point. ") % __func__ ;
 
         for(size_t s = 0; s < seed_points.size();s++){
-        for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
-            try {
-                x = seed_points.at(s);
-                log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
-                niter = solver.minimize(metric, x, fx, lb, ub);
-                chi2s_localfits.push_back(fx);
+            for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
+                try {
+                    x = seed_points.at(s);
+                    log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
+                    niter = solver.minimize(metric, x, fx, lb, ub);
+                    chi2s_localfits.push_back(fx);
 
-                if (fx < chimin) {
-                    best_fit = x;
-                    chimin = fx;
+                    if (fx < chimin) {
+                        best_fit = x;
+                        chimin = fx;
+                    }
+
+                    log<LOG_INFO>(L"%1% || Minimization successful, chi %2% after %3% iterations") % __func__ % fx % niter;
+
+                    std::string spec_string = "";
+                    for (auto &f : x) spec_string += " " + std::to_string(f);
+                    log<LOG_DEBUG>(L"%1% || Best Point after minimization: %2%") % __func__ % spec_string.c_str();
+
+                    success = true;
+                    break;
+
+                } catch (const std::runtime_error &except) {
+                    log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
                 }
-
-                log<LOG_INFO>(L"%1% || Minimization successful, chi %2% after %3% iterations") % __func__ % fx % niter;
-
-                std::string spec_string = "";
-                for (auto &f : x) spec_string += " " + std::to_string(f);
-                log<LOG_DEBUG>(L"%1% || Best Point after minimization: %2%") % __func__ % spec_string.c_str();
-
-                success = true;
-                break;
-
-            } catch (const std::runtime_error &except) {
-                log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
             }
-        }
         }
         if (!success) {
             log<LOG_WARNING>(L"%1% || All minimization attempts failed, falling back to PSO best") % __func__;
             if (fx < chimin) {
-                    best_fit = x;
-                    chimin = fx;
+                best_fit = x;
+                chimin = fx;
             }
 
 
@@ -248,10 +325,10 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
         if (!success) {
             log<LOG_WARNING>(L"%1% || LBFGSB minimization attempts failed to fully converge. Using best found minimum or best PSO minimum.") % __func__;
-              if (fx < chimin) {
-                    best_fit = x;
-                    chimin = fx;
-                }
+            if (fx < chimin) {
+                best_fit = x;
+                chimin = fx;
+            }
 
 
         }

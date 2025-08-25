@@ -66,16 +66,23 @@ namespace PROfit {
                 abort();
             }
 
+    
+
+            log<LOG_ERROR>(L"%1% | ONON SYST/NOOSC ") % __func__;
             // No oscillations, fix the values at the test point, and fit nuisennce only
             PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
+            metric->setBounds(lb,ub);
             float chi2_syst = fitter.Fit(*metric,cached_seed_syst);
+            metric->freeParams();
             cached_seed_syst = fitter.best_fit;
 
+            log<LOG_ERROR>(L"%1% | ONON GLOB ") % __func__;
             // With oscillations, aka global best fit over nuisence and osc param
             PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
             float chi2_osc = -999;
             if(!args.gof_mode){
                 std::vector<Eigen::VectorXf> seed_points = {cached_seed_syst, cached_seed_osc};
+                metric->setBounds(lb_osc,ub_osc);
                 chi2_osc = fitter_osc.Fit(*metric, seed_points); 
             }
 

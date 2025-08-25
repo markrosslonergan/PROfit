@@ -53,7 +53,7 @@ namespace PROfit{
 
         //PROfitterConfig fitconfig2("unblind",false);
         PROfitterConfig fitconfig2("good",false);
-        PROfitterConfig scanfitconfig2("good",true);
+        PROfitterConfig scanfitconfig2("good",false);
 
         size_t nparams = metric->GetModel().nparams + metric->GetSysts().GetNSplines();
         size_t nphys = metric->GetModel().nparams;
@@ -68,10 +68,11 @@ namespace PROfit{
             ub(i) = metric->GetSysts().spline_hi[i-nphys];
         }
 
-        PROfitter fitter(ub, lb, fitconfig2,2);
-
+        PROfitter fitter(ub, lb, fitconfig2);//,2);
+        metric->setBounds(lb,ub);
         log<LOG_ERROR>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
         log<LOG_ERROR>(L"%1% || ####### (Note LOG level manually set to WARNING only) ######") % __func__; 
+        log<LOG_ERROR>(L"%1% || ####### (for unblinding, so this has a LOT less output than usual) ######") % __func__; 
 
         float chi2 = fitter.Fit(*metric); 
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -227,7 +228,8 @@ namespace PROfit{
         float pval = (float)count_above/(float)nuniv;
         log<LOG_ERROR>(L"%1% || Finished throws. %2% %3% %4%") % __func__ % __LINE__% index % count_above;
         log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
- 
+
+        exit(EXIT_FAILURE);
         /*
          for(size_t i = 0; i< nparams; i++){
 
@@ -440,9 +442,10 @@ namespace PROfit{
             ub(i) = BKGparams(i);
         }
         PROfitter BKGfitter(ub, lb, fitconfig2,2);
+        metric->setBounds(lb,ub);
         float chi2_bkg = BKGfitter.Fit(*metric); 
         Eigen::VectorXf best_fit_bkg = BKGfitter.best_fit;
-
+        metric->freeParams();
 
 
         std::vector<std::vector<float>> dchi2sFC;
