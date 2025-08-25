@@ -1431,7 +1431,7 @@ int main(int argc, char* argv[])
         
         std::vector<float> dataB = {0.473843,-0.830206,0.033776,0.090911,0.049776,0.000424,0.053759,-0.116555,0.287931,0.259205,0.277881,0.279729,0.025432,-0.038683,0.028922,0.028664,0.081903,0.474689,-0.435970,-0.410814,0.031188,-0.040896,-0.147286,-0.066111,0.181461,-0.039330,0.034514,0.058135};
         
-        std::vector<float> dataC = {1.147783,-0.544765,0.0,0.0,0.0,0.000,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
+        std::vector<float> dataC = {1.147783,-0.830206,0.0,0.0,0.0,0.000,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
         
          Eigen::VectorXf ptA = Eigen::Map<Eigen::VectorXf>(dataA.data(), dataA.size());
          Eigen::VectorXf ptB = Eigen::Map<Eigen::VectorXf>(dataB.data(), dataB.size());
@@ -1474,11 +1474,41 @@ int main(int argc, char* argv[])
          log<LOG_INFO>(L"%1% || ############### )") %__func__;
 
 
+         for(float k=-0.2; k<1.5;k+=0.01){
+           ptB(0)=k;
+           ptC(0)=k;
+           float chiB = (*metric_to_use)(ptB,grad,false);
+           float chiC = (*metric_to_use)(ptC,grad,false);
 
+             float fx = -9;
+             Eigen::VectorXf x = ptC;
+             Eigen::VectorXf lb = x;
+             Eigen::VectorXf ub = x;
+             lb(1)=-3;
+             ub(1)=0;
+             metric_to_use->setBounds(lb,ub);
+
+             LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+             int niter = solver.minimize(*metric_to_use, x, fx, lb, ub);
+             float chiD = fx;
+
+            log<LOG_INFO>(L"%1% || PARP %2%  : %3% : %4%  : %5% @ %6%") %__func__% k % chiB % chiC % chiD % x(1);
+         }
+
+         for(float k=-0.2; k<1.5;k+=0.01){
+                         ptB(0)=k;
+           ptC(0)=k;
+           float chiB = (*metric_to_use)(ptB,grad,false);
+           float chiC = (*metric_to_use)(ptC,grad,false);
+           log<LOG_INFO>(L"%1% || PARP %2%  : %3% : %4% )") %__func__% k % chiB % chiC;
+         }
+
+        exit(EXIT_FAILURE);
         
         PROfitter fitter(ub, lb, fitconfig);
-        
-        log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit A seed ############") % __func__;
+
+
+       /* log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit A seed ############") % __func__;
         float chi2 = fitter.Fit(*metric_to_use, ptA); 
         Eigen::VectorXf best_fit = fitter.best_fit;
 
@@ -1496,10 +1526,10 @@ int main(int argc, char* argv[])
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
             }
         }
-
+        */
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit B seed ############") % __func__;
-        chi2 = fitter.Fit(*metric_to_use, ptB); 
-        best_fit = fitter.best_fit;
+        float chi2 = fitter.Fit(*metric_to_use); 
+        Eigen::VectorXf best_fit = fitter.best_fit;
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit B Results ############") % __func__;
@@ -1516,7 +1546,8 @@ int main(int argc, char* argv[])
             }
         }
 
-        log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit C seed ############") % __func__;
+        /*
+         * log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit C seed ############") % __func__;
         chi2 = fitter.Fit(*metric_to_use, ptC); 
         best_fit = fitter.best_fit;
 
@@ -1534,7 +1565,7 @@ int main(int argc, char* argv[])
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
             }
         }
-
+        */
 
 
         return 0;

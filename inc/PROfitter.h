@@ -112,12 +112,7 @@ namespace PROfit {
                     param.max_submin = 20;
                     param.delta = 1e-10;             // OK for float
 
-                    
-                    param.max_iterations = 0;  // Keep
-                    param.max_linesearch = 20;      // Reduce from 40
-                    param.delta = 1e-10;             // OK for float
-
-                    
+                                     
                 }else if (fit_preset == "fast"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 100;

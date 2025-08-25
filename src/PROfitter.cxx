@@ -212,6 +212,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             }
 
             log<LOG_INFO>(L"%1% || Minimization successful, chi %2% after %3% iterations") % __func__ % fx % niter;
+            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx %x;
 
             std::string spec_string = "";
             for (auto &f : x) spec_string += " " + std::to_string(f);
@@ -230,7 +231,6 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     if (!success) {
         log<LOG_WARNING>(L"%1% || All minimization attempts failed to converge, using best internal minimum or best PSO value found.") % __func__;
 
-        //log<LOG_WARNING>(L"%1% || PSO chi %2%  and local: %3% ") % __func__ % PSO.getGlobalBestScore() % fx;
         if (fx < chimin) {
             best_fit = x;
             chimin = fx;
@@ -253,9 +253,13 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 try {
                     x = seed_points.at(s);
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
+                    log<LOG_INFO>(L"%1% || --On Seed: %2%") % __func__ % x;
                     niter = solver.minimize(metric, x, fx, lb, ub);
                     chi2s_localfits.push_back(fx);
 
+            
+                    log<LOG_WARNING>(L"%1% || Min worked (seed)") % __func__;
+                    log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
                     if (fx < chimin) {
                         best_fit = x;
                         chimin = fx;
@@ -276,7 +280,8 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             }
         }
         if (!success) {
-            log<LOG_WARNING>(L"%1% || All minimization attempts failed, falling back to PSO best") % __func__;
+            log<LOG_WARNING>(L"%1% || All minimization attempts failed, The best internal was") % __func__;
+            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
             if (fx < chimin) {
                 best_fit = x;
                 chimin = fx;
@@ -292,14 +297,19 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
         //After the best best fit, do you want to do more of the latin ones?
         x = Eigen::Map<Eigen::VectorXf>(latin_samples[best_multistart[i+1]].data(), latin_samples[best_multistart[i+1]].size());
+        log<LOG_INFO>(L"%1% || #########################  ") % __func__ ;
         log<LOG_INFO>(L"%1% || Starting n_localfit local fit number %2%/%3% ") % __func__ % i  % fitconfig.n_localfit;
-
 
         for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
             try {
                 log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
+                log<LOG_INFO>(L"%1% || Seed is %2% ") % __func__ %  x;
+
                 niter = solver.minimize(metric, x, fx, lb, ub);
                 chi2s_localfits.push_back(fx);
+
+                log<LOG_WARNING>(L"%1% || Min worked (latin)") % __func__;
+                    log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
 
                 if (fx < chimin) {
                     best_fit = x;
@@ -325,6 +335,10 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
         if (!success) {
             log<LOG_WARNING>(L"%1% || LBFGSB minimization attempts failed to fully converge. Using best found minimum or best PSO minimum.") % __func__;
+
+            log<LOG_WARNING>(L"%1% || All minimization attempts failed (latin), The best internal was") % __func__;
+            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
+
             if (fx < chimin) {
                 best_fit = x;
                 chimin = fx;

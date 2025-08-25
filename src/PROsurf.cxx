@@ -181,6 +181,12 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                        test_values.push_back(ll);
                    }
                 }
+                if(which_spline==1){
+                   test_values.clear();
+                   for(float ll=-2; ll<=0; ll+=0.02){
+                       test_values.push_back(ll);
+                   }
+                }
         }
 
 
