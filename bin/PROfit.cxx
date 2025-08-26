@@ -318,7 +318,7 @@ int main(int argc, char* argv[])
     PROdata data;
     std::vector<PROdata> other_data;
     if(!data_xml.empty()){
-        PROconfig dataconfig(data_xml);
+        PROconfig dataconfig(data_xml, rateonly);
         std::string dataBinName = analysis_tag+"_data.bin";
         for(size_t i = 0; i < dataconfig.m_num_channels; ++i) {
             size_t nsubch = dataconfig.m_num_subchannels[i];
