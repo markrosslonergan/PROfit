@@ -114,7 +114,6 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     Eigen::VectorXf x;  
 
     float chimin = 9999999;
-    std::vector<float> chi2s_localfits;
     niter=0;
 
     bool success = false;
@@ -133,7 +132,6 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 std::string error_msg = e.what();
             }
 
-            chi2s_localfits.push_back(fx);
 
             if (fx < chimin) {
                 best_fit = x;
@@ -180,6 +178,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         for(size_t s = 0; s < seed_points.size();s++){
             for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
                 try {
+                    
                     x = seed_points.at(s);
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
                     log<LOG_INFO>(L"%1% || --On Seed: %2%") % __func__ % x;
@@ -190,16 +189,20 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     tmp_lb(0) = x(0);
                     tmp_ub(0) = x(0);
                     metric.setBounds(tmp_lb,tmp_ub);
-                    niter = solver.minimize(metric, x, fx, tmp_lb, tmp_ub);
+                    try{niter = solver.minimize(metric, x, fx, tmp_lb, tmp_ub);
+                    }catch (const std::runtime_error &except) {}
+
                     if (fx < chimin) {
                         best_fit = x;
                         chimin = fx;
                     }
 
-                    //now release and fit with past input as seed
+                    //now release and fit with past bf from fixed above as seed
                     metric.setBounds(lb,ub);
-                    niter = solver.minimize(metric, x, fx, lb, ub);
-                    chi2s_localfits.push_back(fx);
+                    try{
+                        niter=solver.minimize(metric, x, fx, lb, ub);
+                    }catch (const std::runtime_error &except) {}
+
 
                     log<LOG_WARNING>(L"%1% || Min worked (seed)") % __func__;
                     log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
@@ -223,7 +226,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     metric.freeParams();
                 }
             }
-        }
+        }//end seed
         if (!success) {
             log<LOG_WARNING>(L"%1% || All minimization attempts failed, The best internal was") % __func__;
             log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
@@ -251,7 +254,6 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 log<LOG_INFO>(L"%1% || Seed is %2% ") % __func__ %  x;
 
                 niter = solver.minimize(metric, x, fx, lb, ub);
-                chi2s_localfits.push_back(fx);
 
                 log<LOG_WARNING>(L"%1% || Min worked (latin)") % __func__;
                 log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;

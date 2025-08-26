@@ -216,14 +216,17 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
         }else{
             //if its physics, grab seed points, need to include those
             std::vector<float> seed_values(seed_points.size());
-            std::transform(seed_points.begin(), seed_points.end(), seed_points.begin(), [which_spline](const auto& vec) { return vec[which_spline]; });
-            test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep, 3 );
+            std::transform(seed_points.begin(), seed_points.end(), seed_values.begin(), [which_spline](const auto& vec) { return vec[which_spline]; });
+            test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep*0.7, 3 );
+            log<LOG_INFO>(L"%1% || PROfileing over physics parameter number %2% has %3% uniform points, and %4% local ones for a total of %5% points. ") % __func__ %  which_spline % int(nstep*0.5) %int(3*seed_values.size()) % test_values.size();
            }
 
-            log<LOG_INFO>(L"%1% || PLONK which_spline %2% has testpt order %3% ") % __func__ %  which_spline % test_values;
-            continue;
+            //log<LOG_INFO>(L"%1% || PLONK which_spline %2% has testpt order %3% ") % __func__ %  which_spline % test_values;
             //and minimize
+            
             int cnt=0;
+            Eigen::VectorXf cv_best_fit;
+            float last_val = 0;
             for(auto &v: test_values){
                 float which_value = v;    
                 float fx;
@@ -238,11 +241,18 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 PROfitter fitter(tub, tlb, fitconfig, seed+i);
 
                 std::vector<Eigen::VectorXf> test_seeds = seed_points;
-                if(last_bf.size()>0)test_seeds.push_back(last_bf);
+                if(last_bf.size()>0){
+                    if(which_value*last_val<0){//have we flipper around the CV, if so lets take the best value from that and NOT init. 
+                        test_seeds.push_back(cv_best_fit);
+                    }else{
+                        test_seeds.push_back(last_bf);
+                    }
+                }
 
-                fx = fitter.Fit(*local_metric,test_seeds);
+                fx = fitter.Fit(*local_metric, test_seeds);
                 output.knob_chis.push_back(fx - minchi);
                 last_bf = fitter.best_fit;
+                if(cv_best_fit.size()==0){cv_best_fit=last_bf;}
 
                 std::string spec_string = "";
                 for(auto &f : fitter.best_fit) spec_string+=" "+std::to_string(f); 
@@ -250,6 +260,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 log<LOG_INFO>(L"%1% || at a BF param value of @ %2%") % __func__ %  spec_string.c_str();
 
                 cnt++;
+                last_val = which_value;
             }    //end step loop        
             output.sort();
             outs.push_back(output);
