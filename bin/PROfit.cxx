@@ -625,6 +625,23 @@ int main(int argc, char* argv[])
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
             }
         }
+
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+            if(chi_freq<chi2){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                chi2 = chi_freq;
+                best_fit = fitter.freq_seed_points.at(i);
+            }
+        }
+
+
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
 
         // TODO: Not sure I understand this covariance matrix
@@ -773,7 +790,7 @@ int main(int argc, char* argv[])
         log<LOG_INFO>(L"%1% ||  Beginning full PROfile ") % __func__;
 
         PROfile profile(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed, scanFitConfig, 
-                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, best_fit,
+                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, fitter.freq_seed_points,
                 systs_only_profile ? systparams : allparams);
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
@@ -1442,6 +1459,7 @@ int main(int argc, char* argv[])
             ub(i) = metric_to_use->GetSysts().spline_hi[i-nphys];
 
         }
+        metric_to_use->setBounds(lb,ub);
         PROfitter fitter(ub, lb, fitconfig);
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit  ############") % __func__;
         float chi2 = fitter.Fit(*metric_to_use); 
@@ -1466,7 +1484,72 @@ int main(int argc, char* argv[])
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
 
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+            if(chi_freq<chi2){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+            }
+        }
 
+        /*  test some pts for nuisence */
+
+        LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+        for(float val =0; val <=1; val+=0.025){
+            float chimin = 99999;
+            Eigen::VectorXf loc_best_fit;
+            Eigen::VectorXf last_best_fit = best_fit;
+            lb(3)=val;
+            ub(3)=val;
+
+            for(size_t s = 0; s < fitter.freq_seed_points.size()+1;s++){
+                
+                Eigen::VectorXf x;
+                if(s==fitter.freq_seed_points.size()){x = last_best_fit;}else{x= fitter.freq_seed_points.at(s);}
+                log<LOG_INFO>(L"%1% || Starting local Seed %2%") % __func__ % s ;
+                log<LOG_INFO>(L"%1% || --On Seed: %2%") % __func__ % x;
+
+                float fx = -99;
+                //first fix freq and whaver is supposed to be fixed  
+                Eigen::VectorXf tmp_lb = lb;
+                Eigen::VectorXf tmp_ub = ub;
+                tmp_lb(0) = x(0);
+                tmp_ub(0) = x(0);
+                metric_to_use->setBounds(tmp_lb,tmp_ub);
+                try{
+                    solver.minimize(*metric_to_use, x, fx, tmp_lb, tmp_ub);
+                               }catch (const std::runtime_error &except) {
+                }
+
+                log<LOG_WARNING>(L"%1% || -- chi1 %2% at | %3% ") % __func__ % fx % x;
+
+                if (fx < chimin) {
+                    loc_best_fit = x;
+                    chimin = fx;
+                }
+
+                //now release and fit with past input as seed
+                metric_to_use->setBounds(lb,ub);
+                try{
+                     solver.minimize(*metric_to_use, x, fx, lb, ub);
+                }catch (const std::runtime_error &except) {
+
+            }
+
+
+
+                log<LOG_WARNING>(L"%1% || -- chi2 %2% at | %3% ") % __func__ % fx % x;
+                if (fx < chimin) {
+                    loc_best_fit = x;
+                    chimin = fx;
+                }
+                
+                last_best_fit = loc_best_fit;
+                metric_to_use->freeParams();
+            }
+
+            log<LOG_WARNING>(L"%1% || PLON  %2% chimin %3% at | %4% ") % __func__ % val % chimin % loc_best_fit;
+        }
         return(0);
 
 

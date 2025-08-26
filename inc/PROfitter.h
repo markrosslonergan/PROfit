@@ -226,8 +226,9 @@ namespace PROfit {
                         log<LOG_ERROR>(L"%1% || Requested to run MCMC with no iterations.");
                     }
                 } else {
-                    log<LOG_WARNING>(L"%1% || Unrecognized LBFGSB parameter %2%. Will ignore.") 
+                    log<LOG_ERROR>(L"%1% || Unrecognized LBFGSB parameter %2%. CHECK spelling!.") 
                         % __func__ % param_name.c_str();
+                        exit(EXIT_FAILURE);
                 }
             }
             try {
@@ -284,6 +285,8 @@ namespace PROfit {
             float Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt = Eigen::VectorXf());
             float Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points );
             int calcFreqSeedPoints(PROmetric &metric);
+            std::vector<std::pair<float, float>> findSignificantMinima(  const std::vector<float>& x_values,const std::vector<float>& y_values,  
+                    float prominence_threshold = 2.0,  float min_spacing_log = 0.05,     bool use_log_spacing = true);
 
             Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
             float FinalGradientNorm() const {return solver.final_grad_norm();}

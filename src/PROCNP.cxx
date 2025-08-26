@@ -65,8 +65,6 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
 
 float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
     call_count++;
-    //size_t nparams = model->nparams+syst->GetNSplines();
-    //size_t nsyst = syst->GetNSplines();
 
     // Get Spectra from FillRecoSpectra
     Eigen::VectorXf subvector1 = param.segment(0, model.nparams);
@@ -104,15 +102,11 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
                 L"mc spec: %5%\ndata spec: %6%")
             % __func__ % covar_portion % pull % delta % CollapseMatrix(config, result.Spec())
             % data.Spec();
-        //abort();
         throw std::runtime_error("CNP chi2 is nan.");
     }
 
 
     if(rungradient){
-        // Adaptive step size calculation
-        const float sqrt_eps = 10*std::sqrt(std::numeric_limits<float>::epsilon()); 
-
         for (size_t i = 0; i < model.nparams+syst->GetNSplines(); i++) {
 
             if(is_fixed.size()>0){
@@ -123,25 +117,16 @@ float PROCNP::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
             }
 
             float h;
-            if(std::abs(param(i)) > sqrt_eps) {
-                h = sqrt_eps * std::abs(param(i));
-            } else {
-                h = sqrt_eps;
-            }
-            //h = std::max(h, 1e-5f);
-            h = 1e-4f;//1e-4f;
-
-            // For physics parameters in log space, use larger steps
+            h = 1e-4f;
             if(i < model.nparams) {
-                //h = std::max(h, 1e-3f);
-                h = 1e-3f;//1e-3;
+                h = 1e-3f;
             }
 
             float boundary_tol = 2.0f*std::numeric_limits<float>::epsilon();
             bool at_lower = (param(i) - lb(i)) < boundary_tol;
             bool at_upper = (ub(i) - param(i)) < boundary_tol;
         
-            if(at_lower && at_upper){//shouldnt happen, if ix fixed working?
+            if(at_lower && at_upper){//shouldnt happen, if ix fixed working
                     gradient(i) = 0.0f;
                     continue;
             }

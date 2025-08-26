@@ -252,7 +252,7 @@ namespace PROfit{
         perm_vec = perm_vec.array() - metric->GetModel().nparams;
         Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(perm_vec);
 
-        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, best_fit);
+        PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, {best_fit});
 
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
         Metropolis mh(simple_target{*metric}, adaptive_proposal(*metric, dseed(PROseed::global_rng)), best_fit, dseed(PROseed::global_rng));
