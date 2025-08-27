@@ -206,16 +206,12 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                         niter=solver.minimize(metric, x, fx, lb, ub);
                     }catch (const std::runtime_error &except) {}
 
-
-                    log<LOG_WARNING>(L"%1% || Min worked (seed)") % __func__;
-                    log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
                     if (fx < chimin) {
                         best_fit = x;
                         chimin = fx;
                     }
 
                     log<LOG_INFO>(L"%1% || Minimization successful, chi %2% after %3% iterations") % __func__ % fx % niter;
-
                     std::string spec_string = "";
                     for (auto &f : x) spec_string += " " + std::to_string(f);
                     log<LOG_DEBUG>(L"%1% || Best Point after minimization: %2%") % __func__ % spec_string.c_str();
@@ -258,8 +254,6 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
                 niter = solver.minimize(metric, x, fx, lb, ub);
 
-                log<LOG_WARNING>(L"%1% || Min worked (latin)") % __func__;
-                log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
 
                 if (fx < chimin) {
                     best_fit = x;
