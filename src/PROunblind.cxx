@@ -77,10 +77,6 @@ namespace PROfit{
         float chi2 = fitter.Fit(*metric); 
         Eigen::VectorXf best_fit = fitter.best_fit;
         Eigen::MatrixXf post_covar = fitter.Covariance();
-
-        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
-        log<LOG_ERROR>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
-        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         int nminima = fitter.calcFreqSeedPoints(*metric);
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){

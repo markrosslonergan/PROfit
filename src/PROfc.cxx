@@ -68,7 +68,6 @@ namespace PROfit {
 
     
 
-            log<LOG_ERROR>(L"%1% | ONON SYST/NOOSC ") % __func__;
             // No oscillations, fix the values at the test point, and fit nuisennce only
             PROfitter fitter(ub, lb, args.fitconfig, dseed(rng));
             metric->setBounds(lb,ub);
@@ -76,7 +75,6 @@ namespace PROfit {
             metric->freeParams();
             cached_seed_syst = fitter.best_fit;
 
-            log<LOG_ERROR>(L"%1% | ONON GLOB ") % __func__;
             // With oscillations, aka global best fit over nuisence and osc param
             PROfitter fitter_osc(ub_osc, lb_osc, args.fitconfig, dseed(rng));
             float chi2_osc = -999;
@@ -95,8 +93,8 @@ namespace PROfit {
             }
 
             if(chi2_syst < chi2_osc && !args.gof_mode) {
-                log<LOG_WARNING>(L"%1% || Negative delta chi2 detected! chi2_syst=%2% < chi2_osc=%3%") % __func__ % chi2_syst % chi2_osc;
-                log<LOG_WARNING>(L"%1% || Attempting enhanced global search") % __func__;
+                log<LOG_DEBUG>(L"%1% || Negative delta chi2 detected! chi2_syst=%2% < chi2_osc=%3%") % __func__ % chi2_syst % chi2_osc;
+                log<LOG_DEBUG>(L"%1% || Attempting enhanced global search") % __func__;
 
                 PROfitterConfig enhanced_config = args.fitconfig;
                 enhanced_config.n_multistart *= 2;
@@ -107,7 +105,7 @@ namespace PROfit {
                 float chi2_osc_enhanced = fitter_osc_enhanced.Fit(*metric, fitter.best_fit);
                 
                 if(chi2_osc_enhanced < chi2_osc) {
-                    log<LOG_INFO>(L"%1% || Enhanced search improved chi2_osc from %2% to %3%") 
+                    log<LOG_DEBUG>(L"%1% || Enhanced search improved chi2_osc from %2% to %3%") 
                         % __func__ % chi2_osc % chi2_osc_enhanced;
                     chi2_osc = chi2_osc_enhanced;
                     fitter_osc.best_fit = fitter_osc_enhanced.best_fit;

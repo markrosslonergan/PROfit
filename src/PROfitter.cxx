@@ -139,24 +139,24 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             }
 
             log<LOG_INFO>(L"%1% || Minimization successful, chi %2% after %3% iterations") % __func__ % fx % niter;
-            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx %x;
+            log<LOG_INFO>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx %x;
 
-            std::string spec_string = "";
-            for (auto &f : x) spec_string += " " + std::to_string(f);
-            log<LOG_DEBUG>(L"%1% || Best Point after minimization: %2%") % __func__ % spec_string.c_str();
+            //std::string spec_string = "";
+            //for (auto &f : x) spec_string += " " + std::to_string(f);
+            //log<LOG_DEBUG>(L"%1% || Best Point after minimization: %2%") % __func__ % spec_string.c_str();
 
             success = true;
             break;
 
         } catch (const std::runtime_error &except) {
-            log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
+            log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
             std::string msg = except.what();
             exception_string_map[msg]++;
         }
     }
 
     if (!success) {
-        log<LOG_WARNING>(L"%1% || All minimization attempts failed to converge, using best internal minimum or best PSO value found.") % __func__;
+        log<LOG_INFO>(L"%1% || All minimization attempts failed to converge, using best internal minimum or best PSO value found.") % __func__;
 
         if (fx < chimin) {
             best_fit = x;
@@ -221,14 +221,14 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     break;
 
                 } catch (const std::runtime_error &except) {
-                    log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
+                    log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
                     metric.freeParams();
                 }
             }
         }//end seed
         if (!success) {
-            log<LOG_WARNING>(L"%1% || All minimization attempts failed, The best internal was") % __func__;
-            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
+            log<LOG_INFO>(L"%1% || All minimization attempts failed, The best internal was") % __func__;
+            log<LOG_INFO>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
             if (fx < chimin) {
                 best_fit = x;
                 chimin = fx;
@@ -270,7 +270,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 break;
 
             } catch (const std::runtime_error &except) {
-                log<LOG_WARNING>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
+                log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
                 std::string msg = except.what();
                 exception_string_map[msg]++;
 
@@ -278,10 +278,10 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         }
 
         if (!success) {
-            log<LOG_WARNING>(L"%1% || LBFGSB minimization attempts failed to fully converge. Using best found minimum or best PSO minimum.") % __func__;
+            log<LOG_INFO>(L"%1% || LBFGSB minimization attempts failed to fully converge. Using best found minimum or best PSO minimum.") % __func__;
 
-            log<LOG_WARNING>(L"%1% || All minimization attempts failed (latin), The best internal was") % __func__;
-            log<LOG_WARNING>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
+            log<LOG_INFO>(L"%1% || All minimization attempts failed (latin), The best internal was") % __func__;
+            log<LOG_INFO>(L"%1% || -- chi %2% at ||||| %3% ") % __func__ % fx % x;
 
             if (fx < chimin) {
                 best_fit = x;
@@ -436,7 +436,7 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
 
 
     std::vector<std::pair<float, float>> minima;  
-    float prominence_threshold = in_priminence_threshold;
+    float prominence_threshold = in_prominence_threshold;
     float min_spacing_log = in_min_spacing_log;
     bool first = true;
 

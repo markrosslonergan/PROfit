@@ -14,13 +14,13 @@ namespace PROfit {
         size_t n_max_local_retries = 3;
         size_t MCMCiter = 20'000;
         size_t MCMCburn = 25'000;
-        param.min_step = std::numeric_limits<float>::epsilon();
 
         PROfitterConfig(){};
         PROfitterConfig(std::string fit_preset, bool isScan) : PROfitterConfig(std::map<std::string, float>{}, fit_preset, isScan){};
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){
 
 
+            param.min_step = std::numeric_limits<float>::epsilon();
             if(!isScan){
                 //Global Big presets
                 if(fit_preset == "good"){
