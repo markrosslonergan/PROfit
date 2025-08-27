@@ -53,7 +53,7 @@ namespace PROfit{
 
         //PROfitterConfig fitconfig2("unblind",false);
         PROfitterConfig fitconfig2("good",false);
-        PROfitterConfig scanfitconfig2("good",false);
+        PROfitterConfig scanfitconfig2("good",true);
 
         size_t nparams = metric->GetModel().nparams + metric->GetSysts().GetNSplines();
         size_t nphys = metric->GetModel().nparams;
@@ -117,7 +117,7 @@ namespace PROfit{
             if(fabs(v-lb(i))< tol || fabs(v-ub(i))<tol) boundary++;
         }
         if(boundary>0){ 
-            log<LOG_ERROR>(L"%1% || CHECK 5: At least one resulting bf value is at the boundary (actually it's %2% params) [ --INFO-- ]") % __func__ % boundary;
+            log<LOG_ERROR>(L"%1% || CHECK 5: There are  %2% resulting bf values lying at boundary (~2 are expected, any more could be a concern.) [ --INFO-- ]") % __func__ % boundary;
         }else{
             log<LOG_ERROR>(L"%1% || CHECK 5: None of the resulting bf value is at the boundary. [ --INFO--]") % __func__;
         }
@@ -135,6 +135,9 @@ namespace PROfit{
                     log<LOG_ERROR>(L"%1% || CHECK 7: -- Exception \"%2%\" occurred %3% time(s)") % __func__ % msg.c_str() % count;
                }
        }
+
+       log<LOG_ERROR>(L"%1% || CHECK 8: We have %2% harmonic seeds saved [ --INFO-- ]") % __func__ % fitter.freq_seed_points.size();
+
 
        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         getConfirmation("Passed all auto checks, but please review the above info.","Proceed to BF chi value reveal?");
@@ -242,6 +245,7 @@ namespace PROfit{
         log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
 
         /*
+           M
          for(size_t i = 0; i< nparams; i++){
 
             if(i<nphys){
@@ -264,6 +268,7 @@ namespace PROfit{
         Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(perm_vec);
 
         PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, fitter.freq_seed_points);
+    
 
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
         Metropolis mh(simple_target{*metric}, adaptive_proposal(*metric, dseed(PROseed::global_rng)), best_fit, dseed(PROseed::global_rng));
@@ -316,8 +321,8 @@ namespace PROfit{
             float val = prof.onesig.GetPointY(idx);
             float p1 = prof.onesig.GetErrorYhigh(idx);
             float m1 = prof.onesig.GetErrorYlow(idx);
-            log<LOG_ERROR>(L"%1% || Parameter %2% profile 1 sigma range: %3%(-%4%,+%5%)") 
-                % __func__ % i % val % m1 % p1;
+            log<LOG_ERROR>(L"%1% || Parameter %2% profile 1 sigma range: %3% (-%4%,+%5%) width |%6%|") 
+                % __func__ % i % val % m1 % p1 % fabs(p1-m1);
         }
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
@@ -404,14 +409,15 @@ namespace PROfit{
         for(long i = 0; i < best_fit.size(); i++){
 
             if(use_phys && i < (long)metric->GetModel().nparams){
-                log<LOG_ERROR>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+                log<LOG_ERROR>(L"%1% || %2%  :  %3%  (nonlog %4%)") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i) % pow(10,best_fit(i));
                 global_fit_out << metric->GetModel().param_names[i]
                     << " : " << best_fit(i) << "\n";
             }else{
                 long idx = use_phys ? i - metric->GetModel().nparams : i;
-                log<LOG_ERROR>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetSysts().spline_names[idx].c_str() % best_fit(i);
-                global_fit_out << metric->GetSysts().spline_names[idx]
-                    << " : " << best_fit(i) << "\n";
+                std::string bad_name = metric->GetSysts().spline_names[idx];
+                std::string good_name = config.m_mcgen_variation_plotname_map.at(bad_name);
+                log<LOG_ERROR>(L"%1% || %2%  :  %3% ") % __func__ % good_name.c_str() % best_fit(i);
+                global_fit_out << good_name << " : " << best_fit(i) << "\n";
             }
         }
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;

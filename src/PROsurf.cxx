@@ -250,6 +250,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
                 fx = fitter.Fit(*local_metric, test_seeds);
                 output.knob_chis.push_back(fx - minchi);
+                output.knob_bfs.push_back(fitter.best_fit);
                 last_bf = fitter.best_fit;
                 if(cv_best_fit.size()==0){cv_best_fit=last_bf;}
 
@@ -496,6 +497,12 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 log<LOG_INFO>(L"%1% || Knob Chis: %2%") % __func__ %  out.knob_chis;
                 std::unique_ptr<TGraph> g = std::make_unique<TGraph>(out.knob_vals.size(), out.knob_vals.data(), out.knob_chis.data());
                 graphs.push_back(std::move(g));
+                for(size_t u=0; u< out.knob_vals.size(); u++){
+                    //if(out.knob_chis.at(u)+chmin<chimin)
+                    if(out.knob_chis.at(u)<0){
+                        log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Currently this isn't handled well. ") % __func__ ;
+                    }
+                }
             }
 
             //Analyze them, used in later section

@@ -25,10 +25,10 @@ namespace PROfit {
                 //Global Big presets
                 if(fit_preset == "good"){
                     
-                    n_multistart = 5000;
-                    n_swarm_particles = 5;
-                    n_swarm_iterations = 100;
-                    n_localfit=20;
+                    n_multistart = 3500;
+                    n_swarm_particles = 10;
+                    n_swarm_iterations = 200;
+                    n_localfit=16;
                     n_max_local_retries = 1; //Until we have better logic, retrying is not helpful/wasteful
                     
                     param.epsilon = 1e-5;          
@@ -85,7 +85,7 @@ namespace PROfit {
                     n_multistart = 1000;
                     n_swarm_particles = 2;
                     n_swarm_iterations = 50;
-                    n_localfit=4;
+                    n_localfit=2;
                     n_max_local_retries = 1; //until better logic, local retries wastefil
 
                     param.epsilon = 1e-5;           

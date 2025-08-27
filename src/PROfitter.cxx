@@ -440,7 +440,7 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
     float min_spacing_log = in_min_spacing_log;
     bool first = true;
 
-    while(first || minima.size()>20){
+    while(first || minima.size()>16){
 
         if(x_values.size() != y_values.size() || x_values.size() < 3) {
             return minima;
