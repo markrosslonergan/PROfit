@@ -84,6 +84,14 @@ namespace PROfit {
                 std::vector<Eigen::VectorXf> seed_points = {cached_seed_syst, cached_seed_osc};
                 metric->setBounds(lb_osc,ub_osc);
                 chi2_osc = fitter_osc.Fit(*metric, seed_points); 
+                int nminima = fitter_osc.calcFreqSeedPoints(*metric);
+                for(size_t i=0; i< fitter_osc.freq_seed_points.size(); i++){
+                    float chi_freq = fitter_osc.freq_seed_values.at(i);
+                    if(chi_freq<chi2_osc){
+                        chi2_osc = chi_freq;
+                        fitter_osc.best_fit = fitter_osc.freq_seed_points.at(i);
+                    }
+                }
             }
 
             if(chi2_syst < chi2_osc && !args.gof_mode) {
@@ -97,7 +105,7 @@ namespace PROfit {
 
                 PROfitter fitter_osc_enhanced(ub_osc, lb_osc, enhanced_config, dseed(rng));
                 float chi2_osc_enhanced = fitter_osc_enhanced.Fit(*metric, fitter.best_fit);
-
+                
                 if(chi2_osc_enhanced < chi2_osc) {
                     log<LOG_INFO>(L"%1% || Enhanced search improved chi2_osc from %2% to %3%") 
                         % __func__ % chi2_osc % chi2_osc_enhanced;

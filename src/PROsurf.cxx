@@ -149,7 +149,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
     // Make a local copy for this thread
     PROmetric *local_metric = metric.Clone();
     int nparams = local_metric->GetModel().nparams + systs->GetNSplines();
-    int nstep = 24;
+    int nstep = 20;
 
     Eigen::VectorXf ub, lb, tub, tlb;
 
@@ -217,8 +217,8 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //if its physics, grab seed points, need to include those
             std::vector<float> seed_values(seed_points.size());
             std::transform(seed_points.begin(), seed_points.end(), seed_values.begin(), [which_spline](const auto& vec) { return vec[which_spline]; });
-            test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep*0.7, 3 );
-            log<LOG_INFO>(L"%1% || PROfileing over physics parameter number %2% has %3% uniform points, and %4% local ones for a total of %5% points. ") % __func__ %  which_spline % int(nstep*0.5) %int(3*seed_values.size()) % test_values.size();
+            test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep*0.5, 2);
+            log<LOG_INFO>(L"%1% || PROfileing over physics parameter number %2% has %3% uniform points, and %4% local ones for a total of %5% points. ") % __func__ %  which_spline % int(nstep*0.5) %int((2*2+1)*seed_values.size()) % test_values.size();
            }
 
             //log<LOG_INFO>(L"%1% || PLONK which_spline %2% has testpt order %3% ") % __func__ %  which_spline % test_values;
@@ -227,8 +227,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             int cnt=0;
             Eigen::VectorXf cv_best_fit;
             float last_val = 0;
-            for(auto &v: test_values){
-                float which_value = v;    
+            for(auto &which_value: test_values){
                 float fx;
                 output.knob_vals.push_back(which_value);
 
@@ -307,7 +306,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 ub(x_idx) = multi_physics_params[i].grid_val[1];
                 lb(y_idx) = multi_physics_params[i].grid_val[0];
                 ub(y_idx) = multi_physics_params[i].grid_val[0];
-
+                local_metric->setBounds(lb,ub);
 
                 PROfitter fitter(ub, lb, fitconfig, seed+i);
                 if(i!=start){

@@ -186,8 +186,10 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     //first fix freq and whaver is supposed to be fixed  
                     Eigen::VectorXf tmp_lb = lb;
                     Eigen::VectorXf tmp_ub = ub;
-                    tmp_lb(0) = x(0);
-                    tmp_ub(0) = x(0);
+                    if(lb(0)!=ub(0)){//already fixed the mass
+                        tmp_lb(0) = x(0);
+                        tmp_ub(0) = x(0);
+                    }
                     metric.setBounds(tmp_lb,tmp_ub);
                     try{niter = solver.minimize(metric, x, fx, tmp_lb, tmp_ub);
                     }catch (const std::runtime_error &except) {}
@@ -196,6 +198,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                         best_fit = x;
                         chimin = fx;
                     }
+                    metric.freeParams();
 
                     //now release and fit with past bf from fixed above as seed
                     metric.setBounds(lb,ub);
