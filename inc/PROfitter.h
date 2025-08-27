@@ -14,15 +14,12 @@ namespace PROfit {
         size_t n_max_local_retries = 3;
         size_t MCMCiter = 20'000;
         size_t MCMCburn = 25'000;
+        param.min_step = std::numeric_limits<float>::epsilon();
 
         PROfitterConfig(){};
         PROfitterConfig(std::string fit_preset, bool isScan) : PROfitterConfig(std::map<std::string, float>{}, fit_preset, isScan){};
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){
 
-            // CRITICAL FOR FLOAT:
-                     param.min_step = std::numeric_limits<float>::epsilon();         // Was 1e-20, too small for float!
-                     //param.max_step = 1e10;          // Was 1e20, reasonable reduction
-                 
 
             if(!isScan){
                 //Global Big presets
@@ -32,16 +29,16 @@ namespace PROfit {
                     n_swarm_particles = 5;
                     n_swarm_iterations = 100;
                     n_localfit=20;
-                    n_max_local_retries = 1;
+                    n_max_local_retries = 1; //Until we have better logic, retrying is not helpful/wasteful
                     
-                    param.epsilon = 1e-5;           // OK for float
-                    param.epsilon_rel = 1e-5;           // OK for float
-                    param.wolfe = 0.9;              // Keep
-                    param.ftol = 1e-4;              // Was 1e-8, too strict for float
-                    param.max_iterations = 0;  // Keep
-                    param.max_linesearch = 20;      // Reduce from 40
+                    param.epsilon = 1e-5;          
+                    param.epsilon_rel = 1e-5;     
+                    param.wolfe = 0.9;              
+                    param.ftol = 1e-4;              
+                    param.max_iterations = 0;  //never need to worry about this
+                    param.max_linesearch = 20;    
                     param.max_submin = 20;
-                    param.delta = 1e-10;             // OK for float
+                    param.delta = 1e-10;             
 
                                    
                 }else if (fit_preset == "fast"){
@@ -67,17 +64,6 @@ namespace PROfit {
                     param.wolfe = 0.9;
                     param.ftol = 1e-8;
 
-
-
-                    param.epsilon = 1e-4;           // OK for float
-                    param.epsilon_rel = 1e-4;           // OK for float
-                    param.wolfe = 0.95;              // Keep
-                    param.ftol = 1e-5;              // Was 1e-8, too strict for float
-                    param.max_iterations = 100'000;  // Keep
-                    param.max_linesearch = 20;      // Reduce from 40
-                    param.delta = 1e-5;             // OK for float
-
-
                 }else if(fit_preset == "unblind"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 200'000;
@@ -100,16 +86,16 @@ namespace PROfit {
                     n_swarm_particles = 2;
                     n_swarm_iterations = 50;
                     n_localfit=4;
-                    n_max_local_retries = 1;
+                    n_max_local_retries = 1; //until better logic, local retries wastefil
 
-                    param.epsilon = 1e-5;           // OK for float
-                    param.epsilon_rel = 1e-5;           // OK for float
-                    param.wolfe = 0.9;              // Keep
-                    param.ftol = 1e-4;              // Was 1e-8, too strict for float
-                    param.max_iterations = 0;  // Keep
-                    param.max_linesearch = 20;      // Reduce from 40
+                    param.epsilon = 1e-5;           
+                    param.epsilon_rel = 1e-5;        
+                    param.wolfe = 0.9;              
+                    param.ftol = 1e-4;             
+                    param.max_iterations = 0;  
+                    param.max_linesearch = 20;      
                     param.max_submin = 20;
-                    param.delta = 1e-10;             // OK for float
+                    param.delta = 1e-10;             
 
                                      
                 }else if (fit_preset == "fast"){

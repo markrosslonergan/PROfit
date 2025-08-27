@@ -178,7 +178,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         for(size_t s = 0; s < seed_points.size();s++){
             for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
                 try {
-                    
+
                     x = seed_points.at(s);
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
                     log<LOG_INFO>(L"%1% || --On Seed: %2%") % __func__ % x;
@@ -369,9 +369,9 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
     float chi2_drop_param = 0.5;
     float min_dist_minima_param = 0.025;
     std::vector<std::pair<float,float>> minima = findSignificantMinima(chipos, chivalues,  chi2_drop_param, min_dist_minima_param, true);
-   
 
-   //STEP 3, loop over all mimima and do twofold minimzation. 
+
+    //STEP 3, loop over all mimima and do twofold minimzation. 
     //First with DM minima fixed to get BF of pull terms, then fully free to optimize the mass splitting to high precisin
     for(int p=0;p<minima.size();p++){
         log<LOG_INFO>(L"%1% || ##################  ") %__func__;
@@ -432,67 +432,79 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
 }
 
 std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const std::vector<float>& x_values,const std::vector<float>& y_values,     
-        float prominence_threshold ,  float min_spacing_log ,     bool use_log_spacing ){
+        float in_prominence_threshold ,  float in_min_spacing_log ,     bool use_log_spacing ){
+
+
     std::vector<std::pair<float, float>> minima;  
+    float prominence_threshold = in_priminence_threshold;
+    float min_spacing_log = in_min_spacing_log;
+    bool first = true;
 
-    if(x_values.size() != y_values.size() || x_values.size() < 3) {
-        return minima;
-    }
+    while(first || minima.size()>20){
 
-    for(size_t i = 1; i < y_values.size() - 1; ++i) {
-        // Check if local minimum
-        if(y_values[i] >= y_values[i-1] || y_values[i] >= y_values[i+1]) {
-            continue;
+        if(x_values.size() != y_values.size() || x_values.size() < 3) {
+            return minima;
         }
 
-        float left_peak = y_values[i];
-        float right_peak = y_values[i];
-
-        // Search left for peak
-        // Stop if sufficient
-        for(int j = i - 1; j >= 0; --j) {
-            left_peak = std::max(left_peak, y_values[j]);
-            if(y_values[j] > y_values[i] + prominence_threshold * 2) {
-                break;
-            }
-        }
-    //same othr
-        for(size_t j = i + 1; j < y_values.size(); ++j) {
-            right_peak = std::max(right_peak, y_values[j]);
-            if(y_values[j] > y_values[i] + prominence_threshold * 2) {
-                break;
-            }
-        }
-
-        float prominence = std::min(left_peak - y_values[i], right_peak - y_values[i]);
-
-        // Check prominence threshold
-        if(prominence < prominence_threshold) {
-            continue;
-        }
-
-        // Check spacing from last accepted minimum
-        bool too_close = false;
-        if(!minima.empty()) {
-            float spacing;
-            if(use_log_spacing && x_values[i] > 0 && minima.back().first > 0) {
-                spacing = std::abs(std::log10(x_values[i]) - std::log10(minima.back().first));
-            } else {
-                spacing = std::abs(x_values[i] - minima.back().first);
+        for(size_t i = 1; i < y_values.size() - 1; ++i) {
+            // Check if local minimum
+            if(y_values[i] >= y_values[i-1] || y_values[i] >= y_values[i+1]) {
+                continue;
             }
 
-            if(spacing < min_spacing_log) {
-                if(y_values[i] < minima.back().second) {
-                    minima.back() = {x_values[i], y_values[i]};
+            float left_peak = y_values[i];
+            float right_peak = y_values[i];
+
+            // Search left for peak
+            // Stop if sufficient
+            for(int j = i - 1; j >= 0; --j) {
+                left_peak = std::max(left_peak, y_values[j]);
+                if(y_values[j] > y_values[i] + prominence_threshold * 2) {
+                    break;
                 }
-                too_close = true;
+            }
+            //same othr
+            for(size_t j = i + 1; j < y_values.size(); ++j) {
+                right_peak = std::max(right_peak, y_values[j]);
+                if(y_values[j] > y_values[i] + prominence_threshold * 2) {
+                    break;
+                }
+            }
+
+            float prominence = std::min(left_peak - y_values[i], right_peak - y_values[i]);
+
+            // Check prominence threshold
+            if(prominence < prominence_threshold) {
+                continue;
+            }
+
+            // Check spacing from last accepted minimum
+            bool too_close = false;
+            if(!minima.empty()) {
+                float spacing;
+                if(use_log_spacing && x_values[i] > 0 && minima.back().first > 0) {
+                    spacing = std::abs(std::log10(x_values[i]) - std::log10(minima.back().first));
+                } else {
+                    spacing = std::abs(x_values[i] - minima.back().first);
+                }
+
+                if(spacing < min_spacing_log) {
+                    if(y_values[i] < minima.back().second) {
+                        minima.back() = {x_values[i], y_values[i]};
+                    }
+                    too_close = true;
+                }
+            }
+
+            if(!too_close) {
+                minima.push_back({x_values[i], y_values[i]});
             }
         }
 
-        if(!too_close) {
-            minima.push_back({x_values[i], y_values[i]});
-        }
-    }
+        first = false;
+        prominence_threshold = prominence_threshold*0.9;
+        min_spacing_log = min_spacing_log*1.1;
 
+    }
     return minima;
 }
