@@ -3,7 +3,7 @@
 namespace PROfit {
 
 
-    void fc_worker(fc_args args) {
+    void fc_worker(fc_args args, MultiPROgressBar &progress) {
         log<LOG_INFO>(L"%1% || FC for point %2%") % __func__ % args.phy_params;
         std::mt19937 rng{args.seed};
         std::unique_ptr<PROmodel> model = get_model_from_string(args.config.m_model_tag, args.prop);
@@ -111,6 +111,7 @@ namespace PROfit {
                     fitter_osc.best_fit = fitter_osc_enhanced.best_fit;
                 }
 
+
         } // end of cross-checks
         cached_seed_osc = fitter_osc.best_fit;    
 
@@ -124,6 +125,7 @@ namespace PROfit {
                 args.gof_mode ? Eigen::VectorXf() : fitter_osc.best_fit.segment(2, nparams-2) , t
                 });
 
+        progress.increment_bar(args.thread);
         args.dchi2s->push_back( args.gof_mode ? -999 :std::abs(chi2_syst - chi2_osc ));
         delete metric;
     }

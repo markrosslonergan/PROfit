@@ -20,6 +20,7 @@
 #include "PROversion.h"
 #include "PROplot.h"
 #include "PROunblind.h"
+#include "PROgress.h"
 
 #include "CLI11.h"
 #include "LBFGSB.h"
@@ -52,6 +53,7 @@ int main(int argc, char* argv[])
 {
     gStyle->SetOptStat(0);
     CLI::App app{"PROfit: a PROfessional, PROductive fitting and oscillation framework. Together let's minimize PROfit!"}; 
+    std::ios_base::sync_with_stdio(true);
 
     // Define options
     std::string xmlname = "NULL.xml"; 
@@ -1367,18 +1369,30 @@ int main(int argc, char* argv[])
         size_t todo = nuniv/FCthreads;
         size_t addone = FCthreads - nuniv%FCthreads;
         bool gof_mode = false;
+
+        std::vector<std::pair<int, std::string>> fc_PB_configs;
+        for (int i = 0; i < FCthreads; ++i) {
+                fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+        }
+        MultiPROgressBar fc_progress(fc_PB_configs);
+        fc_progress.initialize_display();
+        fc_progress.start_display_thread(); 
+
+
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
             fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent,gof_mode};
 
-            threads.emplace_back([args]() {
-                    PROfit::fc_worker(args);
-                    });
+
+            threads.emplace_back([args, &fc_progress]() {
+                        PROfit::fc_worker(args, std::ref(fc_progress));
+                        });
         }
         for(auto&& t: threads) {
             t.join();
         }
+        fc_progress.finish_all();
 
         {
             TFile fout((final_output_tag+"_FC.root").c_str(), "RECREATE");
@@ -1448,6 +1462,7 @@ int main(int argc, char* argv[])
         //***************************** END *********************************
         return 0;
 
+
         PROmetric *metric_to_use = systs_only_profile ? null_metric : metric;
         size_t nparams = metric_to_use->GetModel().nparams + metric_to_use->GetSysts().GetNSplines();
         size_t nphys = metric_to_use->GetModel().nparams;
@@ -1463,6 +1478,25 @@ int main(int argc, char* argv[])
             ub(i) = metric_to_use->GetSysts().spline_hi[i-nphys];
 
         }
+
+        metric_to_use->setBounds(lb,ub);
+        std::vector<float> testpt = {0.892521 ,-0.777296 ,0.00836786 ,0 ,0.0875757 ,-0.00892325 ,0.00163605 ,-0.0213547 ,0.00921601 ,-0.0911713 ,-0.0714673 ,0.0701771 ,-0.430076 ,0.0174677 ,0.0306589 ,-0.0116137 ,0.00894181 ,0.00129348 ,0.0317049 ,-0.19827 ,0.0316952 ,0.0962528 ,0.119918 ,0.711197 ,-0.0444811 ,-0.0518723 ,0.194666 ,-0.00722691 ,-0.012469};
+        std::vector<float> testpt2 = {0.892546 ,-0.773836 ,0.0144778 ,0 ,-0.00477233 ,0.00159423 ,-0.0161193 ,0.00291533 ,-0.0827541 ,-0.0717692 ,0.0985207 ,-0.442781 ,0.00477041 ,0.043331 ,-0.0161875 ,0.00761176 ,-0.00564924 ,0.0324371 ,-0.18588 ,0.0128695 ,0.0905718 ,0.115421 ,0.724794 ,-0.045252 ,-0.0331828 ,0.201663 ,-0.00848347 ,-0.00998055};
+        log<LOG_INFO>(L"%1% || ########### Size %2% %3%  ############") % __func__ % testpt.size() % testpt2.size() ;
+        log<LOG_INFO>(L"%1% || ########### Size %2% %3%  ############") % __func__ % testpt.size() % testpt2.size() ;
+        Eigen::VectorXf TP1 = Eigen::Map<Eigen::VectorXf>(testpt.data(), testpt.size());
+        Eigen::VectorXf TP2 = Eigen::Map<Eigen::VectorXf>(testpt.data(), testpt.size());
+        Eigen::VectorXf grad = Eigen::VectorXf::Constant(TP1.size(),0); 
+        float ans1 = (*metric_to_use)(TP1,grad);
+        float ans2 = -9;//(*metric_to_use)(TP2,grad);
+        log<LOG_INFO>(L"%1% || ########### Jacob Test Chi %2% My Test Chi %3%  ############") % __func__ % ans1 % ans2;
+        // 1) run with just PROfile
+        // 2) run with normal fitcxonfig param
+        // 3) Gradient h 0.04?
+
+
+        return 0;
+
         metric_to_use->setBounds(lb,ub);
         PROfitter fitter(ub, lb, fitconfig);
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit  ############") % __func__;

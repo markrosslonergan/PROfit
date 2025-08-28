@@ -149,7 +149,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
     // Make a local copy for this thread
     PROmetric *local_metric = metric.Clone();
     int nparams = local_metric->GetModel().nparams + systs->GetNSplines();
-    int nstep = 20;
+    int nstep = 18;
 
     Eigen::VectorXf ub, lb, tub, tlb;
 

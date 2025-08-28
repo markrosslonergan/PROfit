@@ -11,6 +11,7 @@
 #include "PROchi.h"
 #include "PROCNP.h"
 #include "PROpoisson.h"
+#include "PROgress.h"
 
 #include <Eigen/Eigen>
 
@@ -39,7 +40,8 @@ namespace PROfit {
         const bool gof_mode;
     };
 
-    void fc_worker(fc_args args);
+    void fc_worker(fc_args arg, MultiPROgressBar& progressbar);
+
 
 
 }

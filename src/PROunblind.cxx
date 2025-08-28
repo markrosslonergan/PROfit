@@ -156,9 +156,21 @@ namespace PROfit{
         //get it all from feldman FC, modified to gof also        
         size_t nuniv = 100;
         log<LOG_ERROR>(L"%1% || -- Calculating frequentist pvalue using %2% samples   ") % __func__ % nuniv;
+
+
+
+
         size_t FCthreads = nthread > nuniv ? nuniv : nthread;
         Eigen::MatrixXf cv_vec = FillCVSpectrum(config, prop, false).Spec();
         Eigen::MatrixXf L = metric->GetSysts().DecomposeFractionalCovariance(config, cv_vec);
+
+        std::vector<std::pair<int, std::string>> gof_PB_configs;
+        for (int i = 0; i < FCthreads; ++i) {
+                gof_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+        }
+        MultiPROgressBar gof_progress(gof_PB_configs);
+        gof_progress.initialize_display();
+        gof_progress.start_display_thread(); 
 
         std::vector<std::vector<float>> dchi2s;
         dchi2s.reserve(FCthreads);
@@ -174,13 +186,14 @@ namespace PROfit{
             fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric->GetSysts(), "PROCNP", best_fit, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true,gof_mode};
 
 
-            threads.emplace_back([args]() {
-                    PROfit::fc_worker(args);
-                    });
+            threads.emplace_back([args, &gof_progress]() {
+            PROfit::fc_worker(args, std::ref(gof_progress));
+            });
         }
         for(auto&& t: threads) {
             t.join();
         }
+        gof_progress.finish_all();
 
         log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
         {
@@ -470,18 +483,29 @@ namespace PROfit{
         outsFC.reserve(FCthreads);
         std::vector<std::thread> threadsFC;
         gof_mode = false;
+
+        std::vector<std::pair<int, std::string>> fc_PB_configs;
+        for (int i = 0; i < FCthreads; ++i) {
+                fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+        }
+        MultiPROgressBar fc_progress(fc_PB_configs);
+        fc_progress.initialize_display();
+        fc_progress.start_display_thread(); 
+
+
         for(size_t i = 0; i < nthread; i++) {
             dchi2sFC.emplace_back();
             outsFC.emplace_back();
             fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", BKGparams, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true, gof_mode};
 
-            threadsFC.emplace_back([args]() {
-                    PROfit::fc_worker(args);
-                    });
+            threadsFC.emplace_back([args, &fc_progress]() {
+                        PROfit::fc_worker(args, std::ref(fc_progress));
+                        });
         }
         for(auto&& t: threadsFC) {
             t.join();
         }
+        fc_progress.finish_all();
 
         log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
         {
