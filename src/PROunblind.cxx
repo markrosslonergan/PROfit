@@ -34,6 +34,10 @@ namespace PROfit{
         //manually remove any print outs
         GLOBAL_LEVEL=LOG_WARNING;
 
+        std::string root_out = final_output_tag+"_unblinding.root";
+        log<LOG_ERROR>(L"%1% || Saving results to %2%") % __func__ % root_out.c_str();
+        TFile fout(root_out.c_str(), "RECREATE");
+
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         //### 1 Number of Empty Bins in Data
         try{
@@ -197,11 +201,9 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
         {
-            TFile fout((final_output_tag+"_unblind_BF_GOF.root").c_str(), "RECREATE");
-            fout.cd();
             float chi2_osc, chi2_syst, best_dmsq, best_sinsq2t;
             std::map<std::string, float> best_systs_osc, best_systs, syst_throw;
-            TTree tree("tree", "tree");
+            TTree tree("GOFTree", "GOFTree");
             //tree.Branch("chi2_osc", &chi2_osc); 
             tree.Branch("chi2_syst", &chi2_syst); 
             //tree.Branch("best_dmsq", &best_dmsq); 
@@ -305,12 +307,14 @@ namespace PROfit{
         Eigen::MatrixXf spline_corrmat = corrmat.block(metric->GetModel().nparams, metric->GetModel().nparams, nspline, nspline);
         //Eigen::MatrixXf permuted_spline_corrmat = perm * spline_corrmat * perm;
 
+        TGraphAsymmErrors noname_nuisance(permutation.size());
 
         log<LOG_ERROR>(L"%1% || Showing profile minima for nuisance parameters in random order.") % __func__ ;
         size_t above2 = 0, above3 = 0;
         for(size_t i = 0; i < permutation.size(); ++i) {
             size_t idx = permutation[i];
             float val = prof.onesig.GetPointY(idx);
+            noname_nuisance.SetPoint(idx, i+0.5, val);
             if(val >= 2 || val <= -2) above2++;
             if(val >= 3 || val <= -3) above3++;
             if(val >= 3 || val <= -3)
@@ -329,19 +333,33 @@ namespace PROfit{
         getConfirmation("Proceed to show +/- 1 sigma ranges for nuisance parameters?","############################################");
 
         log<LOG_ERROR>(L"%1% || Showing profile 1 sigma ranges for nuisance parameters in random order.") % __func__ ;
+        float minbound = 10, maxbound = -10;
         for(size_t i = 0; i < permutation.size(); ++i) {
             size_t idx = permutation[i];
             float val = prof.onesig.GetPointY(idx);
             float p1 = prof.onesig.GetErrorYhigh(idx);
             float m1 = prof.onesig.GetErrorYlow(idx);
+            if((val-m1) < minbound) minbound = val-m1;
+            if((val+p1) > maxbound) maxbound = val+p1;
+            noname_nuisance.SetPointEYhigh(idx, p1);
+            noname_nuisance.SetPointEYlow(idx, m1);
             log<LOG_ERROR>(L"%1% || Parameter %2% profile 1 sigma range: %3% (-%4%,+%5%) width |%6%|") 
                 % __func__ % i % val % m1 % p1 % fabs(p1-m1);
         }
+
+        TCanvas c;
+        noname_nuisance.SetMaximum(std::max(1.2, maxbound * 1.2));
+        noname_nuisance.SetMinimum(std::min(-1.2, minbound * 1.2));
+        noname_nuisance.SetLineColor(kBlack);
+        noname_nuisance.SetFillColor(kBlue);
+        noname_nuisance.Draw("A*2");
+        c.Print((final_output_tag+"_nonames_nuisance_1sigma.pdf").c_str());
+
+        noname_nuisance.Write("nonames_nuisance_1sigma");
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
         //getConfirmation("Proceed to show correlation matrix for nuisance parameters without names?","############################################");
 
-        TCanvas c;
         // Not working right now
         //TH2D corrhist_perm("crhp", "", nspline, 0, nspline, nspline, 0, nspline);
         //for(size_t i = 0; i < nspline; ++i) {
@@ -359,6 +377,14 @@ namespace PROfit{
         prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, 
                 final_output_tag+"_unblinding_nuisance", true, best_fit, Eigen::VectorXf(), true); 
 
+        TGraphAsymmErrors nuisance_1sig(prof.onesig);
+        for(size_t i = 0; i < metric->GetModel().nparams; ++i) {
+            nuisance_1sig.SetPointY(i, -10);
+            nuisance_1sig.SetPointEYhigh(i, 0);
+            nuisance_1sig.SetPointEYlow(i, 0);
+        }
+        nuisance_1sig.Write("nuisance_1sigma");
+
         TH2D corrhist("crh", "", nspline, 0, nspline, nspline, 0, nspline);
         for(size_t i = 0; i < nspline; ++i) {
             std::string label =
@@ -373,6 +399,8 @@ namespace PROfit{
         corrhist.SetMinimum(-1);
         corrhist.Draw("colz");
         c.Print((final_output_tag + "_unblinding_spline_corr.pdf").c_str());
+
+        corrhist.Write("nuisance_correlation");
 
         std::vector<TH1D> priors, posteriors;
         Eigen::MatrixXf prior_covariance, spline_covariance;
@@ -404,15 +432,20 @@ namespace PROfit{
         //chi2text.SetTextSize(0.035); 
         texts.push_back(chi2text);
 
-        plot_channels((final_output_tag+"_unblinding_hist.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts);
-
         getConfirmation("Proceed to show full BF result?","############################################");
+
+        plot_channels((final_output_tag+"_unblinding_hist.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts);
+        pre_hist.Write("cv_spec");
+        post_hist.Write("bestfit_spec");
+        err_band->Write("prefit_errband");
+        post_err_band->Write("postfit_errband");
 
         ofstream global_fit_out;
         global_fit_out.open(final_output_tag+"_unblinding_global_fit.txt");
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        log<LOG_ERROR>(L"%1% || Saving output to '%2%'") % __func__ % (final_output_tag+"_unblinding_global_fit.txt").c_str();
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         log<LOG_ERROR>(L"%1% || at paramters: ") % __func__;
 
@@ -440,6 +473,11 @@ namespace PROfit{
 
         prof.Plot(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, 
                 final_output_tag+"_unblinding", true, best_fit); 
+        
+        prof.onesig.Write("full_profile_1sigma");
+        for(const auto &g: prof.graphs) {
+            g->Write(g->GetTitle());
+        }
 
         TH2D corrhist_full("crhf", "", nparams, 0, nparams, nparams, 0, nparams);
         for(size_t i = 0; i < nparams; ++i) {
@@ -456,6 +494,8 @@ namespace PROfit{
         corrhist_full.SetMinimum(-1);
         corrhist_full.Draw("colz");
         c.Print((final_output_tag + "_unblinding_corr.pdf").c_str());
+
+        corrhist_full.Write("full_postfit_correlation");
 
         getConfirmation("Proceed to calculate FC pvalue?","############################################");
 
@@ -509,11 +549,9 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || Finished throws. %2%") % __func__ % __LINE__;
         {
-            TFile fout((final_output_tag+"_unblind_BF_FC.root").c_str(), "RECREATE");
-            fout.cd();
             float chi2_osc, chi2_syst, best_dmsq, best_sinsq2t;
             std::map<std::string, float> best_systs_osc, best_systs, syst_throw;
-            TTree tree("tree", "tree");
+            TTree tree("fc_pval_tree", "fc_pval_tree");
             tree.Branch("chi2_osc", &chi2_osc); 
             tree.Branch("chi2_syst", &chi2_syst); 
             tree.Branch("best_dmsq", &best_dmsq); 
@@ -572,7 +610,60 @@ namespace PROfit{
 
         getConfirmation("Proceed to calculate surface?","############################################");
 
-        log<LOG_ERROR>(L"Surface not implemented yet.");
+        // Hard code things for ICARUS numu disappearance unblinding
+        PROsurf surface(*metric, 1, 0, 60, PROsurf::LogAxis, 1e-2, 1, 60, PROsurf::LogAxis, 1e-2, 1e2);
+        surface.FillSurface(scanfitconfig2, final_output_tag+"_surface.txt", myseed, nthread);
+
+        std::vector<float> binedges_x, binedges_y;
+        for(size_t i = 0; i < surface.nbinsx+1; i++)
+            binedges_x.push_back(std::pow(10, surface.edges_x(i)));
+        for(size_t i = 0; i < surface.nbinsy+1; i++)
+            binedges_y.push_back(std::pow(10, surface.edges_y(i)));
+
+        std::string xlabel = metric->GetModel().pretty_param_names[1];
+        std::string ylabel = metric->GetModel().pretty_param_names[0]; 
+        TH2D surf("surf", (";"+xlabel+";"+ylabel).c_str(), surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data());
+
+        for(size_t i = 0; i < surface.nbinsx; i++) {
+            for(size_t j = 0; j < surface.nbinsy; j++) {
+                surf.SetBinContent(i+1, j+1, surface.surface(i, j));
+            }
+        }
+
+        surf.Write("surf");
+        c.SetLogy();
+        c.SetLogx();
+        c.SetLogz();
+        surf.Draw("colz");
+        c.Print((final_output_tag+"_surface.pdf").c_str());
+
+        {
+            float chisq;
+            int xbin, ybin;
+            std::map<std::string, float> best_fit;
+            TTree tree("SurfaceBestFitTree", "SurfaceBestFitTree");
+            tree.Branch("chi2", &chisq); 
+            tree.Branch("xbin", &xbin); 
+            tree.Branch("ybin", &ybin); 
+            tree.Branch("best_fit", &best_fit); 
+
+            for(const auto &res: surface.results) {
+                chisq = res.chi2;
+                xbin = res.binx;
+                ybin = res.biny;
+                // If all fit points fail
+                if(!res.best_fit.size()) { tree.Fill(); continue; }
+                for(size_t i = 0; i < metric->GetModel().nparams; ++i) {
+                    best_fit[metric->GetModel().param_names[i]] = res.best_fit(i);
+                }
+                for(size_t i = 0; i < metric->GetSysts().GetNSplines(); ++i) {
+                    best_fit[metric->GetSysts().spline_names[i]] = res.best_fit(i + metric->GetModel().nparams);
+                }
+                tree.Fill();
+            }
+
+            tree.Write();
+        }
 
         return 0;
     }
