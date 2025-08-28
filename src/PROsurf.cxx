@@ -142,7 +142,7 @@ void PROsurf::FillSurfaceStat(const PROconfig &config, const PROfitterConfig &fi
     delete local_metric;
 }
 
-std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PROfitterConfig &fitconfig, int offset, int stride, float minchi, bool with_osc, const std::vector<Eigen::VectorXf> &seed_points, uint32_t seed) {
+std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PROfitterConfig &fitconfig, int offset, int stride, float minchi, bool with_osc, MultiPROgressBar& progressbar, const std::vector<Eigen::VectorXf> &seed_points, uint32_t seed) {
 
 
     std::vector<profOut> outs;
@@ -261,6 +261,8 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
                 cnt++;
                 last_val = which_value;
+                progressbar.increment_bar(which_spline);
+
             }    //end step loop        
             output.sort();
             outs.push_back(output);
@@ -465,6 +467,25 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
             std::vector<std::future<std::vector<profOut>>> futures; 
 
+            std::vector<std::pair<int, std::string>> prof_PB_configs;
+            for (int i = 0; i < nparams; ++i) {
+                std::string nam;
+                if(i < (long)metric.GetModel().nparams){
+                    nam = metric.GetModel().pretty_param_names[i];
+                    prof_PB_configs.push_back({9+3*seed_points.size(), nam});
+                }else{
+                    long idx =  i - metric.GetModel().nparams ;
+                    std::string bad_name = metric.GetSysts().spline_names[idx];
+                    nam = config.m_mcgen_variation_plotname_map.at(bad_name);
+                    prof_PB_configs.push_back({18, nam});
+                }
+            }
+
+            MultiPROgressBar prof_progress(prof_PB_configs);
+            prof_progress.initialize_display();
+            prof_progress.start_display_thread(); 
+
+
             log<LOG_INFO>(L"%1% || Starting THREADS  : %2% , Loops %3%, Chunks %4%") % __func__ % nThreads % loopSize % chunkSize;
 
             for (int t = 0; t < nThreads; ++t) {
@@ -474,9 +495,9 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 }
                 log<LOG_INFO>(L"%1% || THREAD #%2% runs pts: %3% ") % __func__ % t % strD.c_str();
 
-                futures.emplace_back(std::async(std::launch::async, [&, t]() {
-                            return this->PROfilePointHelper(&systs, fitconfig, t, nThreads, minchi, with_osc, seed_points, proseed.getThreadSeeds()->at(t));
-                            }));
+                futures.emplace_back(std::async(std::launch::async, [&, t, &prof_progress]() {
+                                return this->PROfilePointHelper(&systs, fitconfig, t, nThreads, minchi, with_osc, std::ref(prof_progress), seed_points, proseed.getThreadSeeds()->at(t));
+                                }));
 
             }
 
@@ -489,7 +510,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                     combinedResults.at(offset+i*stride) = result.at(i);
                 ++offset;
             }
-
+            prof_progress.finish_all();
 
             //create all graphs, used directly in first setion
             for(auto & out: combinedResults){

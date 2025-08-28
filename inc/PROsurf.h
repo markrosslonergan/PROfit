@@ -6,6 +6,7 @@
 #include "PROsyst.h"
 #include "PROseed.h"
 #include "PROmetric.h"
+#include "PROgress.h"
 
 #include <Eigen/Eigen>
 
@@ -65,7 +66,7 @@ namespace PROfit {
 
             void Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc = false, const Eigen::VectorXf& init_seed = Eigen::VectorXf(), const Eigen::VectorXf& true_params = Eigen::VectorXf(), bool mask_osc = false) ;
 
-            std::vector<profOut> PROfilePointHelper(const PROsyst *systs, const PROfitterConfig &fitconfig, int offset, int stride, float minchi, bool with_osc, const std::vector<Eigen::VectorXf> &seed_points = {}, uint32_t seed=0);
+            std::vector<profOut> PROfilePointHelper(const PROsyst *systs, const PROfitterConfig &fitconfig, int offset, int stride, float minchi, bool with_osc, MultiPROgressBar& progressbar, const std::vector<Eigen::VectorXf> &seed_points = {}, uint32_t seed=0);
     };
 
     class PROsurf {
