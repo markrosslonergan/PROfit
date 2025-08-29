@@ -524,7 +524,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                         if((out.knob_chis.at(u))<1e-4f){
                             log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit. ") % __func__ ;
                         }else{
-                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Noted for now. ") % __func__ ;
+                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Noted for now, but not updated. Consider rerunning with enhanced parameters. ") % __func__ ;
                         }
                     }
                 }
@@ -758,6 +758,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
 
             for (int i = 0; i < nBins; ++i) {
+                if(mask_osc && i < model.nparams) continue;
                 TMarker* initstar = new TMarker(i+0.5, init_seed[i], 29);
                 initstar->SetMarkerSize(0.6); 
                 initstar->SetMarkerColor(kBlue); 
