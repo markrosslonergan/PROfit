@@ -282,7 +282,7 @@ Eigen::VectorXf PROspec::eigenvector_division(const Eigen::VectorXf& a, const Ei
                 log<LOG_ERROR>(L"Terminating.");
                 exit(EXIT_FAILURE);
             }else{
-                log<LOG_DEBUG>(L"%1% || Both numerator and denominator are zero, setting the ratio to 1.") % __func__;
+                //log<LOG_DEBUG>(L"%1% || Both numerator and denominator are zero, setting the ratio to 1.") % __func__;
                 ratio_spec(i) = 1.0;
             }
         }else

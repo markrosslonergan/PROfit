@@ -12,8 +12,8 @@ namespace PROfit {
         LBFGSpp::LBFGSBParam<float> param;
         int n_multistart = 1500, n_swarm_particles = 1, n_swarm_iterations=1, n_localfit=3;
         size_t n_max_local_retries = 3;
-        size_t MCMCiter = 50'000;
-        size_t MCMCburn = 10'000;
+        size_t MCMCiter = 20'000;
+        size_t MCMCburn = 25'000;
 
         PROfitterConfig(){};
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){

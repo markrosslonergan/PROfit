@@ -2,7 +2,6 @@
 #include "PROlog.h"
 #include "PROmetric.h"
 #include "PROswarm.h"
-
 #include <Eigen/Eigen>
 
 #include <random>

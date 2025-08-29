@@ -5,7 +5,7 @@
 #include <Eigen/Eigen>
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include <map>
 #include <cmath>
 
 // Our include
@@ -126,8 +126,10 @@ namespace PROfit {
             std::vector<std::string> covar_names;
             std::vector<float> spline_lo, spline_hi;
             std::vector<int> spline_binnings;
+            Eigen::VectorXf spline_priors;
+            Eigen::VectorXf spline_centers;
         private:
-            std::unordered_map<std::string, std::pair<size_t, SystType>> syst_map;
+            std::map<std::string, std::pair<size_t, SystType>> syst_map;
             std::vector<Spline> splines;
             [[maybe_unused]] size_t n_splines = 0;
             size_t n_covar = 0;

@@ -135,6 +135,7 @@ namespace PROfit {
 	      myspectrum.Fill(reco_bin, finalw);
 	    }
 	}
+    
 	return myspectrum;
   }
 
@@ -250,14 +251,18 @@ namespace PROfit {
 
         // TODO: We should think about centralizing rng in a thread-safe/thread-aware way
         static std::mt19937 rng{seed};
-        std::normal_distribution<float> d;
+        std::vector<std::normal_distribution<float>> d_spline;
+        for(size_t i = 0; i < insyst.GetNSplines(); ++i)
+            d_spline.emplace_back(insyst.spline_centers(i), insyst.spline_priors(i));
+        std::normal_distribution<float> d_cov;
         std::vector<float> throws;
         //Eigen::VectorXf throwC = Eigen::VectorXf::Constant(inconfig.m_num_bins_total, 0);
         Eigen::VectorXf throwC = Eigen::VectorXf::Constant(nbins_collapsed, 0);
-        for(size_t i = 0; i < insyst.GetNSplines(); i++)
-            throws.push_back(d(rng));
+        for(size_t i = 0; i < insyst.GetNSplines(); i++) {
+            throws.push_back(d_spline[i](rng));
+        }
         for(int i = 0; i < nbins_collapsed; i++)
-            throwC(i) = d(rng);
+            throwC(i) = d_cov(rng);
 
 
         if(other_index < 0) {
@@ -328,7 +333,7 @@ namespace PROfit {
 
         // TODO: We should think about centralizing rng in a thread-safe/thread-aware way
         static std::mt19937 rng{seed};
-        std::normal_distribution<float> d;
+        std::normal_distribution<float> d(insyst.spline_centers(spline), insyst.spline_priors(spline));
         float spline_throw = d(rng);
         int binning = insyst.spline_binnings[spline];
 

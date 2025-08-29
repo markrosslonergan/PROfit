@@ -359,6 +359,8 @@ namespace PROfit{
             std::map<std::string, std::vector<std::string>> m_mcgen_variation_tags;
             std::map<std::string, std::vector<std::string>> m_mcgen_shapeonly_listmap; //a map of shape-only systematic and corresponding subchannels
             std::vector<std::tuple<std::string, std::string, float>> m_mcgen_correlations;
+            std::map<std::string, float> m_mcgen_variation_prior;
+            std::map<std::string, float> m_mcgen_variation_prior_centers;
       
             //FIX skepic
             std::vector<std::string> systematic_name;

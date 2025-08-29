@@ -115,6 +115,15 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
     tinyxml2::XMLElement *pMode, *pDet, *pChan, *pPOT;
 
+    std::vector<std::string> allowed_elements = {"mode", "detector", "channel", "plotpot", "MCFile","WeightMaps","model","variation_list","correlation","varied_spectrum", "ShapeOnlyUncertainty"   };
+    for (tinyxml2::XMLElement* elem = doc.FirstChildElement(); elem; elem = elem->NextSiblingElement()) {
+        std::string name = elem->Name();
+        if (std::find(allowed_elements.begin(), allowed_elements.end(), name) == allowed_elements.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Top Level Element [%2%] in the XML is not expected.") % __func__ % name.c_str()  ;
+                    log<LOG_ERROR>(L"%1% || -- Check spelling: allowed elements are %2%") % __func__ % allowed_elements ;
+                    throw std::invalid_argument(std::string("Top level <element> not allowed : ") + name);
+        }
+    }
 
 
     //max subchannels 100? Can we avoid this
@@ -132,6 +141,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
 
     while(pPOT){
+
+        //check for known attributes
+        const std::vector<std::string> expected_attrs = {"value"};
+        for (const tinyxml2::XMLAttribute* attr = pPOT->FirstAttribute(); attr; attr = attr->Next()) {
+            std::string name = attr->Name();
+            if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <plotpot> element is not expected.") % __func__ % name.c_str()  ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                throw std::invalid_argument(std::string("<plotpot> attribute not allowed : ") + name);
+            }
+        }
+
         const char* inplotpot = pPOT->Attribute("value");
         if(inplotpot){
             m_plot_pot = strtod(inplotpot,&end);
@@ -147,6 +168,20 @@ int PROconfig::LoadFromXML(const std::string &filename){
     }else{
         while(pMode){
             // What modes are we running in (e.g nu, nu bar, horn current=XXvolts....) Can have as many as we want
+
+            const std::vector<std::string> expected_attrs = {"name","plotname","use"};
+            for (const tinyxml2::XMLAttribute* attr = pMode->FirstAttribute(); attr; attr = attr->Next()) {
+                std::string name = attr->Name();
+                if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <mode> element is not expected.") % __func__ % name.c_str()  ;
+                    log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                    throw std::invalid_argument(std::string("<mode> attribute not allowed : ") + name);
+                }
+            }
+
+
+
+
             const char* mode_name= pMode->Attribute("name");
             if(mode_name==NULL){
                 log<LOG_ERROR>(L"%1% || Modes need a name! Please define a name attribute for all modes. @ line %2% in %3% ") % __func__ % __LINE__  % __FILE__;
@@ -185,6 +220,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
         while(pDet){
 
+            const std::vector<std::string> expected_attrs = {"name","plotname","use"};
+            for (const tinyxml2::XMLAttribute* attr = pDet->FirstAttribute(); attr; attr = attr->Next()) {
+                std::string name = attr->Name();
+                if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <detector> element is not expected.") % __func__ % name.c_str()  ;
+                    log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                    throw std::invalid_argument(std::string("<detector> attribute not allowed : ") + name);
+                }
+            }
+
+
+
             const char* detector_name= pDet->Attribute("name");
             if(detector_name==NULL){
                 log<LOG_ERROR>(L"%1% || ERROR: Need all detectors to have a name attribute @ line %2% in %3% ") % __func__ % __LINE__  % __FILE__;
@@ -220,6 +267,17 @@ int PROconfig::LoadFromXML(const std::string &filename){
         log<LOG_ERROR>(L"Terminating.");
         exit(EXIT_FAILURE);
     }else{
+
+        std::vector<std::string> expected_attrs = {"name","plotname","use","unit"};
+        for (const tinyxml2::XMLAttribute* attr = pChan->FirstAttribute(); attr; attr = attr->Next()) {
+            std::string name = attr->Name();
+            if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <channel> element is not expected.") % __func__ % name.c_str()  ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                throw std::invalid_argument(std::string("<channel>attribute not allowed : ") + name);
+            }
+        }
+
 
 
         while(pChan){
@@ -263,6 +321,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
             tinyxml2::XMLElement *pBin = pChan->FirstChildElement("bins");
 
             log<LOG_DEBUG>(L"%1% || This variable has a Reco Binning.   ") % __func__  ;
+
+            expected_attrs = {"min","max","nbins","edges"};
+            for (const tinyxml2::XMLAttribute* attr = pBin->FirstAttribute(); attr; attr = attr->Next()) {
+                std::string name = attr->Name();
+                if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <channel/bins> element is not expected.") % __func__ % name.c_str()  ;
+                    log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                    throw std::invalid_argument(std::string("<channel/bins> attribute not allowed : ") + name);
+                }
+            }
+
+
             const char* rmin = pBin->Attribute("min");
             const char* rmax = pBin->Attribute("max");
             const char* rnbins = pBin->Attribute("nbins");
@@ -333,6 +403,17 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
             tinyxml2::XMLElement *pBinT = pChan->FirstChildElement("truebins");
             if(pBinT){
+
+                expected_attrs = {"min","max","nbins","edges"};
+                for (const tinyxml2::XMLAttribute* attr = pBinT->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <channel/truebins> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<channel/truebins> attribute not allowed : ") + name);
+                    }
+                }
+
                 const char* tmin = pBinT->Attribute("min");
                 const char* tmax = pBinT->Attribute("max");
                 const char* tnbins = pBinT->Attribute("nbins");
@@ -400,6 +481,17 @@ int PROconfig::LoadFromXML(const std::string &filename){
             m_channel_other_bin_widths.push_back({});
             m_channel_other_units.push_back({});
             while(pBinO){
+
+                expected_attrs = {"min","max","nbins","edges","unit"};
+                for (const tinyxml2::XMLAttribute* attr = pBinO->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <channel/otherbins> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<channel/otherbins> attribute not allowed : ") + name);
+                    }
+                }
+
                 const char* omin = pBinO->Attribute("min");
                 const char* omax = pBinO->Attribute("max");
                 const char* onbins = pBinO->Attribute("nbins");
@@ -458,6 +550,16 @@ int PROconfig::LoadFromXML(const std::string &filename){
             m_subchannel_bool.push_back({});
             pSubChan = pChan->FirstChildElement("subchannel");
             while(pSubChan){
+
+                std::vector<std::string> expected_attrs = {"name","plotname","color","use","data"};
+                for (const tinyxml2::XMLAttribute* attr = pSubChan->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <subchannel> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<subchannel> attribute not allowed : ") + name);
+                    }
+                }
 
                 const char* subchannel_name= pSubChan->Attribute("name");
                 if(subchannel_name==NULL){
@@ -529,6 +631,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
     if(pMC){//Skip if not in XML
         while(pMC)
         {
+
+
+            std::vector<std::string> expected_attrs = {"treename","filename","maxevents","scale","pot","fake"};
+            for (const tinyxml2::XMLAttribute* attr = pMC->FirstAttribute(); attr; attr = attr->Next()) {
+                std::string name = attr->Name();
+                if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <MCFile> element is not expected.") % __func__ % name.c_str()  ;
+                    log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                    throw std::invalid_argument(std::string("<MCfile> attribute not allowed : ") + name);
+                }
+            }
+
             const char* tree = pMC->Attribute("treename");
             if(tree==NULL){
                 log<LOG_ERROR>(L"%1% || ERROR: You must have an associated root TTree name for all MonteCarloFile tags.. eg. treename='events' @ line %2% in %3% ") % __func__ % __LINE__  % __FILE__;
@@ -587,6 +701,16 @@ int PROconfig::LoadFromXML(const std::string &filename){
             pFriend = pMC->FirstChildElement("friend");
             while(pFriend){
 
+                expected_attrs = {"filename","treename"};
+                for (const tinyxml2::XMLAttribute* attr = pFriend->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <MCFile/friend> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<MCfile/friend> attribute not allowed : ") + name);
+                    }
+                }
+
 
                 std::string ffname;
                 const char* friend_filename = pFriend->Attribute("filename");
@@ -608,6 +732,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
             pBranch = pMC->FirstChildElement("branch");
 
 
+
             std::vector<bool> TEMP_additional_weight_bool;
             std::vector<std::string> TEMP_additional_weight_name;
             std::vector<std::string> TEMP_eventweight_branch_names;
@@ -617,6 +742,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
             std::vector<std::shared_ptr<BranchVariable>> TEMP_branch_variables;
             while(pBranch){
+
+                expected_attrs = {"name","incl_systematics","associated_subchannel","associated_systematic","central_value","eventweight_branch_name","additional_weight","true_param_name","other_param_names","pdg_name","model_rule","true_L_name","true_param_name","hist_reweight","true_proton_mom_name","true_proton_costh_name"};
+                for (const tinyxml2::XMLAttribute* attr = pBranch->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <MCFile/branch> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<MCfile/branch> attribute not allowed : ") + name);
+                    }
+                }
+
+
 
                 const char* bnam = pBranch->Attribute("name");
                 const char* bincsyst = pBranch->Attribute("incl_systematics");
@@ -767,14 +904,33 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 const char *text = pAllowList->GetText();
                 std::string wt = "null";
                 if(text) wt = std::string(text);
+
+                //check for known attributes
+                const std::vector<std::string> expected_attrs = {"type", "plotname", "binning", "knobvals", "tag", "prior", "center"};
+                for (const tinyxml2::XMLAttribute* attr = pAllowList->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <allowlist> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<allowlist> attribute not allowed : ") + name);
+                    }
+                }
+
                 const char *variation_type = pAllowList->Attribute("type");
                 const char *plot_name = pAllowList->Attribute("plotname");
                 const char *binning = pAllowList->Attribute("binning");
                 const char *knobs = pAllowList->Attribute("knobvals");
                 const char *tags = pAllowList->Attribute("tag");
+                const char *prior = pAllowList->Attribute("prior");
+                const char *center = pAllowList->Attribute("center");
+
+
+
                 m_mcgen_variation_type.push_back(variation_type);
                 m_mcgen_variation_type_map[wt] = variation_type;
                 m_mcgen_variation_allowlist.push_back(wt);
+                if(prior) m_mcgen_variation_prior[wt] = std::strtof(prior, NULL);
+                if(center) m_mcgen_variation_prior_centers[wt] = std::strtof(center, NULL);
                 m_mcgen_variation_plotname_map[wt] = plot_name ? plot_name : wt;
                 if(!binning || strcmp(binning, "reco") == 0) {
                     m_mcgen_variation_binning_map[wt] = -1;
@@ -874,6 +1030,17 @@ int PROconfig::LoadFromXML(const std::string &filename){
             while(pVariation){
 
 
+                //check for known attributes
+                const std::vector<std::string> expected_attrs = {"pattern", "weight_formula", "use", "mode"};
+                for (const tinyxml2::XMLAttribute* attr = pVariation->FirstAttribute(); attr; attr = attr->Next()) {
+                    std::string name = attr->Name();
+                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <variation> element is not expected.") % __func__ % name.c_str()  ;
+                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                        throw std::invalid_argument(std::string("<variation> attribute not allowed : ") + name);
+                    }
+                }
+
                 const char* w_pattern = pVariation->Attribute("pattern");
                 const char* w_formula = pVariation->Attribute("weight_formula");
                 const char* w_use = pVariation->Attribute("use");
@@ -930,6 +1097,16 @@ int PROconfig::LoadFromXML(const std::string &filename){
     while(pShapeOnlyMap){
 
         log<LOG_WARNING>(L"%1% || Warning!  Setting up for shape-only covariance matrix generation. MAKE SURE this is what you want if you're generating covariance matrix!!!") % __func__;
+
+        const std::vector<std::string> expected_attrs = {"name", "use"};
+        for (const tinyxml2::XMLAttribute* attr = pShapeOnlyMap->FirstAttribute(); attr; attr = attr->Next()) {
+            std::string name = attr->Name();
+            if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <shapeonlymap> element is not expected.") % __func__ % name.c_str()  ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                throw std::invalid_argument(std::string("<shapeonlymap> attribute not allowed : ") + name);
+            }
+        }
 
         std::string pshapeonly_systematic_name = std::string(pShapeOnlyMap->Attribute("name"));
         const char* pshapeonly_systematic_use = pShapeOnlyMap->Attribute("use");
@@ -1000,6 +1177,16 @@ int PROconfig::LoadFromXML(const std::string &filename){
     if(pModel){
         // Read in how many bins this channel uses
 
+        const std::vector<std::string> expected_attrs = {"tag","name","index"};
+        for (const tinyxml2::XMLAttribute* attr = pModel->FirstAttribute(); attr; attr = attr->Next()) {
+            std::string name = attr->Name();
+            if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+                log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <variation> element is not expected.") % __func__ % name.c_str()  ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+                throw std::invalid_argument(std::string("<variation> attribute not allowed : ") + name);
+            }
+        }
+
         const char* model_tag= pModel->Attribute("tag");
         if(model_tag==NULL){
             m_model_tag = "null";
@@ -1051,6 +1238,8 @@ int PROconfig::LoadFromXML(const std::string &filename){
         else if(m_mcgen_variation_type[i] == "norm"){
             m_num_variation_type_norm+=1;
         }else if(m_mcgen_variation_type[i] == "mcstat"){
+            m_mcgen_variation_allowlist[i] = "mcstat";
+            m_mcgen_variation_type_map["mcstat"] = "mcstat";
             m_use_mcstats = true;
         }
 

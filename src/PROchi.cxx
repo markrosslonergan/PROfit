@@ -8,7 +8,7 @@
 using namespace PROfit;
 
 
-PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat, std::vector<float> physics_param_fixed) : PROmetric(), model_tag(tag), config(conin), peller(pin), syst(systin), model(modelin), data(datain), strat(strat), physics_param_fixed(physics_param_fixed), correlated_systematics(false) {
+PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat, bool shape_only, std::vector<float> physics_param_fixed) : PROmetric(), model_tag(tag), config(conin), peller(pin), syst(systin), model(modelin), data(datain), strat(strat), shape_only(shape_only), physics_param_fixed(physics_param_fixed), correlated_systematics(false) {
     last_value = 0.0; last_param = Eigen::VectorXf::Zero(model.nparams+syst->GetNSplines()); 
     fixed_index = -999;
 
@@ -36,6 +36,7 @@ PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &p
           prior_covariance(iA, iB) = std::get<2>(t);
           prior_covariance(iB, iA) = std::get<2>(t);
         }
+        prior_covariance = systin->spline_priors.asDiagonal() * prior_covariance * systin->spline_priors.asDiagonal();
     }
     
     collapsed_stat_covariance = data.Spec().array().matrix().asDiagonal();
@@ -43,10 +44,13 @@ PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &p
 
 float PROchi::Pull(const Eigen::VectorXf &systs) {
     // No correlations: sum of squares
-    if (!correlated_systematics) return systs.array().square().sum();
+    Eigen::VectorXf centered = systs - syst->spline_centers;
+    if (!correlated_systematics) {
+        return (centered.array().square() / syst->spline_priors.array().square()).sum();
+    }
 
     // Otherwise dot onto covariance
-    return systs.dot(prior_covariance.inverse() * systs);
+    return centered.dot(prior_covariance.inverse() * centered);
 }
 
 void PROchi::fixSpline(int fix, float valin){
@@ -57,7 +61,6 @@ void PROchi::fixSpline(int fix, float valin){
 float PROchi::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient){
     return PROchi::operator()(param, gradient, true);
 }
-
 
 float PROchi::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
     size_t nparams = model.nparams+syst->GetNSplines();
@@ -75,9 +78,11 @@ float PROchi::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
     Eigen::MatrixXf full_covariance = diag*(syst->fractional_covariance)*diag;
     
     Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance); 
+    if(shape_only)
+        collapsed_stat_covariance = ( data.Normalize(config,result)).matrix().asDiagonal();
     inverted_collapsed_full_covariance = (collapsed_stat_covariance+ collapsed_full_covariance).inverse();
 
-    Eigen::VectorXf delta  = CollapseMatrix(config,result.Spec()) - data.Spec();
+    Eigen::VectorXf delta  = CollapseMatrix(config,result.Spec()) - (shape_only ? data.Normalize(config,result) : data.Spec());
     float pull = Pull(subvector2);
     float covar_portion = (delta.transpose())*inverted_collapsed_full_covariance*(delta);
     float value = covar_portion + pull;
@@ -103,10 +108,12 @@ float PROchi::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient
             Eigen::MatrixXf full_covariance = diag*(syst->fractional_covariance)*diag;
             
             Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance); 
+            if(shape_only)
+                collapsed_stat_covariance = (data.Normalize(config,result)).matrix().asDiagonal();
             inverted_collapsed_full_covariance = (collapsed_stat_covariance+ collapsed_full_covariance).inverse();
            
             // Calculate Chi^2  value
-            Eigen::VectorXf delta  = CollapseMatrix(config,result.Spec()) - data.Spec(); 
+            Eigen::VectorXf delta  = CollapseMatrix(config,result.Spec()) - (shape_only ? data.Normalize(config,result) : data.Spec());
 
             float pull = Pull(subvector2);
             float dmsq_penalty = 0;
@@ -138,6 +145,9 @@ float PROchi::getSingleChannelChi(size_t global_channel_index) {
 
     log<LOG_DEBUG>(L"%1% || channel index (glob: %2%, local: %3% ) nbin %4% and startBin %5% ") % __func__ % global_channel_index % config.GetLocalChannelIndex(global_channel_index) % nbin % startBin;
 
+    if(shape_only)
+        collapsed_stat_covariance = (data.Normalize(config,cv)).matrix().asDiagonal();
+
     Eigen::MatrixXf inverted_collapsed_full_covariance(nbin,nbin);
     //only calculate a syst covariance if we have any covariance parameters as defined in the xml
     if(syst->GetNCovar()){
@@ -157,7 +167,7 @@ float PROchi::getSingleChannelChi(size_t global_channel_index) {
         inverted_collapsed_full_covariance = (sub_collapsed_stat_covariance).inverse();
     }
 
-    Eigen::VectorXf delta  = (CollapseMatrix(config, cv.Spec()) - data.Spec()).segment(startBin,nbin);
+    Eigen::VectorXf delta  = CollapseMatrix(config, cv.Spec()) - (shape_only ? data.Normalize(config,cv) : data.Spec()).segment(startBin, nbin);
     //float pull = Pull(subvector2);
     float covar_portion = (delta.transpose())*inverted_collapsed_full_covariance*(delta);
     float value = covar_portion;//pull;

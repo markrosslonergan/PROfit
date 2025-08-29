@@ -17,10 +17,6 @@ namespace PROfit {
             log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
             if(syst.mode == "spline" || syst.mode == "norm") {
                 FillSpline(syst);
-                spline_names.push_back(syst.systname); 
-                spline_lo.push_back(syst.knobval[0]);
-                spline_hi.push_back(syst.knobval.back());
-                spline_binnings.push_back(syst.binning);
                 ++n_splines;
             } else if(syst.mode == "covariance") {
                 this->CreateMatrix(syst);
@@ -32,6 +28,24 @@ namespace PROfit {
                 ++n_covar;
             }
         }
+
+        spline_priors = Eigen::VectorXf::Constant(n_splines, 1);
+        spline_centers = Eigen::VectorXf::Constant(n_splines, 0);
+        for(const auto &[name, prior]: config.m_mcgen_variation_prior) {
+            auto it = std::find(spline_names.begin(), spline_names.end(), name);
+            if(it != std::end(spline_names)) {
+                size_t idx = std::distance(std::begin(spline_names), it);
+                spline_priors(idx) = prior;
+            }
+        }
+        for(const auto &[name, center]: config.m_mcgen_variation_prior_centers) {
+            auto it = std::find(spline_names.begin(), spline_names.end(), name);
+            if(it != std::end(spline_names)) {
+                size_t idx = std::distance(std::begin(spline_names), it);
+                spline_centers(idx) = center;
+            }
+        }
+
         
         if(config.m_use_mcstats){
             Eigen::MatrixXf fractional_mcstat_cov = other_index < 0 ? prop.mcStatErr.array().square().inverse().matrix().asDiagonal()
@@ -56,6 +70,8 @@ namespace PROfit {
     PROsyst PROsyst::subset(const std::vector<std::string> &systs) const {
         PROsyst ret;
         log<LOG_DEBUG>(L"%1% | Creating a subset with a list of %2% systematics.") % __func__ % systs.size();
+        Eigen::VectorXf tmp_priors = spline_priors;
+        Eigen::VectorXf tmp_centers = spline_centers;
         for(const std::string &name: systs) {
             log<LOG_DEBUG>(L"%1% | Looking up systematic %2% from subset list.") % __func__ % name.c_str();
             const auto &[idx, stype] = syst_map.at(name);
@@ -67,6 +83,8 @@ namespace PROfit {
                     ret.spline_hi.push_back(spline_hi[idx]);
                     ret.spline_lo.push_back(spline_lo[idx]);
                     ret.spline_binnings.push_back(spline_binnings[idx]);
+                    tmp_priors(ret.n_splines) = spline_priors(idx);
+                    tmp_centers(ret.n_splines) = spline_centers(idx);
                     ++ret.n_splines;
                     break;
                 case SystType::Covariance:
@@ -81,6 +99,8 @@ namespace PROfit {
                     break;
             }
         }
+        ret.spline_priors = tmp_priors.segment(0, ret.n_splines);
+        ret.spline_centers = tmp_centers.segment(0, ret.n_splines);
         ret.fractional_covariance = ret.covmat.size() ? ret.SumMatrices()
             : Eigen::MatrixXf::Constant(fractional_covariance.rows(), fractional_covariance.cols(), 0.0f);
         ret.other_index = other_index;
@@ -89,6 +109,8 @@ namespace PROfit {
 
     PROsyst PROsyst::excluding(const std::vector<std::string> &systs) const {
         PROsyst ret;
+        Eigen::VectorXf tmp_priors = spline_priors;
+        Eigen::VectorXf tmp_centers = spline_centers;
         for(const auto &[name, spair]: syst_map) {
             if(std::find(systs.begin(), systs.end(), name) != systs.end()) continue;
             const auto &[idx, stype] = spair;
@@ -100,6 +122,8 @@ namespace PROfit {
                     ret.spline_hi.push_back(spline_hi[idx]);
                     ret.spline_lo.push_back(spline_lo[idx]);
                     ret.spline_binnings.push_back(spline_binnings[idx]);
+                    tmp_priors(ret.n_splines) = spline_priors(idx);
+                    tmp_centers(ret.n_splines) = spline_centers(idx);
                     ++ret.n_splines;
                     break;
                 case SystType::Covariance:
@@ -114,6 +138,8 @@ namespace PROfit {
                     break;
             }
         }
+        ret.spline_priors = tmp_priors.segment(0, ret.n_splines);
+        ret.spline_centers = tmp_centers.segment(0, ret.n_splines);
         ret.fractional_covariance = ret.covmat.size() ? ret.SumMatrices()
             : Eigen::MatrixXf::Constant(fractional_covariance.rows(), fractional_covariance.cols(), 0.0f);
         ret.other_index = other_index;
@@ -123,6 +149,7 @@ namespace PROfit {
     PROsyst PROsyst::allsplines2cov(const PROconfig &config, const PROpeller &prop, uint32_t seed) const {
         PROsyst ret;
         for(const auto &[name, spair]: syst_map) {
+
             const auto &[idx, stype] = spair;
             switch(stype) {
                 case SystType::Spline: {
@@ -455,6 +482,7 @@ namespace PROfit {
         ratios.reserve(syst.p_multi_spec.size());
         float cv_integral = syst.p_cv->Spec().sum() ;
 
+        std::vector<float> knobvals;
         bool found0 = false;
         for(size_t i = 0; i < syst.p_multi_spec.size(); ++i) {
             //log<LOG_ERROR>(L"%1% || p_multi_spec, knobval, i, cv (%2%): %3%") % __func__ % tolerance % val;
@@ -462,28 +490,33 @@ namespace PROfit {
 
             if(syst.knobval[i] > 0 && !found0) {
                 ratios.push_back(*syst.p_cv / *syst.p_cv);
+                knobvals.push_back(0);
                 found0 = true;
             }
             if(syst.knobval[i] == 0) found0 = true;
 
             float mod = shape_only ?  cv_integral/syst.p_multi_spec[i]->Spec().sum() : 1.0 ;
             ratios.push_back( ((*syst.p_multi_spec[i])*mod) / *syst.p_cv);
+            knobvals.push_back(syst.knobval[i]);
         }
-        if(!found0) ratios.push_back(*syst.p_cv / *syst.p_cv);
+        if(!found0) {
+            ratios.push_back(*syst.p_cv / *syst.p_cv);
+            knobvals.push_back(0);
+        }
         Spline spline_coeffs;
         spline_coeffs.reserve(syst.p_cv->GetNbins());
         for(size_t i = 0; i < syst.p_cv->GetNbins(); ++i) {
             std::vector<std::pair<float, std::array<float, 4>>> spline;
-            spline.reserve(syst.knobval.size());
+            spline.reserve(knobvals.size());
 
             // If only 2 points do a linear fit
             if(ratios.size() < 3) {
                 const float y1 = ratios[0].GetBinContent(i);
                 const float y2 = ratios[1].GetBinContent(i);
-                const float slope = (y2 - y1)/(syst.knobval[1] - syst.knobval[0]);
+                const float slope = (y2 - y1)/(knobvals[1] - knobvals[0]);
                 // Mirror about 0 for MCMC
-                spline.push_back({(float)(-syst.knobval[1]), {y2, -slope, 0, 0}});
-                spline.push_back({(float)syst.knobval[0], {slope * (float)syst.knobval[0] + y1, slope, 0, 0}});
+                spline.push_back({(float)(-knobvals[1]), {y2, -slope, 0, 0}});
+                spline.push_back({(float)knobvals[0], {slope * (float)knobvals[0] + y1, slope, 0, 0}});
                 spline_coeffs.push_back(spline);
                 continue;
             }
@@ -508,7 +541,7 @@ namespace PROfit {
                 {-2,  2, -1},
                 { 1,  0,  0}};
             const Eigen::Vector3f res = m * v;
-            spline.push_back({(float)syst.knobval[0], {res(2), res(1), res(0), 0}});
+            spline.push_back({(float)knobvals[0], {res(2), res(1), res(0), 0}});
 
             for(unsigned int shiftIdx = 1; shiftIdx < ratios.size()-2; ++shiftIdx){
                 const float y0 = ratios[shiftIdx-1].GetBinContent(i);
@@ -521,9 +554,9 @@ namespace PROfit {
                     { 0,  0,  1,  0},
                     { 1,  0,  0,  0}};
                 const Eigen::Vector4f res = m * v;
-                float knobval = syst.knobval[shiftIdx];
+                float knobval = knobvals[shiftIdx];
                 if(!found0 && knobval >= 0)
-                    knobval = syst.knobval[shiftIdx] == 1 ? 0 : syst.knobval[shiftIdx - 1];
+                    knobval = knobvals[shiftIdx] == 1 ? 0 : knobvals[shiftIdx - 1];
                 spline.push_back({knobval, {res(3), res(2), res(1), res(0)}});
             }
 
@@ -535,12 +568,16 @@ namespace PROfit {
                 { 0,  0,  1},
                 { 1,  0,  0}};
             const Eigen::Vector3f resp = mp * vp;
-            spline.push_back({(float)syst.knobval[syst.knobval.size() - 2], {resp(2), resp(1), resp(0), 0}});
+            spline.push_back({(float)knobvals[knobvals.size() - 2], {resp(2), resp(1), resp(0), 0}});
 
             spline_coeffs.push_back(spline);
         }
         syst_map[syst.systname] = {splines.size(), SystType::Spline};
         splines.push_back(spline_coeffs);
+        spline_names.push_back(syst.systname); 
+        spline_lo.push_back(knobvals[0]);
+        spline_hi.push_back(knobvals.back());
+        spline_binnings.push_back(syst.binning);
     }
 
     float PROsyst::GetSplineShift(int spline_num, float shift , int bin) const {
@@ -718,12 +755,12 @@ namespace PROfit {
         const auto& U = svd.matrixU();
         const auto& S = svd.singularValues();
 
-        log<LOG_DEBUG>(L"%1% | Singular values: %2% ") % __func__ % svd.singularValues();
+        //log<LOG_DEBUG>(L"%1% | Singular values: %2% ") % __func__ % svd.singularValues();
 
         Eigen::FullPivLU<Eigen::MatrixXf> lu_decomp(coll);
           int rank = lu_decomp.rank();
           int size = coll.rows();
-          log<LOG_DEBUG>(L"%1% | Matrix is Rank %2% and size %3%") % __func__ % rank % size ;
+          //log<LOG_DEBUG>(L"%1% | Matrix is Rank %2% and size %3%") % __func__ % rank % size ;
 
         float tol = 1e-8f * S.maxCoeff(); // Some cutoff? is this value impactful on out matricies? need to test
         std::vector<int> keep;

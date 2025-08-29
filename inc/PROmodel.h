@@ -86,7 +86,7 @@ public:
         float sinterm = std::sin(1.27f*dmsq*(le));
         float prob    = 1.0f - (sinsq2thmumu*sinterm*sinterm);
 
-        if(prob<0.0 || prob >1.0){
+        if(prob<0.0 || prob >1.0 ){;//|| std::isnan(prob)){
             log<LOG_ERROR>(L"%1% || Your probability %2% is outside the bounds of math."
                            L"dmsq = %3%, sinsq2thmumu = %4%, L/E = %5%")
                 % __func__ % prob % dmsq % sinsq2thmumu % le;

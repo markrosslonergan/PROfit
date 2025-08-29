@@ -104,7 +104,7 @@ namespace PROfit{
 
     Eigen::MatrixXf CollapseMatrix(const PROconfig &inconfig, const Eigen::MatrixXf& full_matrix){
         Eigen::MatrixXf collapsing_matrix = inconfig.GetCollapsingMatrix();
-        
+
         int num_bin_before_collapse = collapsing_matrix.rows();
         if(full_matrix.rows() != num_bin_before_collapse || full_matrix.cols() != num_bin_before_collapse){
             log<LOG_ERROR>(L"%1% || Matrix dimension doesn't match expected size. Provided matrix: %2% x %3%. Expected matrix size: %4% x %5%") % __func__ % full_matrix.rows() % full_matrix.cols() % num_bin_before_collapse% num_bin_before_collapse;
@@ -130,7 +130,7 @@ namespace PROfit{
 
     Eigen::MatrixXf CollapseMatrix(const PROconfig &inconfig, const Eigen::MatrixXf& full_matrix, int other_index){
         Eigen::MatrixXf collapsing_matrix = inconfig.GetCollapsingMatrix(other_index);
-        
+
         int num_bin_before_collapse = collapsing_matrix.rows();
         if(full_matrix.rows() != num_bin_before_collapse || full_matrix.cols() != num_bin_before_collapse){
             log<LOG_ERROR>(L"%1% || Matrix dimension doesn't match expected size. Provided matrix: %2% x %3%. Expected matrix size: %4% x %5%") % __func__ % full_matrix.rows() % full_matrix.cols() % num_bin_before_collapse% num_bin_before_collapse;
@@ -153,6 +153,50 @@ namespace PROfit{
         Eigen::VectorXf result_vector = collapsing_matrix.transpose() * full_vector;
         return result_vector;
     }
+    
+    Eigen::MatrixXf ComputeSquareRootCovariance(
+            const Eigen::MatrixXf& covariance,
+            bool use_ldlt,  float svd_tol  ) {
+
+        if (use_ldlt) {
+            // --- LDLT decomposition (faster for symmetric matrices) ---
+            Eigen::LDLT<Eigen::MatrixXf> ldlt(covariance);
+            if (ldlt.info() != Eigen::Success) {
+                throw std::runtime_error("LDLT decomposition failed.");
+            }
+
+            // L = P^T * L_p * D^{1/2}
+             Eigen::MatrixXf Lp = ldlt.matrixL();
+             Eigen::VectorXf D_sqrt = ldlt.vectorD().array().sqrt();
+             Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> P(ldlt.transpositionsP());
+             return  P.transpose() * Lp * D_sqrt.asDiagonal();
+        } else {
+
+        Eigen::JacobiSVD<Eigen::MatrixXf> svd(covariance, Eigen::ComputeThinU | Eigen::ComputeThinV);
+        const auto& U = svd.matrixU();
+        const auto& S = svd.singularValues();
+        int size = covariance.rows();
+        Eigen::VectorXf S_sqrt = S.array().sqrt();
+
+        //float tol = 1e-8f * S.maxCoeff(); // Some cutoff? is this value impactful on out matricies? need to test
+        //std::vector<int> keep;
+        //for (int i = 0; i < S.size(); ++i) {
+        //    if (S(i) > tol) keep.push_back(i);
+        //}
+
+        //if (keep.empty()) {
+        //    log<LOG_ERROR>(L"%1% | All singular values are below tolerance, cannot sample. Blarg.") % __func__;
+        //    exit(EXIT_FAILURE);
+        //}
+        //going to keep only the singular values that give meaningful variance
+        //Eigen::MatrixXf fallback_sampler = Eigen::MatrixXf::Zero(covariance.rows(), covariance.cols());
+        //for (size_t i = 0; i < keep.size(); ++i) {
+        //        fallback_sampler.col(i) = U.col(keep[i]) * std::sqrt(S(keep[i]));
+        //}
+            return U*S_sqrt.asDiagonal();
+        }
+    }
+
 
     std::string getIcon(){
 
@@ -209,8 +253,8 @@ namespace PROfit{
          =@@@@:            =@@@@-     +@@@@+.   -*%@@@@@@@@@@%+:       %@@@=      :@@@@.    =%@@@@@@*         
          :===-.            :====.      -====.     .:-=++++=-:.         -===:      .===-.     .-=++=-:         
     )";                                                                                                                                                                                    
-                                                                                                                                                                                    
-                                                                                                                                                                                    
-               return icon;
+
+
+        return icon;
     };
 };

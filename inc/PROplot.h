@@ -15,6 +15,7 @@
 #include "PROtocall.h"
 #include "PROseed.h"
 #include "PROcess.h"
+#include "PROversion.h"
 
 // Root includes
 #include "TAttLine.h"
@@ -25,12 +26,13 @@
 #include "TH2D.h"
 #include "TGraph.h"
 #include "TGraphAsymmErrors.h"
+#include "TGraphErrors.h"
 #include "TCanvas.h"
 #include "TFile.h"
 #include "TRatioPlot.h"
 #include "TPaveText.h"
 #include "TTree.h"
-
+#include "TLine.h"
 namespace PROfit{
 
     enum class PlotOptions {
@@ -67,6 +69,8 @@ namespace PROfit{
     std::map<std::string, std::vector<std::pair<std::unique_ptr<TGraph>,std::unique_ptr<TGraph>>>> getSplineGraphs(const PROsyst &systs, const PROconfig &config);
     std::unique_ptr<TGraphAsymmErrors> getErrorBand(const PROconfig &config, const PROpeller &prop, const PROsyst &syst, bool scale = false, int other_index = -1);
 
+    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename);
+
     template<class T, class P>
     std::unique_ptr<TGraphAsymmErrors> getMCMCErrorBand(Metropolis<T, P> met, size_t burnin, size_t iterations, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, bool scale = false) {
             for(size_t i = 0; i < metric.GetSysts().GetNSplines(); ++i)
@@ -95,9 +99,14 @@ namespace PROfit{
                 Eigen::VectorXf splines = value.segment(nphys, nspline);
                 Eigen::VectorXf diff = splines-splines_bf;
                 post_covar += diff * diff.transpose();
+                bool print_autocorrelation_values = false;
+                if(print_autocorrelation_values){
+                    log<LOG_INFO>(L"%1% || AUTO  %2% : %3%") % __func__ % accepted % value;
+                }
             };
             met.run(burnin, iterations, action);
             post_covar /= accepted;
+            log<LOG_INFO>(L"%1% || Acceptance rate %2%") % __func__ % ((float)accepted / iterations);
 
             //TODO: Only works with 1 mode/detector/channel
             cv = CollapseMatrix(config, cv);
@@ -115,6 +124,7 @@ namespace PROfit{
                 for(size_t j = 0; j < specs.size(); ++j) {
                     binconts[j] = specs[j](i);
                 }
+                if(!binconts.size()) continue;
                 float scale_factor = tmphist.GetBinContent(i+1)/cv(i);
                 if(std::isnan(scale_factor)) scale_factor = 1;
                 std::sort(binconts.begin(), binconts.end());
