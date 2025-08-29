@@ -74,7 +74,7 @@ std::vector<float> combined_sparse_seed(float Amin, float Amax, std::vector<floa
     // Remove duplicates with tolerance and sort
     std::sort(sparse.begin(), sparse.end());
     sparse.erase(std::unique(sparse.begin(), sparse.end(), 
-                [](float a, float b) { return std::abs(a - b) < 0.005f; }), 
+                [](float a, float b) { return std::abs(a - b) < 0.015f; }), 
             sparse.end());
 
     return sparse;
