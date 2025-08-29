@@ -24,6 +24,7 @@
 #include "PROconfig.h"
 #include "PROserial.h"
 #include "PROmetric.h"
+#include "PROgress.h"
 
 namespace PROfit{
 
@@ -67,7 +68,7 @@ namespace PROfit{
                 }//
             }
 
-            void runSwarm(PROmetric &metric,std::mt19937 &gen ) {
+            void runSwarm(PROmetric &metric,std::mt19937 &gen, MultiPROgressBar * pin = NULL) {
                 const float inertia_w_start = 0.9; 
                 const float inertia_w_end = 0.6; 
                 const float cognitive_w = 2.0; 
@@ -84,6 +85,7 @@ namespace PROfit{
 
 
                 for (size_t iter = 0; iter < max_iterations; iter++) {
+                        if(pin!=NULL)pin->increment_bar(1);
                         //update inertia
                         float inertia_w = inertia_w_start - (static_cast<float>(iter) / max_iterations) * (inertia_w_start - inertia_w_end);
 

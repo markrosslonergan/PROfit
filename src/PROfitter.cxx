@@ -87,6 +87,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         Eigen::VectorXf grad = Eigen::VectorXf::Constant(x.size(), 0);
         float fx =  metric(x, grad, false);
         chi2s_multistart.push_back(fx);
+        if(run_progress){progress->increment_bar(0);}
     }
     //Sort so we can take the best N_localfits for further zoning with a PSO
     std::vector<int> best_multistart = sorted_indices(chi2s_multistart);    
@@ -109,8 +110,11 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     log<LOG_INFO>(L"%1% || Will swarm with %2% swarm points chis of %3% ") % __func__ % fitconfig.n_swarm_particles % swarm_string.c_str();
 
     PROswarm PSO(metric, rng, swarm_start_points, lb, ub , fitconfig.n_swarm_iterations);
-    PSO.runSwarm(metric, rng);
-
+    if(run_progress){
+        PSO.runSwarm(metric, rng, progress);
+    }else{
+        PSO.runSwarm(metric, rng);
+    }
     Eigen::VectorXf x;  
 
     float chimin = 9999999;
@@ -122,14 +126,18 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     log<LOG_INFO>(L"%1% || Starting local fit of best swarm point. ") % __func__ ;
 
     for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
+        if(run_progress)progress->increment_bar(2);
+
         try {
             x = PSO.getGlobalBestPosition();
             log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
             try {
                 niter = solver.minimize(metric, x, fx, lb, ub);
-            } catch(const std::runtime_error &e) {
-                std::string error_msg = e.what();
+            } catch(const std::exception &e) {
+                std::string msg = e.what();
+                exception_string_map[msg]++;
+
             }
 
 
@@ -148,7 +156,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             success = true;
             break;
 
-        } catch (const std::runtime_error &except) {
+        } catch (const std::exception &except) {
             log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
             std::string msg = except.what();
             exception_string_map[msg]++;
@@ -175,6 +183,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         fudge = seed_points.size();
         log<LOG_INFO>(L"%1% || Starting local fit of seed point. ") % __func__ ;
 
+        if(run_progress)progress->increment_bar(2);
         for(size_t s = 0; s < seed_points.size();s++){
             for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
                 try {
@@ -192,7 +201,12 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     }
                     metric.setBounds(tmp_lb,tmp_ub);
                     try{niter = solver.minimize(metric, x, fx, tmp_lb, tmp_ub);
-                    }catch (const std::runtime_error &except) {}
+                    }catch (const std::exception &except) {
+                     std::string msg = except.what();
+                        exception_string_map[msg]++;
+
+
+                    }
 
                     if (fx < chimin) {
                         best_fit = x;
@@ -204,7 +218,12 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     metric.setBounds(lb,ub);
                     try{
                         niter=solver.minimize(metric, x, fx, lb, ub);
-                    }catch (const std::runtime_error &except) {}
+                    }catch (const std::exception &except) {
+                     std::string msg = except.what();
+                    exception_string_map[msg]++;
+
+
+                    }
 
                     if (fx < chimin) {
                         best_fit = x;
@@ -220,7 +239,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     success = true;
                     break;
 
-                } catch (const std::runtime_error &except) {
+                } catch (const std::exception &except) {
                     log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
                     metric.freeParams();
                 }
@@ -242,6 +261,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     for(int i=0; i< fitconfig.n_localfit-1-fudge; i++){
         success = false;
 
+        if(run_progress)progress->increment_bar(2);
         //After the best best fit, do you want to do more of the latin ones?
         x = Eigen::Map<Eigen::VectorXf>(latin_samples[best_multistart[i+1]].data(), latin_samples[best_multistart[i+1]].size());
         log<LOG_INFO>(L"%1% || #########################  ") % __func__ ;
@@ -269,7 +289,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 success = true;
                 break;
 
-            } catch (const std::runtime_error &except) {
+            } catch (const std::exception &except) {
                 log<LOG_INFO>(L"%1% || Minimization attempt %2%/%3% failed: %4%") % __func__ % attempt % fitconfig.n_max_local_retries % except.what();
                 std::string msg = except.what();
                 exception_string_map[msg]++;
@@ -355,13 +375,14 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
         float fx = -9;
         try{
             int niter = solver.minimize(metric, local_candidate, fx, temp_lb, temp_ub);
-        } catch (const std::runtime_error &except) {
+        } catch (const std::exception &except) {
             std::string msg = except.what();
             exception_string_map[msg]++;
         }
         chivalues.push_back(fx);
         chipos.push_back(k);
 
+        if(run_progress)progress->increment_bar(3);
         //log<LOG_INFO>(L"%1% || PARG  %2% %3% %4% ") %__func__% k %  local_candidate % fx;
     }
 
@@ -373,6 +394,8 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
 
     //STEP 3, loop over all mimima and do twofold minimzation. 
     //First with DM minima fixed to get BF of pull terms, then fully free to optimize the mass splitting to high precisin
+    
+
     for(int p=0;p<minima.size();p++){
         log<LOG_INFO>(L"%1% || ##################  ") %__func__;
 
@@ -399,7 +422,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
         LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
         try{
             int niter = solver.minimize(metric, test_minima, fx, lb, ub);
-        } catch (const std::runtime_error &except) {
+        } catch (const std::exception &except) {
             std::string msg = except.what();
             exception_string_map[msg]++;
         }
@@ -414,7 +437,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
 
         try{
             int niter = solver.minimize(metric, test_minima, fx, lb, ub);
-        } catch (const std::runtime_error &except) {
+        } catch (const std::exception &except) {
             std::string msg = except.what();
             exception_string_map[msg]++;
         }
@@ -424,6 +447,9 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
 
         freq_seed_points.push_back(test_minima);
         freq_seed_values.push_back(fx);
+        if(run_progress){
+            for(int jj=0;jj<std::ceil(100/minima.size())+1; jj++)progress->increment_bar(4);
+        }
     }
     log<LOG_INFO>(L"%1% || ##################  ") %__func__;
     log<LOG_INFO>(L"%1% || We have calculated %2% frequency seed points and saved for future use! ") %__func__% freq_seed_values.size();

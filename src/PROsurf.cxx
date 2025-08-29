@@ -477,7 +477,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                     long idx =  i - metric.GetModel().nparams ;
                     std::string bad_name = metric.GetSysts().spline_names[idx];
                     nam = config.m_mcgen_variation_plotname_map.at(bad_name);
-                    prof_PB_configs.push_back({18, nam});
+                    prof_PB_configs.push_back({19, nam});
                 }
             }
 
@@ -521,7 +521,11 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 for(size_t u=0; u< out.knob_vals.size(); u++){
                     //if(out.knob_chis.at(u)+chmin<chimin)
                     if(out.knob_chis.at(u)<0){
-                        log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Currently this isn't handled well. ") % __func__ ;
+                        if((out.knob_chis.at(u))<1e-4f){
+                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit. ") % __func__ ;
+                        }else{
+                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Noted for now. ") % __func__ ;
+                        }
                     }
                 }
             }

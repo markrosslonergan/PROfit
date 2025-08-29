@@ -157,13 +157,12 @@ namespace PROfit {
                         refresh_display();
                         needs_refresh = false;
                         }
-                        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(300));
                         }
                         });
             }
 
 
-            // Remove refresh_display() call from here!
             void increment_bar(int bar_index) {
                 if (bar_index >= 0 && bar_index < num_bars) {
                     bars[bar_index].increment();
@@ -177,7 +176,6 @@ namespace PROfit {
                     refresh_thread.join();
                 }
 
-                //refresh_display(); // Final display
                 //std::cerr << "\nAll tasks completed!" << std::endl;
             }
 

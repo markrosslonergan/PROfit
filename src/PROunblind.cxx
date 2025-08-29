@@ -1,6 +1,7 @@
 #include "PROunblind.h"
 #include "PROsurf.h"
 #include "PROplot.h"
+#include "PROlog.h"
 
 #include "TPaveText.h"
 
@@ -9,28 +10,38 @@ namespace PROfit{
     void getConfirmation(std::string first, std::string second){
 
         while (true) {
-             log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % first.c_str();;
-             log<LOG_ERROR>(L"%1% || If you want to proceed please type \"proceed\" or type \"exit\" to quit.") % __func__;
-             std::string input;
-             std::getline(std::cin, input);
-             if (input == "exit") throw std::domain_error(std::string("Manually exited on confirmation command."));
-             if (input == "proceed") {
+            log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % first.c_str();;
+            log<LOG_ERROR>(L"%1% || If you want to proceed please type \"proceed\" or type \"exit\" to quit.") % __func__;
+
+            std::wcout.flush();
+            std::cout.flush();
+            if(LOGGING_TO_FILE && LOG_FILE_STREAM.is_open()) {
+                LOG_FILE_STREAM.flush();
+            }
+
+            std::cin.clear();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));                                   
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::string input;
+            std::getline(std::cin, input);
+            if (input == "exit") throw std::domain_error(std::string("Manually exited on confirmation command."));
+            if (input == "proceed") {
                 log<LOG_ERROR>(L"%1% || Proceeding..you have 3s to ctrl-c this!") % __func__;
                 std::this_thread::sleep_for(std::chrono::seconds(3));                                   
                 break;
-             } else {
+            } else {
                 log<LOG_ERROR>(L"%1% || Thats not one of the two options, try again!") % __func__;
-             }
-       
+            }
+
 
         }
 
-       log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % second.c_str();;
-       return;
+        log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % second.c_str();;
+        return;
     }
 
     int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, PROdata data, size_t nthread, std::string final_output_tag){
-   
+
         //manually remove any print outs
         GLOBAL_LEVEL=LOG_WARNING;
 
@@ -68,11 +79,24 @@ namespace PROfit{
             ub(i) = metric->GetSysts().spline_hi[i-nphys];
         }
 
-        PROfitter fitter(ub, lb, fitconfig2);//,2);
+        PROfitter fitter(ub, lb, fitconfig2);
         metric->setBounds(lb,ub);
         log<LOG_ERROR>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
         log<LOG_ERROR>(L"%1% || ####### (Note LOG level manually set to WARNING only) ######") % __func__; 
         log<LOG_ERROR>(L"%1% || ####### (for unblinding, so this has a LOT less output than usual) ######") % __func__; 
+
+        std::vector<std::pair<int, std::string>> global_PB_configs;
+        global_PB_configs.push_back({fitconfig2.n_multistart, "LatinHyperCube"});
+        global_PB_configs.push_back({fitconfig2.n_swarm_iterations, "ParticleSwarm"});
+        global_PB_configs.push_back({fitconfig2.n_localfit, "BestLBFGSB"});
+        global_PB_configs.push_back({180, "HarmonicScan"});
+        global_PB_configs.push_back({100, "HarmonicLBFGSB"});
+
+        MultiPROgressBar global_progress(global_PB_configs);
+        global_progress.initialize_display();
+        global_progress.start_display_thread(); 
+
+        fitter.setProgressBar(&global_progress);
 
         float chi2 = fitter.Fit(*metric); 
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -88,6 +112,8 @@ namespace PROfit{
                 best_fit = fitter.freq_seed_points.at(i);
             }
         }
+        global_progress.finish_all();
+
 
 
         //### 3 Chi is sennsible? 
@@ -110,7 +136,7 @@ namespace PROfit{
         int boundary= 0;
         for (size_t i = 0; i < best_fit.size(); ++i){
             float v = best_fit(i);
-            
+
             if(std::isinf(lb(i)) || std::isinf(ub(i)))continue;
             float range = std::abs(lb(i)-ub(i));
             float tol = 1e-4;
@@ -124,30 +150,31 @@ namespace PROfit{
 
         //### 6 
         size_t counts = metric->getCallCount();
-       log<LOG_ERROR>(L"%1% || CHECK 6: We had %2% total PROmetric calls during this fit. Make sure thats sensible. [ --INFO-- ]") % __func__ % counts;
+        log<LOG_ERROR>(L"%1% || CHECK 6: We had %2% total PROmetric calls during this fit. Make sure thats sensible. [ --INFO-- ]") % __func__ % counts;
 
-       //#### 7
-       if (fitter.exception_string_map.empty()) {
-               log<LOG_ERROR>(L"%1% || CHECK 7: No exceptions were caught from LBFGSB [ --INFO-- ]") % __func__;
-       } else {
-               log<LOG_ERROR>(L"%1% || CHECK 7: Some exceptions were caught in LBFGSB [ --INFO-- ]") % __func__;
-               for (const auto &[msg, count] : fitter.exception_string_map) {
-                    log<LOG_ERROR>(L"%1% || CHECK 7: -- Exception \"%2%\" occurred %3% time(s)") % __func__ % msg.c_str() % count;
-               }
-       }
+        //#### 7
+        if (fitter.exception_string_map.empty()) {
+            log<LOG_ERROR>(L"%1% || CHECK 7: No exceptions were caught from LBFGSB [ --INFO-- ]") % __func__;
+        } else {
+            log<LOG_ERROR>(L"%1% || CHECK 7: Some exceptions were caught in LBFGSB [ --INFO-- ]") % __func__;
+            for (const auto &[msg, count] : fitter.exception_string_map) {
+                log<LOG_ERROR>(L"%1% || CHECK 7: -- Exception \"%2%\" occurred %3% time(s)") % __func__ % msg.c_str() % count;
+            }
+        }
 
-       log<LOG_ERROR>(L"%1% || CHECK 8: We have %2% harmonic seeds saved [ --INFO-- ]") % __func__ % fitter.freq_seed_points.size();
+        log<LOG_ERROR>(L"%1% || CHECK 8: We have %2% harmonic seeds saved [ --INFO-- ]") % __func__ % fitter.freq_seed_points.size();
+        log<LOG_ERROR>(L"%1% || CHECK 9: PROfit verison is %2%. Make sure is correct. [ --INFO-- ]") % __func__ % ("v"+std::string(PROJECT_VERSION_STR)).c_str();
 
 
-       log<LOG_ERROR>(L"%1% || ################################################") % __func__;
-        getConfirmation("Passed all auto checks, but please review the above info.","Proceed to BF chi value reveal?");
+        log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        getConfirmation("Passed all auto checks, but please review all 9 checks above! Proceed to BF chi value reveal?","Moving to reveal.");
 
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
-        
+
         getConfirmation(std::string("You are using "+std::to_string(nthread)+" threads, make sure this is what you want as this next step could be slow.\nProceed to begin frequentist pval calc?"),"############################################");
 
         //manually remove any print outs
@@ -166,7 +193,7 @@ namespace PROfit{
 
         std::vector<std::pair<int, std::string>> gof_PB_configs;
         for (int i = 0; i < FCthreads; ++i) {
-                gof_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+            gof_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
         }
         MultiPROgressBar gof_progress(gof_PB_configs);
         gof_progress.initialize_display();
@@ -187,8 +214,8 @@ namespace PROfit{
 
 
             threads.emplace_back([args, &gof_progress]() {
-            PROfit::fc_worker(args, std::ref(gof_progress));
-            });
+                    PROfit::fc_worker(args, std::ref(gof_progress));
+                    });
         }
         for(auto&& t: threads) {
             t.join();
@@ -259,15 +286,15 @@ namespace PROfit{
 
         /*
            M
-         for(size_t i = 0; i< nparams; i++){
+           for(size_t i = 0; i< nparams; i++){
 
-            if(i<nphys){
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i);
-            }else{
-                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
-            }
-        }
-        */
+           if(i<nphys){
+           log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+           }else{
+           log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
+           }
+           }
+           */
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
 
@@ -281,7 +308,7 @@ namespace PROfit{
         Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> perm(perm_vec);
 
         PROfile prof(config, metric->GetSysts(), metric->GetModel(), *metric, myseed, scanfitconfig2, final_output_tag, chi2, true, nthread, fitter.freq_seed_points);
-    
+
 
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
         Metropolis mh(simple_target{*metric}, adaptive_proposal(*metric, dseed(PROseed::global_rng)), best_fit, dseed(PROseed::global_rng));
@@ -486,7 +513,7 @@ namespace PROfit{
 
         std::vector<std::pair<int, std::string>> fc_PB_configs;
         for (int i = 0; i < FCthreads; ++i) {
-                fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+            fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
         }
         MultiPROgressBar fc_progress(fc_PB_configs);
         fc_progress.initialize_display();
@@ -499,8 +526,8 @@ namespace PROfit{
             fc_args args{todo + (i >= addone), &dchi2sFC.back(), &outsFC.back(), config, prop, metric->GetSysts(), "PROCNP", BKGparams, L, scanfitconfig2,(*myseed.getThreadSeeds())[i], (int)i, true, gof_mode};
 
             threadsFC.emplace_back([args, &fc_progress]() {
-                        PROfit::fc_worker(args, std::ref(fc_progress));
-                        });
+                    PROfit::fc_worker(args, std::ref(fc_progress));
+                    });
         }
         for(auto&& t: threadsFC) {
             t.join();
@@ -566,7 +593,7 @@ namespace PROfit{
         size_t indexFC =  std::distance(flattened_deltachi2sFC.begin(),itFC);
         size_t count_aboveFC = flattened_deltachi2sFC.size()-indexFC;
         float pvalFC = (float)count_aboveFC/(float)nuniv;
-        
+
         log<LOG_ERROR>(L"%1% || Finished throws. %2% %3% %4%") % __func__ % __LINE__% indexFC % count_aboveFC;
         log<LOG_ERROR>(L"%1% || FC Corrected pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
 

@@ -49,6 +49,10 @@ using namespace PROfit;
 log_level_t GLOBAL_LEVEL = LOG_INFO;
 std::wostream *OSTREAM = &wcout;
 
+std::wofstream LOG_FILE_STREAM;
+bool LOGGING_TO_FILE = false;
+
+
 int main(int argc, char* argv[])
 {
     gStyle->SetOptStat(0);
@@ -177,10 +181,13 @@ int main(int argc, char* argv[])
     //Parse inputs. 
     CLI11_PARSE(app, argc, argv);
 
-    std::wofstream log_out;
+    //std::wofstream log_out;
+    //    log_out.open(log_file);
+    //    OSTREAM = &log_out;
+    //}
+
     if(log_file != "") {
-        log_out.open(log_file);
-        OSTREAM = &log_out;
+        log_impl::EnableFileLogging(log_file);
     }
 
     log<LOG_INFO>(L" %1% ") % getIcon().c_str()  ;
@@ -1371,7 +1378,7 @@ int main(int argc, char* argv[])
         bool gof_mode = false;
 
         std::vector<std::pair<int, std::string>> fc_PB_configs;
-        for (int i = 0; i < FCthreads; ++i) {
+        for (size_t i = 0; i < FCthreads; ++i) {
                 fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
         }
         MultiPROgressBar fc_progress(fc_PB_configs);
@@ -1520,7 +1527,7 @@ int main(int argc, char* argv[])
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+        fitter.calcFreqSeedPoints(*metric_to_use);
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
             float chi_freq = fitter.freq_seed_values.at(i);

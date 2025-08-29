@@ -2,6 +2,7 @@
 #define PROFITTER_H
 
 #include "PROmetric.h"
+#include "PROgress.h"
 
 #include <Eigen/Eigen>
 #include "LBFGSB.h"
@@ -14,6 +15,7 @@ namespace PROfit {
         size_t n_max_local_retries = 3;
         size_t MCMCiter = 20'000;
         size_t MCMCburn = 25'000;
+    
 
         PROfitterConfig(){};
         PROfitterConfig(std::string fit_preset, bool isScan) : PROfitterConfig(std::map<std::string, float>{}, fit_preset, isScan){};
@@ -25,10 +27,10 @@ namespace PROfit {
                 //Global Big presets
                 if(fit_preset == "good"){
                     
-                    n_multistart = 3500;
-                    n_swarm_particles = 10;
-                    n_swarm_iterations = 200;
-                    n_localfit=16;
+                    n_multistart = 5000;
+                    n_swarm_particles = 25;
+                    n_swarm_iterations = 250;
+                    n_localfit=15;
                     n_max_local_retries = 1; //Until we have better logic, retrying is not helpful/wasteful
                     
                     param.epsilon = 1e-5;          
@@ -260,18 +262,26 @@ namespace PROfit {
             LBFGSpp::LBFGSBSolver<float> solver;
             uint32_t seed;
             std::map<std::string,size_t> exception_string_map;
+            MultiPROgressBar * progress;
+            bool run_progress;
 
             std::vector<Eigen::VectorXf> freq_seed_points;
             std::vector<float> freq_seed_values;
 
             PROfitter(const Eigen::VectorXf ub, const Eigen::VectorXf lb, PROfitterConfig fitconfig_ = {}, uint32_t inseed = 0)
-                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed)  {}
+                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed), run_progress(false)  {}
 
             float Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt = Eigen::VectorXf());
             float Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points );
             int calcFreqSeedPoints(PROmetric &metric);
             std::vector<std::pair<float, float>> findSignificantMinima(  const std::vector<float>& x_values,const std::vector<float>& y_values,  
                     float prominence_threshold = 2.0,  float min_spacing_log = 0.05,     bool use_log_spacing = true);
+            
+            void setProgressBar(MultiPROgressBar* pin){
+                    run_progress = true;
+                    progress = pin;
+                    return;
+            }
 
             Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
             float FinalGradientNorm() const {return solver.final_grad_norm();}
