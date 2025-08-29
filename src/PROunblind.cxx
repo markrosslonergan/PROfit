@@ -189,7 +189,7 @@ namespace PROfit{
         //GLOBAL_LEVEL=LOG_INFO;
 
         //get it all from feldman FC, modified to gof also        
-        size_t nuniv = 100;
+        size_t nuniv = 500;
         log<LOG_ERROR>(L"%1% || -- Calculating frequentist pvalue using %2% samples   ") % __func__ % nuniv;
 
 
