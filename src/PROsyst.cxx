@@ -343,7 +343,7 @@ namespace PROfit {
         const PROspec& cv_spec = sys_obj.CV();
         int nbins = cv_spec.GetNbins();
         float cv_integral = cv_spec.Spec().sum(); 
-        log<LOG_INFO>(L"%1% || Generating covariance matrix.. size: %2% x %3%") % __func__ % nbins % nbins;
+        log<LOG_DEBUG>(L"%1% || Generating covariance matrix.. size: %2% x %3%") % __func__ % nbins % nbins;
 
         //build full covariance matrix 
         Eigen::MatrixXf full_covar_matrix = Eigen::MatrixXf::Zero(nbins, nbins);
@@ -427,7 +427,7 @@ namespace PROfit {
 
         //check for nan and infinite
         if(!in_matrix.allFinite()){
-            log<LOG_WARNING>(L"%1% || Matrix has Nan or non-finite values.") % __func__ ;
+            log<LOG_DEBUG>(L"%1% || Matrix has Nan or non-finite values.") % __func__ ;
             return false;
         }
         return true;

@@ -2,6 +2,7 @@
 #define PROFITTER_H
 
 #include "PROmetric.h"
+#include "PROgress.h"
 
 #include <Eigen/Eigen>
 #include "LBFGSB.h"
@@ -14,24 +15,34 @@ namespace PROfit {
         size_t n_max_local_retries = 3;
         size_t MCMCiter = 20'000;
         size_t MCMCburn = 25'000;
+    
 
         PROfitterConfig(){};
+        PROfitterConfig(std::string fit_preset, bool isScan) : PROfitterConfig(std::map<std::string, float>{}, fit_preset, isScan){};
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){
 
+
+            param.min_step = std::numeric_limits<float>::epsilon();
             if(!isScan){
                 //Global Big presets
                 if(fit_preset == "good"){
-                    param.epsilon = 1e-6;
-                    param.max_iterations = 10'000;
-                    param.max_linesearch = 400;
-                    param.delta = 1e-6;
-                    n_multistart = 3000;
-                    n_swarm_particles = 45;
+                    
+                    n_multistart = 5000;
+                    n_swarm_particles = 25;
                     n_swarm_iterations = 250;
-                    n_localfit=3;
-                    n_max_local_retries = 4;
-                    param.wolfe = 0.99;
-                    param.ftol = 1e-8;
+                    n_localfit=15;
+                    n_max_local_retries = 1; //Until we have better logic, retrying is not helpful/wasteful
+                    
+                    param.epsilon = 1e-5;          
+                    param.epsilon_rel = 1e-5;     
+                    param.wolfe = 0.9;              
+                    param.ftol = 1e-4;              
+                    param.max_iterations = 0;  //never need to worry about this
+                    param.max_linesearch = 20;    
+                    param.max_submin = 20;
+                    param.delta = 1e-10;             
+
+                                   
                 }else if (fit_preset == "fast"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 100;
@@ -49,10 +60,23 @@ namespace PROfit {
                     param.delta = 1e-6;
                     n_multistart = 3000;
                     n_swarm_particles = 100;
-                    n_swarm_iterations = 250;
+                    n_swarm_iterations = 450;
                     n_localfit=4;
                     n_max_local_retries = 8;
-                    param.wolfe = 0.99;
+                    param.wolfe = 0.9;
+                    param.ftol = 1e-8;
+
+                }else if(fit_preset == "unblind"){
+                    param.epsilon = 1e-6;
+                    param.max_iterations = 200'000;
+                    param.max_linesearch = 2500;
+                    param.delta = 1e-6;
+                    n_multistart = 10000;
+                    n_swarm_particles = 500;
+                    n_swarm_iterations = 1000;
+                    n_localfit=6;
+                    n_max_local_retries = 12;
+                    param.wolfe = 0.9;
                     param.ftol = 1e-8;
                 }
 
@@ -60,17 +84,22 @@ namespace PROfit {
 
                 // the lesser Scan version
                 if(fit_preset == "good"){
-                    param.epsilon = 1e-6;
-                    param.max_iterations = 10'000;
-                    param.max_linesearch = 250;
-                    param.delta = 1e-6;
-                    n_multistart = 1500;
-                    n_swarm_particles = 5;
-                    n_swarm_iterations = 100;
+                    n_multistart = 1000;
+                    n_swarm_particles = 2;
+                    n_swarm_iterations = 50;
                     n_localfit=2;
-                    n_max_local_retries = 3;
-                    param.wolfe = 0.99;
-                    param.ftol = 1e-8;
+                    n_max_local_retries = 1; //until better logic, local retries wastefil
+
+                    param.epsilon = 1e-5;           
+                    param.epsilon_rel = 1e-5;        
+                    param.wolfe = 0.9;              
+                    param.ftol = 1e-4;             
+                    param.max_iterations = 0;  
+                    param.max_linesearch = 20;      
+                    param.max_submin = 20;
+                    param.delta = 1e-10;             
+
+                                     
                 }else if (fit_preset == "fast"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 100;
@@ -81,7 +110,7 @@ namespace PROfit {
                     n_swarm_iterations = 100;
                     n_localfit=2;
                     n_max_local_retries = 1;
-                }else if(fit_preset == "overkill"){
+                }else if(fit_preset == "overkill"|| fit_preset == "unblind"){
                     param.epsilon = 1e-6;
                     param.max_iterations = 100'000;
                     param.max_linesearch = 500;
@@ -91,7 +120,7 @@ namespace PROfit {
                     n_swarm_iterations = 250;
                     n_localfit=4;
                     n_max_local_retries = 7;
-                    param.wolfe = 0.99;
+                    param.wolfe = 0.9;
                     param.ftol = 1e-8;
                 }
 
@@ -157,6 +186,8 @@ namespace PROfit {
                             % __func__ % value;
                         exit(EXIT_FAILURE);
                     }
+                } else if(param_name == "n_max_local_retries") {
+                    n_max_local_retries = value;
                 }else if(param_name == "n_swarm_particles") {
                     n_swarm_particles = value;
                     if(n_swarm_particles < 1) {
@@ -182,8 +213,9 @@ namespace PROfit {
                         log<LOG_ERROR>(L"%1% || Requested to run MCMC with no iterations.");
                     }
                 } else {
-                    log<LOG_WARNING>(L"%1% || Unrecognized LBFGSB parameter %2%. Will ignore.") 
+                    log<LOG_ERROR>(L"%1% || Unrecognized LBFGSB parameter %2%. CHECK spelling!.") 
                         % __func__ % param_name.c_str();
+                        exit(EXIT_FAILURE);
                 }
             }
             try {
@@ -229,11 +261,27 @@ namespace PROfit {
             PROfitterConfig fitconfig;
             LBFGSpp::LBFGSBSolver<float> solver;
             uint32_t seed;
+            std::map<std::string,size_t> exception_string_map;
+            MultiPROgressBar * progress;
+            bool run_progress;
+
+            std::vector<Eigen::VectorXf> freq_seed_points;
+            std::vector<float> freq_seed_values;
 
             PROfitter(const Eigen::VectorXf ub, const Eigen::VectorXf lb, PROfitterConfig fitconfig_ = {}, uint32_t inseed = 0)
-                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed) {}
+                : ub(ub), lb(lb), fitconfig(fitconfig_), solver(fitconfig.param), seed(inseed), run_progress(false)  {}
 
             float Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt = Eigen::VectorXf());
+            float Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points );
+            int calcFreqSeedPoints(PROmetric &metric);
+            std::vector<std::pair<float, float>> findSignificantMinima(  const std::vector<float>& x_values,const std::vector<float>& y_values,  
+                    float prominence_threshold = 2.0,  float min_spacing_log = 0.05,     bool use_log_spacing = true);
+            
+            void setProgressBar(MultiPROgressBar* pin){
+                    run_progress = true;
+                    progress = pin;
+                    return;
+            }
 
             Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
             float FinalGradientNorm() const {return solver.final_grad_norm();}

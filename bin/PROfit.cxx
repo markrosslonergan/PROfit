@@ -19,6 +19,8 @@
 #include "PROseed.h"
 #include "PROversion.h"
 #include "PROplot.h"
+#include "PROunblind.h"
+#include "PROgress.h"
 
 #include "CLI11.h"
 #include "LBFGSB.h"
@@ -47,10 +49,15 @@ using namespace PROfit;
 log_level_t GLOBAL_LEVEL = LOG_INFO;
 std::wostream *OSTREAM = &wcout;
 
+std::wofstream LOG_FILE_STREAM;
+bool LOGGING_TO_FILE = false;
+
+
 int main(int argc, char* argv[])
 {
     gStyle->SetOptStat(0);
     CLI::App app{"PROfit: a PROfessional, PROductive fitting and oscillation framework. Together let's minimize PROfit!"}; 
+    std::ios_base::sync_with_stdio(true);
 
     // Define options
     std::string xmlname = "NULL.xml"; 
@@ -167,6 +174,9 @@ int main(int argc, char* argv[])
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
     profc_command->add_option("-u,--universes", nuniv, "Number of Feldman Cousins universes to throw")->default_val(1000);
 
+    // Unblinding
+    CLI::App *unblind_command = app.add_subcommand("unblind", "Run unblinding sequence for ICARUS run 2 numu disappearance analysis.");
+
     //PROtest, test things
     CLI::App *protest_command = app.add_subcommand("protest", "Testing ground for rapid quick tests.");
 
@@ -174,16 +184,17 @@ int main(int argc, char* argv[])
     //Parse inputs. 
     CLI11_PARSE(app, argc, argv);
 
-    std::wofstream log_out;
+    //std::wofstream log_out;
+    //    log_out.open(log_file);
+    //    OSTREAM = &log_out;
+    //}
+
     if(log_file != "") {
-        log_out.open(log_file);
-        OSTREAM = &log_out;
+        log_impl::EnableFileLogging(log_file);
     }
 
     log<LOG_INFO>(L" %1% ") % getIcon().c_str()  ;
     std::string final_output_tag =analysis_tag +"_"+output_tag;
-
-
 
 
     log<LOG_INFO>(L"%1% || ##################################################################") % __func__  ;
@@ -378,7 +389,7 @@ int main(int argc, char* argv[])
         }
 
         if(*profile_command || *surface_command || *protest_command){
-            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot subcommand! ") % __func__  ;
+            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
             return 1;
         }
 
@@ -551,26 +562,26 @@ int main(int argc, char* argv[])
     }
 
     //Covariance colors, move this eslewher
-        const Int_t NCont = 255;
-        const Int_t NRGBs = 9;  // Reduced control points for smoother white stretch
-        Double_t stops[NRGBs] = {
-            0.0,    // -1.0 (dark blue)
-            0.075,    // -0.6 (transition to white)
-            0.3,    // -0.2 (mostly white)
-            0.4,   // -0.04 (almost pure white)
-            0.5,    //  0.0 (pure white)
-            0.6,   // +0.04 (almost pure white)
-            0.7,    // +0.2 (transition to red)
-            0.925,    // +0.6 (strong red)
-            1.0     // +1.0 (dark red)
-        };
+    const Int_t NCont = 255;
+    const Int_t NRGBs = 9;  // Reduced control points for smoother white stretch
+    Double_t stops[NRGBs] = {
+        0.0,    // -1.0 (dark blue)
+        0.075,    // -0.6 (transition to white)
+        0.3,    // -0.2 (mostly white)
+        0.4,   // -0.04 (almost pure white)
+        0.5,    //  0.0 (pure white)
+        0.6,   // +0.04 (almost pure white)
+        0.7,    // +0.2 (transition to red)
+        0.925,    // +0.6 (strong red)
+        1.0     // +1.0 (dark red)
+    };
 
-        Double_t red[NRGBs]   = {0.00,0.259,0.824, 0.949, 1.0, 0.988, 0.980, 0.918,0.839};
-        Double_t green[NRGBs] = {0.341,0.404,0.890, 0.961, 1.0, 0.933, 0.824, 0.263,0.125};
-        Double_t blue[NRGBs]  = {0.906,0.824,0.989, 0.980, 1.0, 0.929, 0.812, 0.208,0.024};
+    Double_t red[NRGBs]   = {0.00,0.259,0.824, 0.949, 1.0, 0.988, 0.980, 0.918,0.839};
+    Double_t green[NRGBs] = {0.341,0.404,0.890, 0.961, 1.0, 0.933, 0.824, 0.263,0.125};
+    Double_t blue[NRGBs]  = {0.906,0.824,0.989, 0.980, 1.0, 0.929, 0.812, 0.208,0.024};
 
-        TColor::CreateGradientColorTable(NRGBs, stops, red, green, blue, NCont);
-        gStyle->SetNumberContours(NCont);
+    TColor::CreateGradientColorTable(NRGBs, stops, red, green, blue, NCont);
+    gStyle->SetNumberContours(NCont);
 
 
     // Need a second one for case where we do syst_only profile and surface in same command
@@ -604,7 +615,7 @@ int main(int argc, char* argv[])
 
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
 
-
+        metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
         global_fit_chi2 = chi2;
         Eigen::VectorXf best_fit = fitter.best_fit;
@@ -626,6 +637,23 @@ int main(int argc, char* argv[])
                 log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
             }
         }
+
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+            if(chi_freq<chi2){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                chi2 = chi_freq;
+                best_fit = fitter.freq_seed_points.at(i);
+            }
+        }
+
+
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
 
         // TODO: Not sure I understand this covariance matrix
@@ -774,7 +802,10 @@ int main(int argc, char* argv[])
         log<LOG_INFO>(L"%1% ||  Beginning full PROfile ") % __func__;
 
         PROfile profile(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed, scanFitConfig, 
-                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, best_fit,
+                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, fitter.freq_seed_points,
+                systs_only_profile ? systparams : allparams);
+        profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
+                final_output_tag+"_PROfile", !systs_only_profile, best_fit,
                 systs_only_profile ? systparams : allparams);
         TFile fout((final_output_tag+"_PROfile.root").c_str(), "RECREATE");
         profile.onesig.Write("one_sigma_errs");
@@ -1054,18 +1085,18 @@ int main(int argc, char* argv[])
             surf84.Write();
             surf98.Write();
             if(brazil_throws.size() != 0) {
-               int i = 0;
-               for(const auto &bbsurf: brazil_band_surfaces) {
-                 TH2D *surf = new TH2D(("brazil_throw_surf_"+std::to_string(i)).c_str(),(";"+xlabel+";"+ylabel).c_str(),surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data())     ;
-                 for(size_t j = 0; j < surface.nbinsx; ++j) {
-                     for(size_t k = 0; k < surface.nbinsy; ++k) {
-                       surf->SetBinContent(j+1,k+1, bbsurf.surface(j,k));
-                     }
-                 }
-                 surf->Write();
-                 ++i;
-               }
-             }
+                int i = 0;
+                for(const auto &bbsurf: brazil_band_surfaces) {
+                    TH2D *surf = new TH2D(("brazil_throw_surf_"+std::to_string(i)).c_str(),(";"+xlabel+";"+ylabel).c_str(),surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data())     ;
+                    for(size_t j = 0; j < surface.nbinsx; ++j) {
+                        for(size_t k = 0; k < surface.nbinsy; ++k) {
+                            surf->SetBinContent(j+1,k+1, bbsurf.surface(j,k));
+                        }
+                    }
+                    surf->Write();
+                    ++i;
+                }
+            }
         }
 
         //***********************************************************************
@@ -1347,18 +1378,31 @@ int main(int argc, char* argv[])
         std::vector<std::thread> threads;
         size_t todo = nuniv/FCthreads;
         size_t addone = FCthreads - nuniv%FCthreads;
+        bool gof_mode = false;
+
+        std::vector<std::pair<int, std::string>> fc_PB_configs;
+        for (size_t i = 0; i < FCthreads; ++i) {
+                fc_PB_configs.push_back({int(nuniv/FCthreads), "Thread " + std::to_string(i)});
+        }
+        MultiPROgressBar fc_progress(fc_PB_configs);
+        fc_progress.initialize_display();
+        fc_progress.start_display_thread(); 
+
+
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent,gof_mode};
 
-            threads.emplace_back([args]() {
-                    PROfit::fc_worker(args);
-                    });
+
+            threads.emplace_back([args, &fc_progress]() {
+                        PROfit::fc_worker(args, std::ref(fc_progress));
+                        });
         }
         for(auto&& t: threads) {
             t.join();
         }
+        fc_progress.finish_all();
 
         {
             TFile fout((final_output_tag+"_FC.root").c_str(), "RECREATE");
@@ -1416,6 +1460,14 @@ int main(int argc, char* argv[])
             % __func__ % nuniv % flattened_dchi2s[0.9*flattened_dchi2s.size()];
     }
 
+    if(*unblind_command) {
+        try {
+            PROunblind_Stage1(config,prop,metric,myseed,data,nthread,final_output_tag);
+        } catch(...) {
+            log<LOG_ERROR>(L"%1% || Exiting unblinding early.") % __func__;
+        }
+    }
+
 
     //***********************************************************************
     //***********************************************************************
@@ -1423,10 +1475,140 @@ int main(int argc, char* argv[])
     //***********************************************************************
     //***********************************************************************
     if(*protest_command){
-        log<LOG_INFO>(L"%1% || PROtest. Place anything here, a playground for testing things .") % __func__;
 
+        PROunblind_Stage1(config,prop,metric,myseed,data,nthread,final_output_tag);
         //***************************** END *********************************
-    }
+        return 0;
+
+
+        PROmetric *metric_to_use = systs_only_profile ? null_metric : metric;
+        size_t nparams = metric_to_use->GetModel().nparams + metric_to_use->GetSysts().GetNSplines();
+        size_t nphys = metric_to_use->GetModel().nparams;
+
+        Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+        Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+        for(size_t i = 0; i < nphys; ++i) {
+            lb(i) = metric_to_use->GetModel().lb(i);
+            ub(i) = metric_to_use->GetModel().ub(i);
+        }
+        for(size_t i = nphys; i < nparams; ++i) {
+            lb(i) = metric_to_use->GetSysts().spline_lo[i-nphys];
+            ub(i) = metric_to_use->GetSysts().spline_hi[i-nphys];
+
+        }
+
+        metric_to_use->setBounds(lb,ub);
+        std::vector<float> testpt = {0.892521 ,-0.777296 ,0.00836786 ,0 ,0.0875757 ,-0.00892325 ,0.00163605 ,-0.0213547 ,0.00921601 ,-0.0911713 ,-0.0714673 ,0.0701771 ,-0.430076 ,0.0174677 ,0.0306589 ,-0.0116137 ,0.00894181 ,0.00129348 ,0.0317049 ,-0.19827 ,0.0316952 ,0.0962528 ,0.119918 ,0.711197 ,-0.0444811 ,-0.0518723 ,0.194666 ,-0.00722691 ,-0.012469};
+        std::vector<float> testpt2 = {0.892546 ,-0.773836 ,0.0144778 ,0 ,-0.00477233 ,0.00159423 ,-0.0161193 ,0.00291533 ,-0.0827541 ,-0.0717692 ,0.0985207 ,-0.442781 ,0.00477041 ,0.043331 ,-0.0161875 ,0.00761176 ,-0.00564924 ,0.0324371 ,-0.18588 ,0.0128695 ,0.0905718 ,0.115421 ,0.724794 ,-0.045252 ,-0.0331828 ,0.201663 ,-0.00848347 ,-0.00998055};
+        log<LOG_INFO>(L"%1% || ########### Size %2% %3%  ############") % __func__ % testpt.size() % testpt2.size() ;
+        log<LOG_INFO>(L"%1% || ########### Size %2% %3%  ############") % __func__ % testpt.size() % testpt2.size() ;
+        Eigen::VectorXf TP1 = Eigen::Map<Eigen::VectorXf>(testpt.data(), testpt.size());
+        Eigen::VectorXf TP2 = Eigen::Map<Eigen::VectorXf>(testpt.data(), testpt.size());
+        Eigen::VectorXf grad = Eigen::VectorXf::Constant(TP1.size(),0); 
+        float ans1 = (*metric_to_use)(TP1,grad);
+        float ans2 = -9;//(*metric_to_use)(TP2,grad);
+        log<LOG_INFO>(L"%1% || ########### Jacob Test Chi %2% My Test Chi %3%  ############") % __func__ % ans1 % ans2;
+        // 1) run with just PROfile
+        // 2) run with normal fitcxonfig param
+        // 3) Gradient h 0.04?
+
+
+        return 0;
+
+        metric_to_use->setBounds(lb,ub);
+        PROfitter fitter(ub, lb, fitconfig);
+        log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit  ############") % __func__;
+        float chi2 = fitter.Fit(*metric_to_use); 
+        Eigen::VectorXf best_fit = fitter.best_fit;
+
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
+        log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
+        for(size_t i = 0; i< nparams; i++){
+
+            if(i<nphys){
+                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetModel().pretty_param_names[i].c_str() % best_fit(i);
+            }else{
+                log<LOG_INFO>(L"%1% || %2%  :  %3% ") % __func__ % metric_to_use->GetSysts().spline_names[i-nphys].c_str() % best_fit(i);
+            }
+        }
+
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        fitter.calcFreqSeedPoints(*metric_to_use);
+
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+            if(chi_freq<chi2){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+            }
+        }
+
+        /*  test some pts for nuisence */
+
+        LBFGSpp::LBFGSBSolver<float> solver(fitconfig.param);
+        for(float val =0; val <=1; val+=0.025){
+            float chimin = 99999;
+            Eigen::VectorXf loc_best_fit;
+            Eigen::VectorXf last_best_fit = best_fit;
+            lb(3)=val;
+            ub(3)=val;
+
+            for(size_t s = 0; s < fitter.freq_seed_points.size()+1;s++){
+                
+                Eigen::VectorXf x;
+                if(s==fitter.freq_seed_points.size()){x = last_best_fit;}else{x= fitter.freq_seed_points.at(s);}
+                log<LOG_INFO>(L"%1% || Starting local Seed %2%") % __func__ % s ;
+                log<LOG_INFO>(L"%1% || --On Seed: %2%") % __func__ % x;
+
+                float fx = -99;
+                //first fix freq and whaver is supposed to be fixed  
+                Eigen::VectorXf tmp_lb = lb;
+                Eigen::VectorXf tmp_ub = ub;
+                tmp_lb(0) = x(0);
+                tmp_ub(0) = x(0);
+                metric_to_use->setBounds(tmp_lb,tmp_ub);
+                try{
+                    solver.minimize(*metric_to_use, x, fx, tmp_lb, tmp_ub);
+                               }catch (const std::runtime_error &except) {
+                }
+
+                log<LOG_WARNING>(L"%1% || -- chi1 %2% at | %3% ") % __func__ % fx % x;
+
+                if (fx < chimin) {
+                    loc_best_fit = x;
+                    chimin = fx;
+                }
+
+                //now release and fit with past input as seed
+                metric_to_use->setBounds(lb,ub);
+                try{
+                     solver.minimize(*metric_to_use, x, fx, lb, ub);
+                }catch (const std::runtime_error &except) {
+
+            }
+
+
+
+                log<LOG_WARNING>(L"%1% || -- chi2 %2% at | %3% ") % __func__ % fx % x;
+                if (fx < chimin) {
+                    loc_best_fit = x;
+                    chimin = fx;
+                }
+                
+                last_best_fit = loc_best_fit;
+                metric_to_use->freeParams();
+            }
+
+            log<LOG_WARNING>(L"%1% || PLON  %2% chimin %3% at | %4% ") % __func__ % val % chimin % loc_best_fit;
+        }
+        return(0);
+
+            }
 
     std::ofstream global_fit_out;
     if(global_fit_result.size() > 0) {
