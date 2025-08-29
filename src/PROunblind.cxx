@@ -479,15 +479,15 @@ namespace PROfit{
         log<LOG_ERROR>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % chi2;
         log<LOG_ERROR>(L"%1% || at paramters: ") % __func__;
 
-        global_fit_out << "Global best fit:\n";
+        global_fit_out << "Global best fit of chi^2 : "<<chi2<<" at bf point: \n";
 
         bool use_phys = (size_t)best_fit.size() == metric->GetModel().nparams + metric->GetSysts().GetNSplines();
         for(long i = 0; i < best_fit.size(); i++){
 
             if(use_phys && i < (long)metric->GetModel().nparams){
                 log<LOG_ERROR>(L"%1% || %2%  :  %3%  (nonlog %4%)") % __func__ % metric->GetModel().pretty_param_names[i].c_str() % best_fit(i) % pow(10,best_fit(i));
-                global_fit_out << metric->GetModel().param_names[i]
-                    << " : " << best_fit(i) << "\n";
+                global_fit_out << metric->GetModel().param_names[i]  << " : " << best_fit(i) << "\n";
+                global_fit_out << metric->GetModel().param_names[i]  << " (non-log) : " << pow(10,best_fit(i)) << "\n";
             }else{
                 long idx = use_phys ? i - metric->GetModel().nparams : i;
                 std::string bad_name = metric->GetSysts().spline_names[idx];
