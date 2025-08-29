@@ -1,6 +1,7 @@
 #include "PROsurf.h"
 #include "PROfitter.h"
 #include "PROlog.h"
+#include "PROversion.h"
 
 #include <Eigen/Eigen>
 
@@ -495,7 +496,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 }
                 log<LOG_INFO>(L"%1% || THREAD #%2% runs pts: %3% ") % __func__ % t % strD.c_str();
 
-                futures.emplace_back(std::async(std::launch::async, [&, t, &prof_progress]() {
+                futures.emplace_back(std::async(std::launch::async, [&, t]() {
                                 return this->PROfilePointHelper(&systs, fitconfig, t, nThreads, minchi, with_osc, std::ref(prof_progress), seed_points, proseed.getThreadSeeds()->at(t));
                                 }));
 
@@ -726,6 +727,13 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 text->SetTextAngle(-45); 
                 text->Draw();
             }
+            TText *t = new TText();
+            t->SetNDC();                
+            t->SetTextFont(42);                          
+            t->SetTextSize(0.03);      
+            t->SetTextAlign(33);        
+            std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+            t->DrawText(0.895, 0.955, pv.c_str()); 
 
             c2->Update();
 
@@ -780,6 +788,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
 
 
+            t->DrawText(0.895, 0.955, pv.c_str()); 
             c2->SaveAs((filename+"_1sigma.pdf").c_str(),"pdf");
             delete c2;
 

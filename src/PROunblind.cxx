@@ -2,6 +2,7 @@
 #include "PROsurf.h"
 #include "PROplot.h"
 #include "PROlog.h"
+#include "PROversion.h"
 
 #include "TPaveText.h"
 
@@ -378,11 +379,19 @@ namespace PROfit{
         }
 
         TCanvas c;
+        noname_nuisance.SetTitle("");
         noname_nuisance.SetMaximum(std::max(1.2, maxbound * 1.2));
         noname_nuisance.SetMinimum(std::min(-1.2, minbound * 1.2));
         noname_nuisance.SetLineColor(kBlack);
         noname_nuisance.SetFillColor(kBlue);
         noname_nuisance.Draw("A*2");
+        TText *t = new TText();
+        t->SetNDC();                
+        t->SetTextFont(42);                          
+        t->SetTextSize(0.03);      
+        t->SetTextAlign(33);        
+        std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+        t->DrawText(0.895, 0.955, pv.c_str()); 
         c.Print((final_output_tag+"_nonames_nuisance_1sigma.pdf").c_str());
 
         noname_nuisance.Write("nonames_nuisance_1sigma");
@@ -523,6 +532,7 @@ namespace PROfit{
         corrhist_full.SetMaximum(1);
         corrhist_full.SetMinimum(-1);
         corrhist_full.Draw("colz");
+        t->DrawText(0.895, 0.955, pv.c_str()); 
         c.Print((final_output_tag + "_unblinding_corr.pdf").c_str());
 
         corrhist_full.Write("full_postfit_correlation");
@@ -665,6 +675,7 @@ namespace PROfit{
         c.SetLogx();
         c.SetLogz();
         surf.Draw("colz");
+        t->DrawText(0.895, 0.955, pv.c_str()); 
         c.Print((final_output_tag+"_surface.pdf").c_str());
 
         {
