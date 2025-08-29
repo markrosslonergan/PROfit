@@ -42,6 +42,7 @@ namespace PROfit{
             const PROmodel &model;
             const PROdata data;
             EvalStrategy strat;
+            bool shape_only;
             std::vector<float> physics_param_fixed;
                         //Do we want to fix any param?
             int fixed_index;
@@ -57,7 +58,7 @@ namespace PROfit{
 
 
             /*Function: Constructor bringing all objects together*/
-            PROchi(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat = EventByEvent, std::vector<float> physics_param_fixed = std::vector<float>());
+            PROchi(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat = EventByEvent, bool shape_only = false, std::vector<float> physics_param_fixed = std::vector<float>());
 
 
             /*Function: operator() is what is passed to minimizer.*/

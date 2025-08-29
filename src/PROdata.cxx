@@ -241,7 +241,7 @@ void PROdata::plotSpectrum(const PROconfig& inconfig, const std::string& output_
         for(size_t id =0; id < inconfig.m_num_detectors; id++){
             for(size_t ic = 0; ic < inconfig.m_num_channels; ic++){
                 c->cd(global_channel_index+1);
-               
+
                 std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.59,0.89,0.59,0.89);
                 leg->SetFillStyle(0);
                 leg->SetLineWidth(0);
@@ -270,3 +270,31 @@ void PROdata::plotSpectrum(const PROconfig& inconfig, const std::string& output_
     delete c;
     return;
 }
+
+Eigen::VectorXf PROdata::Normalize(const PROconfig &inconfig, const PROspec &target_spec) const{
+    //Single channel version
+    //Eigen::VectorXf test =  spec* target_spec.Spec().array().sum() / spec.array().sum();
+
+    Eigen::VectorXf collapsed_target  = CollapseMatrix(inconfig,target_spec.Spec());
+    Eigen::VectorXf output(spec.size());
+    size_t global_channel_index = 0;
+    for(size_t im = 0; im < inconfig.m_num_modes; im++){
+        for(size_t id =0; id < inconfig.m_num_detectors; id++){
+            for(size_t ic = 0; ic < inconfig.m_num_channels; ic++){
+
+                size_t nbin =  inconfig.m_channel_num_bins[inconfig.GetLocalChannelIndex(global_channel_index)];
+                size_t startCollBin = inconfig.GetCollapsedGlobalBinStart(global_channel_index);
+
+                float target_chan_sum = collapsed_target.segment(startCollBin,nbin).sum();
+                float data_chan_sum = spec.segment(startCollBin,nbin).sum();
+                //log<LOG_INFO>(L"%1% || sums %2% data %3%") % __func__ % target_chan_sum % data_chan_sum;
+                output.segment(startCollBin,nbin).setConstant(target_chan_sum/data_chan_sum);
+                global_channel_index++;
+            }
+        }
+    }
+
+
+    return spec.array()*output.array();
+}
+
