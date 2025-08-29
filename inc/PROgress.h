@@ -102,10 +102,9 @@ namespace PROfit {
             }
 
             int get_total() const {
-                return total; // total is const after construction, no lock needed
+                return total; 
             }
 
-            // Move constructor and assignment
             PROgressBar(PROgressBar&& other) noexcept 
                 : current(other.current), total(other.total), 
                 bar_width(other.bar_width), description(std::move(other.description)) {}
@@ -122,7 +121,6 @@ namespace PROfit {
                 return *this;
             }
 
-            // Delete copy constructor and assignment
             PROgressBar(const PROgressBar&) = delete;
             PROgressBar& operator=(const PROgressBar&) = delete;
     };
@@ -177,6 +175,8 @@ namespace PROfit {
                 }
 
                 //std::cerr << "\nAll tasks completed!" << std::endl;
+                log<LOG_ERROR>(L"   ");
+
             }
 
             // Set progress bar to specific value

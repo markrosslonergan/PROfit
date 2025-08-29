@@ -21,7 +21,8 @@ namespace PROfit{
 
             std::cin.clear();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));                                   
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            //std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            
             std::string input;
             std::getline(std::cin, input);
             if (input == "exit") throw std::domain_error(std::string("Manually exited on confirmation command."));
@@ -50,6 +51,8 @@ namespace PROfit{
         TFile fout(root_out.c_str(), "RECREATE");
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
+        getConfirmation("Ready to start?","################################################");
+
         //### 1 Number of Empty Bins in Data
         try{
             metric->checkData();
@@ -90,11 +93,11 @@ namespace PROfit{
         log<LOG_ERROR>(L"%1% || ####### (for unblinding, so this has a LOT less output than usual) ######") % __func__; 
 
         std::vector<std::pair<int, std::string>> global_PB_configs;
-        global_PB_configs.push_back({fitconfig2.n_multistart, "LatinHyperCube"});
-        global_PB_configs.push_back({fitconfig2.n_swarm_iterations, "ParticleSwarm"});
-        global_PB_configs.push_back({fitconfig2.n_localfit, "BestLBFGSB"});
-        global_PB_configs.push_back({180, "HarmonicScan"});
-        global_PB_configs.push_back({100, "HarmonicLBFGSB"});
+        global_PB_configs.push_back({fitconfig2.n_multistart, "(1) LatinHyperCube"});
+        global_PB_configs.push_back({fitconfig2.n_swarm_iterations, "(2) ParticleSwarm"});
+        global_PB_configs.push_back({fitconfig2.n_localfit, "(3) BestLBFGSB"});
+        global_PB_configs.push_back({180, "(4) HarmonicScan"});
+        global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
 
         MultiPROgressBar global_progress(global_PB_configs);
         global_progress.initialize_display();
