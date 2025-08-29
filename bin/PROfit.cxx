@@ -174,6 +174,9 @@ int main(int argc, char* argv[])
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
     profc_command->add_option("-u,--universes", nuniv, "Number of Feldman Cousins universes to throw")->default_val(1000);
 
+    // Unblinding
+    CLI::App *unblind_command = app.add_subcommand("unblind", "Run unblinding sequence for ICARUS run 2 numu disappearance analysis.");
+
     //PROtest, test things
     CLI::App *protest_command = app.add_subcommand("protest", "Testing ground for rapid quick tests.");
 
@@ -386,7 +389,7 @@ int main(int argc, char* argv[])
         }
 
         if(*profile_command || *surface_command || *protest_command){
-            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot subcommand! ") % __func__  ;
+            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
             return 1;
         }
 
@@ -1455,6 +1458,14 @@ int main(int argc, char* argv[])
         std::sort(flattened_dchi2s.begin(), flattened_dchi2s.end());
         log<LOG_INFO>(L"%1% || 90%% Feldman-Cousins delta chi2 after throwing %2% universes is %3%") 
             % __func__ % nuniv % flattened_dchi2s[0.9*flattened_dchi2s.size()];
+    }
+
+    if(*unblind_command) {
+        try {
+            PROunblind_Stage1(config,prop,metric,myseed,data,nthread,final_output_tag);
+        } catch(...) {
+            log<LOG_ERROR>(L"%1% || Exiting unblinding early.") % __func__;
+        }
     }
 
 
