@@ -46,6 +46,7 @@ namespace PROfit{
 
         //manually remove any print outs
         GLOBAL_LEVEL=LOG_WARNING;
+        
 
         std::string root_out = final_output_tag+"_unblinding.root";
         log<LOG_ERROR>(L"%1% || Saving results to %2%") % __func__ % root_out.c_str();
@@ -53,6 +54,18 @@ namespace PROfit{
 
         log<LOG_ERROR>(L"%1% || ################################################") % __func__;
         getConfirmation("Ready to start?","################################################");
+
+
+        //### check 0, systematics :)
+        log<LOG_ERROR>(L"%1% || Splines being used (%2%) : ") % __func__% metric->GetSysts().spline_names.size() ;
+        for(auto &n: metric->GetSysts().spline_names){
+            log<LOG_ERROR>(L"%1% || -- %2% (%3%)") % __func__ % n.c_str() % config.m_mcgen_variation_plotname_map.at(n).c_str();
+        }
+        log<LOG_ERROR>(L"%1% || Covariances being used (%2%) : ") % __func__ % metric->GetSysts().covar_names.size();
+        for(auto &n: metric->GetSysts().covar_names){
+            log<LOG_ERROR>(L"%1% || -- %2% (%3%)") % __func__ % n.c_str() %  config.m_mcgen_variation_plotname_map.at(n).c_str();;
+        }
+        log<LOG_ERROR>(L"%1% || CHECK 0: Confirm the above systematics! [ --Info-- ] ") % __func__ ;
 
         //### 1 Number of Empty Bins in Data
         try{
@@ -69,6 +82,8 @@ namespace PROfit{
             throw std::domain_error(std::string("Fractional Covariance Matrix is not positive semi-definite: "));
         }
         log<LOG_ERROR>(L"%1% || CHECK 2: Frac Covariance passed all positive semi definite-ness checks. [ --Passed-- ] ") % __func__;
+
+        getConfirmation("Just confirm three checks above are OK?","################################################");
 
         //PROfitterConfig fitconfig2("unblind",false);
         PROfitterConfig fitconfig2("good",false);
@@ -375,7 +390,7 @@ namespace PROfit{
             noname_nuisance.SetPointEYhigh(idx, p1);
             noname_nuisance.SetPointEYlow(idx, m1);
             log<LOG_ERROR>(L"%1% || Parameter %2% profile 1 sigma range: %3% (-%4%,+%5%) width |%6%|") 
-                % __func__ % i % val % m1 % p1 % fabs(p1-m1);
+                % __func__ % i % val % m1 % p1 % fabs(pi+m1);
         }
 
         TCanvas c;

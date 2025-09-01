@@ -218,7 +218,11 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //if its physics, grab seed points, need to include those
             std::vector<float> seed_values(seed_points.size());
             std::transform(seed_points.begin(), seed_points.end(), seed_values.begin(), [which_spline](const auto& vec) { return vec[which_spline]; });
-            test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep*0.5, 2);
+            float mod = 0.5;
+            while(test_values.size()<nstep*1.5){
+                test_values = combined_sparse_seed(std::isinf(lb(which_spline)) ? -3 : lb(which_spline), ub(which_spline), seed_values, nstep*mod, 2);
+                mod=mod*1.2;
+            }
             log<LOG_INFO>(L"%1% || PROfileing over physics parameter number %2% has %3% uniform points, and %4% local ones for a total of %5% points. ") % __func__ %  which_spline % int(nstep*0.5) %int((2*2+1)*seed_values.size()) % test_values.size();
            }
 
@@ -520,13 +524,23 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 std::unique_ptr<TGraph> g = std::make_unique<TGraph>(out.knob_vals.size(), out.knob_vals.data(), out.knob_chis.data());
                 graphs.push_back(std::move(g));
                 for(size_t u=0; u< out.knob_vals.size(); u++){
-                    //if(out.knob_chis.at(u)+chmin<chimin)
                     if(out.knob_chis.at(u)<0){
-                        if((out.knob_chis.at(u))<1e-4f){
-                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit. ") % __func__ ;
+                        float chidiff = fabs(out.knob_chis.at(u));
+                        Eigen::VectorXf param_diff = out.knob_bfs.at(u)-seed_points.front();
+                        float norm = param_diff.norm();
+                        float norm_without_phys = param_diff.tail(param_diff.size() - model.nparams).norm();
+                        if(norm_without_phys < 1e-4 && chidiff< 1e-4){
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit, and parameters norm less than 1e-4 from best_fit nuisence values. AKA same point.") % __func__ ;
+                        }else if(chidiff<1e-4){
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit, although parameters norm more than 1e-4 from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ 
+                        }else if(chidiff<1e-3){
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-3f from global best fit (although greater than 1e-4).") % __func__ 
                         }else{
-                            log<LOG_WARNING>(L"%1% || Warning. A lower global best fit was found during PROfile. Noted for now, but not updated. Consider rerunning with enhanced parameters. ") % __func__ ;
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f.") % __func__ 
                         }
+                        //log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit %2%") % __func__ % chidiff;
+                        //log<LOG_ERROR>(L"%1% || Norm: %2% Norm_Sys %3% ") %__func__% norm % norm_without_phys;
+                        //log<LOG_ERROR>(L"%1% || Warning. at PST %2%") %__func__% out.knob_bfs.at(u);
                     }
                 }
             }

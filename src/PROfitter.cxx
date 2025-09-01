@@ -202,7 +202,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     metric.setBounds(tmp_lb,tmp_ub);
                     try{niter = solver.minimize(metric, x, fx, tmp_lb, tmp_ub);
                     }catch (const std::exception &except) {
-                     std::string msg = except.what();
+                        std::string msg = except.what();
                         exception_string_map[msg]++;
 
 
@@ -219,8 +219,8 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     try{
                         niter=solver.minimize(metric, x, fx, lb, ub);
                     }catch (const std::exception &except) {
-                     std::string msg = except.what();
-                    exception_string_map[msg]++;
+                        std::string msg = except.what();
+                        exception_string_map[msg]++;
 
 
                     }
@@ -392,9 +392,10 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
     std::vector<std::pair<float,float>> minima = findSignificantMinima(chipos, chivalues,  chi2_drop_param, min_dist_minima_param, true);
 
 
+
     //STEP 3, loop over all mimima and do twofold minimzation. 
     //First with DM minima fixed to get BF of pull terms, then fully free to optimize the mass splitting to high precisin
-    
+
 
     for(int p=0;p<minima.size();p++){
         log<LOG_INFO>(L"%1% || ##################  ") %__func__;
@@ -451,8 +452,70 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
             for(int jj=0;jj<std::ceil(100/minima.size())+1; jj++)progress->increment_bar(4);
         }
     }
+   
+    //ensure best fit is in the seeds, most likely mreoved in next step
+    freq_seed_points.push_back(best_fit);
+    float chibf = metric(best_fit, grad, false);
+    freq_seed_values.push_back(chibf);
+
     log<LOG_INFO>(L"%1% || ##################  ") %__func__;
-    log<LOG_INFO>(L"%1% || We have calculated %2% frequency seed points and saved for future use! ") %__func__% freq_seed_values.size();
+    log<LOG_INFO>(L"%1% || We have calculated %2% frequency seed points in total, plus 1 for global BF. Checking norm for differences! ") %__func__% freq_seed_values.size();
+
+    std::vector<bool> keep(freq_seed_values.size(), true);
+    float norm_tol = 1e-4;  
+    float chi_tol = 1e-6;   
+
+    for(size_t p = 0; p < freq_seed_values.size(); p++){
+        if(!keep[p]) continue;  // needa to skip if already marked for del
+
+        for(size_t q = p + 1; q < freq_seed_values.size(); q++){  
+            if(!keep[q]) continue;
+
+            float chip = freq_seed_values.at(p);
+            float chiq = freq_seed_values.at(q);
+            float normpq = (freq_seed_points.at(p) - freq_seed_points.at(q)).norm();
+
+            log<LOG_INFO>(L"%1% || NORM freq seed (%2%,%3%) is : %4%, chi_diff: %5%") % __func__ % p % q % normpq % std::abs(chip - chiq);
+
+            if(normpq < norm_tol && std::abs(chip - chiq) < chi_tol) {
+                if(chip <= chiq) {
+                    keep[q] = false;
+                    log<LOG_INFO>(L"%1% || Removing duplicate %2% (keeping %3%)") % __func__ % q % p;
+                } else {
+                    keep[p] = false;
+                    log<LOG_INFO>(L"%1% || Removing duplicate %2% (keeping %3%)") % __func__ % p % q;
+                    break;  
+                }
+            }
+        }
+    }
+
+    std::vector<Eigen::VectorXf> unique_points;
+    std::vector<float> unique_values;
+    for(size_t i = 0; i < keep.size(); i++) {
+        if(keep[i]) {
+            unique_points.push_back(freq_seed_points[i]);
+            unique_values.push_back(freq_seed_values[i]);
+        }
+    }
+
+    // Sort
+    std::vector<size_t> sort_indices(unique_values.size());
+    std::iota(sort_indices.begin(), sort_indices.end(), 0);
+    std::sort(sort_indices.begin(), sort_indices.end(),[&](size_t i, size_t j) { return unique_values[i] < unique_values[j]; });
+    
+    std::vector<Eigen::VectorXf> sorted_points;
+    std::vector<float> sorted_values;
+    for(size_t idx : sort_indices) {
+        sorted_points.push_back(unique_points[idx]);
+        sorted_values.push_back(unique_values[idx]);
+    }
+    
+    // Replace originals
+    freq_seed_points = unique_points;
+    freq_seed_values = unique_values;
+
+    log<LOG_INFO>(L"%1% || Reduced from %2% to %3% unique seed points that are kept for future use!")   % __func__ % keep.size() % unique_points.size();
 
     return freq_seed_values.size();
 }
@@ -464,10 +527,13 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
     std::vector<std::pair<float, float>> minima;  
     float prominence_threshold = in_prominence_threshold;
     float min_spacing_log = in_min_spacing_log;
-    bool first = true;
 
-    while(first || minima.size()>16){
-
+    int att =0;
+    int minmin = 4;
+    int maxmin = 15;
+    while(minima.size()< minmin || minima.size()>maxmin){
+        //while(minima.size()==0 || minima.size()>15){
+        att++;
         if(x_values.size() != y_values.size() || x_values.size() < 3) {
             return minima;
         }
@@ -527,10 +593,27 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
             }
         }
 
-        first = false;
-        prominence_threshold = prominence_threshold*0.9;
-        min_spacing_log = min_spacing_log*1.1;
+        if(minima.size()<minmin){
+            prominence_threshold = prominence_threshold*0.95;
+            //min_spacing_log = min_spacing_log*0.9;
+        }
+        if(minima.size()>maxmin){
+            prominence_threshold = prominence_threshold*1.05;
+            //min_spacing_log = min_spacing_log*1.1;
+        }
+        log<LOG_DEBUG>(L"%1% || Minima.size() (%2%) prom %3% minspace %4% ") %__func__% minima.size() % prominence_threshold % min_spacing_log;
+        log<LOG_DEBUG>(L"%1% || X (%2%) ") %__func__% x_values;
+        log<LOG_DEBUG>(L"%1% || Y (%2%)  ") %__func__% y_values;
+        for(auto &m:minima){
+            log<LOG_DEBUG>(L"%1% || Min (%2%, %3%)  ") %__func__% m.first % m.second;
+        }
 
+        if(prominence_threshold<1e-6){
+            min_spacing_log = min_spacing_log*0.95;
+        }
+        if(prominence_threshold<1e-7){
+            return minima;
+        }
     }
     return minima;
-}
+    }
