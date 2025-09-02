@@ -530,17 +530,14 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                         float norm = param_diff.norm();
                         float norm_without_phys = param_diff.tail(param_diff.size() - model.nparams).norm();
                         if(norm_without_phys < 1e-4 && chidiff< 1e-4){
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit, and parameters norm less than 1e-4 from best_fit nuisence values. AKA same point.") % __func__ ;
-                        }else if(chidiff<1e-4){
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit, although parameters norm more than 1e-4 from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ 
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit (%2%), and pull parameters norm less than 1e-4 (%3%)from best_fit nuisence values. AKA same point.") % __func__ % chidiff % norm_without_phys;
                         }else if(chidiff<1e-3){
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-3f from global best fit (although greater than 1e-4).") % __func__ 
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-3f from global best fit (%2%), although pull parameters norm more than 1e-4 (%3%) from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ % chidiff % norm_without_phys; 
                         }else{
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f.") % __func__ 
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f (%2%). Difference pull parameters norm (%3%). This is enough that we reccomend updating global best fit values and restarting.") % __func__ % chidiff % norm_without_phys;
+                            newglob=out.knob_chis.at(u)+minchi;
+                            newglob_param = out.knob_bfs.at(u);
                         }
-                        //log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit %2%") % __func__ % chidiff;
-                        //log<LOG_ERROR>(L"%1% || Norm: %2% Norm_Sys %3% ") %__func__% norm % norm_without_phys;
-                        //log<LOG_ERROR>(L"%1% || Warning. at PST %2%") %__func__% out.knob_bfs.at(u);
                     }
                 }
             }
