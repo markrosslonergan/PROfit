@@ -452,7 +452,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
             for(int jj=0;jj<std::ceil(100/minima.size())+1; jj++)progress->increment_bar(4);
         }
     }
-   
+
     //ensure best fit is in the seeds, most likely mreoved in next step
     freq_seed_points.push_back(best_fit);
     float chibf = metric(best_fit, grad, false);
@@ -484,7 +484,6 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
                 } else {
                     keep[p] = false;
                     log<LOG_INFO>(L"%1% || Removing duplicate %2% (keeping %3%)") % __func__ % p % q;
-                    break;  
                 }
             }
         }
@@ -503,14 +502,14 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
     std::vector<size_t> sort_indices(unique_values.size());
     std::iota(sort_indices.begin(), sort_indices.end(), 0);
     std::sort(sort_indices.begin(), sort_indices.end(),[&](size_t i, size_t j) { return unique_values[i] < unique_values[j]; });
-    
+
     std::vector<Eigen::VectorXf> sorted_points;
     std::vector<float> sorted_values;
     for(size_t idx : sort_indices) {
         sorted_points.push_back(unique_points[idx]);
         sorted_values.push_back(unique_values[idx]);
     }
-    
+
     // Replace originals
     freq_seed_points = sorted_points;
     freq_seed_values = sorted_values;
