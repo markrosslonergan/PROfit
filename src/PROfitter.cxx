@@ -512,8 +512,8 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
     }
     
     // Replace originals
-    freq_seed_points = unique_points;
-    freq_seed_values = unique_values;
+    freq_seed_points = sorted_points;
+    freq_seed_values = sorted_values;
 
     log<LOG_INFO>(L"%1% || Reduced from %2% to %3% unique seed points that are kept for future use!")   % __func__ % keep.size() % unique_points.size();
 
