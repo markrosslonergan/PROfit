@@ -526,17 +526,30 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 for(size_t u=0; u< out.knob_vals.size(); u++){
                     if(out.knob_chis.at(u)<0){
                         float chidiff = fabs(out.knob_chis.at(u));
+                        float bfnorm = seed_points.front().norm();
+                        float bfnorm_without_phys = seed_points.front().tail(seed_points.front().size() - model.nparams).norm();
+
                         Eigen::VectorXf param_diff = out.knob_bfs.at(u)-seed_points.front();
                         float norm = param_diff.norm();
                         float norm_without_phys = param_diff.tail(param_diff.size() - model.nparams).norm();
-                        if(norm_without_phys < 1e-4 && chidiff< 1e-4){
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-4f from global best fit (%2%), and pull parameters norm less than 1e-4 (%3%)from best_fit nuisence values. AKA same point.") % __func__ % chidiff % norm_without_phys;
-                        }else if(chidiff<1e-3){
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-3f from global best fit (%2%), although pull parameters norm more than 1e-4 (%3%) from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ % chidiff % norm_without_phys; 
+
+                        float relative_tol1 = 1e-3;
+                            
+                        if( (norm_without_phys < relative_tol1*bfnorm)  &&  (chidiff< relative_tol1*minchi) ){
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than relatively 1e-3f from global best fit (%2%), and pull parameters norm less than 1e-3 (%3%)from best_fit nuisence values. AKA same point.") % __func__ % float(chidiff/minchi) % float(norm_without_phys/bfnorm_without_phys);
+                        }else if((chidiff< relative_tol1*minchi)){
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than relatively 1e-3f from global best fit (%2%), although pull parameters norm more than 1e-3 (%3%) from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ % float(chidiff/minchi) % float(norm_without_phys/bfnorm_without_phys); 
                         }else{
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f (%2%). Difference pull parameters norm (%3%). Difference total paramer norm (%4%). This is enough that could consider updating global best fit values and restarting.") % __func__ % chidiff % norm_without_phys % norm ;
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than relative 1e-3f from global best fit (%2%). Rel Difference pull parameters norm (%3%). Rel Difference total paramer norm (%4%). This is enough that could consider updating global best fit values and restarting.") % __func__ % float(chidiff/minchi) % float(norm_without_phys/bfnorm_without_phys) % float(norm/bfnorm) ;
+                           // log<LOG_ERROR>(L"%1% || TEMP chi glob %2% new %3% ") % __func__ % minchi % out.knob_chis.at(u);
+                           // log<LOG_ERROR>(L"%1% || TEMP norm %2% pull norm %3% ") % __func__ % norm % norm_without_phys;
+                           // log<LOG_ERROR>(L"%1% || TEMP chi param %2% ") % __func__ % seed_points.front() ;
+                           // log<LOG_ERROR>(L"%1% || TEMP new param %2% ") % __func__ % out.knob_bfs.at(u);
+
+
                             newglob=out.knob_chis.at(u)+minchi;
                             newglob_param = out.knob_bfs.at(u);
+
                         }
                     }
                 }

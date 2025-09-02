@@ -627,7 +627,7 @@ int main(int argc, char* argv[])
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
             float chi_freq = fitter.freq_seed_values.at(i);
-            if(chi_freq<chi2){
+             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
                 log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
                 log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
                 chi2 = chi_freq;
