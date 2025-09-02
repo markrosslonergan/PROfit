@@ -84,8 +84,8 @@ namespace PROfit {
 
                 // the lesser Scan version
                 if(fit_preset == "good"){
-                    n_multistart = 1250;
-                    n_swarm_particles = 3;
+                    n_multistart = 1000;
+                    n_swarm_particles = 2;
                     n_swarm_iterations = 50;
                     n_localfit=5;
                     n_max_local_retries = 1; //until better logic, local retries wastefil
