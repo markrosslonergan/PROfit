@@ -42,6 +42,36 @@ namespace PROfit{
         return;
     }
 
+    bool getChoice(std::string first, std::string second){
+
+        while (true) {
+            log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % first.c_str();;
+            log<LOG_ERROR>(L"%1% || Please type \"PROyes\" or \"PROno\".") % __func__;
+
+            std::wcout.flush();
+            std::cout.flush();
+            if(LOGGING_TO_FILE && LOG_FILE_STREAM.is_open()) {
+                LOG_FILE_STREAM.flush();
+            }
+
+            std::cin.clear();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));                                   
+
+            std::string input;
+            std::getline(std::cin, input);
+            if (input == "PROyes") {
+                return true;
+            }else if (input == "PROno"){
+                return false; 
+            } else {
+                log<LOG_ERROR>(L"%1% || Thats not one of the two options, try again!") % __func__;
+            }
+        }
+        log<LOG_ERROR>(L"%1% ||%2% ") % __func__ % second.c_str();;
+        return false;
+    }
+
+
     int PROunblind_Stage1( const PROconfig &config, const PROpeller &prop, PROmetric *metric , PROseed &myseed, PROdata data, size_t nthread, std::string final_output_tag){
 
         //manually remove any print outs
@@ -340,10 +370,15 @@ namespace PROfit{
 
             if(prof.newglob_param.size()>0){
                log<LOG_ERROR>(L"%1% || ################################################") % __func__;
-               log<LOG_ERROR>(L"%1% || Going to restart checks and whole process as we found a better global minima. Could take a while :)") % __func__;
-               getConfirmation("Proceed to start again with new best fit as seed?","############################################");
-               loopseed = prof.newglob_param;
-               continue;
+               log<LOG_ERROR>(L"%1% || Better global fit found. Reccommend to restart checks and whole process as we found a better global minima. Could take a while :)") % __func__;
+               bool runagainnow = getChoice("Proceed to start again with new best fit as seed? PROyes to rerun now or PROno to skip and manually do it later","############################################");
+               if(runagainnow){
+                   log<LOG_ERROR>(L"%1% || Rerunning right now!") % __func__;
+                   loopseed = prof.newglob_param;
+                   continue;
+               }else{
+                 log<LOG_ERROR>(L"%1% || Not rerunning right now. But you need to update chi values and shift PROfile plots afterwords! ") % __func__;
+               }
             }
 
             std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
