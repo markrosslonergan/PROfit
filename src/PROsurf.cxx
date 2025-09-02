@@ -535,7 +535,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
                         float relative_tol1 = 1e-3;
                             
-                        if( (norm_without_phys < relative_tol1*bfnorm)  &&  (chidiff< relative_tol1*minchi) ){
+                        if( (norm_without_phys < relative_tol1*bfnorm_without_phys)  &&  (chidiff< relative_tol1*minchi) ){
                             log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than relatively 1e-3f from global best fit (%2%), and pull parameters norm less than 1e-3 (%3%)from best_fit nuisence values. AKA same point.") % __func__ % float(chidiff/minchi) % float(norm_without_phys/bfnorm_without_phys);
                         }else if((chidiff< relative_tol1*minchi)){
                             log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than relatively 1e-3f from global best fit (%2%), although pull parameters norm more than 1e-3 (%3%) from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ % float(chidiff/minchi) % float(norm_without_phys/bfnorm_without_phys); 
