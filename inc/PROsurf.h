@@ -61,6 +61,9 @@ namespace PROfit {
             std::vector<float> barvalues;
             std::vector<float> values1_up;
             std::vector<float> values1_down;
+    
+            float newglob;
+            Eigen::VectorXf newglob_param;
 
             PROfile(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, const PROfitterConfig &fitconfig, std::string filename, float minchi = 0, bool with_osc = false, int nThreads = 1, const std::vector<Eigen::VectorXf> &seed_points = {}, const Eigen::VectorXf& true_params = Eigen::VectorXf() ) ;
 

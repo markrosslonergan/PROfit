@@ -617,11 +617,23 @@ int main(int argc, char* argv[])
 
         metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
-        global_fit_chi2 = chi2;
         Eigen::VectorXf best_fit = fitter.best_fit;
-        if(global_fit_result.size() == 0) global_fit_result = best_fit;
-        Eigen::MatrixXf post_covar = fitter.Covariance();
+       
+       
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
 
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                chi2 = chi_freq;
+                best_fit = fitter.freq_seed_points.at(i);
+            }
+        }
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
@@ -638,20 +650,9 @@ int main(int argc, char* argv[])
             }
         }
 
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
-
-        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
-            float chi_freq = fitter.freq_seed_values.at(i);
-            if(chi_freq<chi2){
-                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
-                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
-                chi2 = chi_freq;
-                best_fit = fitter.freq_seed_points.at(i);
-            }
-        }
+        if(global_fit_result.size() == 0) global_fit_result = best_fit;
+        global_fit_chi2 = chi2;
+        Eigen::MatrixXf post_covar = fitter.Covariance();
 
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
@@ -1462,6 +1463,8 @@ int main(int argc, char* argv[])
 
     if(*unblind_command) {
         try {
+            
+            
             PROunblind_Stage1(config,prop,metric,myseed,data,nthread,final_output_tag);
         } catch(...) {
             log<LOG_ERROR>(L"%1% || Exiting unblinding early.") % __func__;

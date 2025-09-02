@@ -87,7 +87,7 @@ namespace PROfit {
                     n_multistart = 1000;
                     n_swarm_particles = 2;
                     n_swarm_iterations = 50;
-                    n_localfit=2;
+                    n_localfit=5;
                     n_max_local_retries = 1; //until better logic, local retries wastefil
 
                     param.epsilon = 1e-5;           

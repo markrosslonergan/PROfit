@@ -24,6 +24,7 @@
 namespace PROfit {
 
     void getConfirmation(std::string first, std::string second);
+    bool getChoice(std::string first, std::string second);
 
 
   /* Function: Unblinding Proceedure v1 ICARUS numu dis
