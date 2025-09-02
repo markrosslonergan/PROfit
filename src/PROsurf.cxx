@@ -534,7 +534,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                         }else if(chidiff<1e-3){
                             log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile, but less than 1e-3f from global best fit (%2%), although pull parameters norm more than 1e-4 (%3%) from best_fit nuisence values. Not uncommon in degenerate phase space.") % __func__ % chidiff % norm_without_phys; 
                         }else{
-                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f (%2%). Difference pull parameters norm (%3%). This is enough that we reccomend updating global best fit values and restarting.") % __func__ % chidiff % norm_without_phys;
+                            log<LOG_ERROR>(L"%1% || Warning. A lower global best fit was found during PROfile. Difference greater than 1e-3f (%2%). Difference pull parameters norm (%3%). Difference total paramer norm (%4%). This is enough that could consider updating global best fit values and restarting.") % __func__ % chidiff % norm_without_phys % norm ;
                             newglob=out.knob_chis.at(u)+minchi;
                             newglob_param = out.knob_bfs.at(u);
                         }

@@ -370,7 +370,7 @@ namespace PROfit{
 
             if(prof.newglob_param.size()>0){
                log<LOG_ERROR>(L"%1% || ################################################") % __func__;
-               log<LOG_ERROR>(L"%1% || Better global fit found. Reccommend to restart checks and whole process as we found a better global minima. Could take a while :)") % __func__;
+               log<LOG_ERROR>(L"%1% || Lower global fit found. Do you want to to restart checks and whole process as we found a better global minima? Could take a while :)") % __func__;
                bool runagainnow = getChoice("Proceed to start again with new best fit as seed? PROyes to rerun now or PROno to skip and manually do it later","############################################");
                if(runagainnow){
                    log<LOG_ERROR>(L"%1% || Rerunning right now!") % __func__;
