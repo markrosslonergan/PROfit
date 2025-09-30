@@ -526,12 +526,11 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
     std::vector<std::pair<float, float>> minima;  
     float prominence_threshold = in_prominence_threshold;
     float min_spacing_log = in_min_spacing_log;
-
+    size_t niter=0;
     int att =0;
     int minmin = 4;
     int maxmin = 15;
     while(minima.size()< minmin || minima.size()>maxmin){
-        //while(minima.size()==0 || minima.size()>15){
         att++;
         if(x_values.size() != y_values.size() || x_values.size() < 3) {
             return minima;
@@ -612,6 +611,11 @@ std::vector<std::pair<float, float>> PROfitter::findSignificantMinima(  const st
         }
         if(prominence_threshold<1e-7){
             return minima;
+        }
+        niter++;
+        if(niter>100){
+         log<LOG_DEBUG>(L"%1% || Minima.size() %2% but we have ran for 100 so breaking now.  ") %__func__% minima.size();
+         return minima;
         }
     }
     return minima;
