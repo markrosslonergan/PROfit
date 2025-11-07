@@ -87,6 +87,7 @@ int main(int argc, char* argv[])
     std::map<std::string, float> fake_data_osc_params;
     std::map<std::string, float> cv_osc_params;
     std::map<std::string, float> injected_systs;
+    std::vector<std::string> injected_cov;
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool systs_only_profile = false;
@@ -457,6 +458,26 @@ int main(int argc, char* argv[])
             PROspec data_spec = config.m_channel_variable_plot_bool.at(io) ?  FillSpectra(config, prop, variable_systs[io], *model, allparams, !eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
             if(poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(myseed.global_rng));
             Eigen::VectorXf data_vec = CollapseMatrix(config, data_spec.Spec(), io);
+            if(injected_cov.size()) {
+                PROspec cv = FillSpectra(config, prop, PROsyst(), *model, cv_osc_param_vector,true,io);
+                PROsyst injected_cov_syst = variable_systs[io].subset(injected_cov);
+                Eigen::MatrixXf decomp_cov = injected_cov_syst.DecomposeFractionalCovariance(config, cv.Spec());
+                std::normal_distribution<float> d_cov;
+                std::vector<Eigen::VectorXf> throws;
+                for(size_t i = 0; i < 1000; ++i) {
+                    Eigen::VectorXf throwC = data_vec;
+                    for(int i = 0; i < data_vec.size(); i++)
+                        throwC(i) = d_cov(myseed.global_rng);
+                    throws.push_back(data_vec + decomp_cov * throwC);
+                }
+                for(int i = 0; i < data_vec.size(); ++i) {
+                    std::vector<float> vals(1000, 0.0);
+                    for(size_t j = 0; j < 1000; ++j)
+                        vals[j] = throws[j](i);
+                    std::sort(vals.begin(), vals.end());
+                    data_vec(i) = vals[0.84 * throws.size()];
+                }
+            }
             variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
         }
     }
