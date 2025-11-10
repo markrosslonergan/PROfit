@@ -88,6 +88,7 @@ int main(int argc, char* argv[])
     std::map<std::string, float> cv_osc_params;
     std::map<std::string, float> injected_systs;
     std::vector<std::string> injected_cov;
+    float cov_shift = 1;
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool systs_only_profile = false;
@@ -136,6 +137,7 @@ int main(int argc, char* argv[])
 
     app.add_option("--inject-systs", injected_systs, "Systematic shifts to inject. Map of name and shift value in sigmas. Only spline systs are supported right now.");
     app.add_option("--inject-cov", injected_cov, "Covariance style systematics to apply a 1 sigma shift to. Will take 1 sigma shift of the sum of these covariances.");
+    app.add_option("--cov-shift", cov_shift, "Amount to shift covariance injection by.");
     app.add_option("--syst-list", syst_list, "Override list of systematics to use (note: all systs must be in the xml).");
     app.add_option("--exclude-systs", systs_excluded, "List of systematics to exclude.")->excludes("--syst-list"); 
 
@@ -462,6 +464,7 @@ int main(int argc, char* argv[])
             if(injected_cov.size()) {
                 PROspec cv = FillSpectra(config, prop, PROsyst(), *model, cv_osc_param_vector,true,io);
                 PROsyst injected_cov_syst = variable_systs[io].subset(injected_cov);
+                float frac = 0.5 * (1+std::erf(cov_shift/std::sqrt(2)));
                 Eigen::MatrixXf decomp_cov = injected_cov_syst.DecomposeFractionalCovariance(config, cv.Spec());
                 std::normal_distribution<float> d_cov;
                 std::vector<Eigen::VectorXf> throws;
@@ -476,7 +479,7 @@ int main(int argc, char* argv[])
                     for(size_t j = 0; j < 1000; ++j)
                         vals[j] = throws[j](i);
                     std::sort(vals.begin(), vals.end());
-                    data_vec(i) = vals[0.84 * throws.size()];
+                    data_vec(i) = vals[frac * throws.size()];
                 }
             }
             variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
