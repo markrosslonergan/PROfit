@@ -461,7 +461,7 @@ int main(int argc, char* argv[])
             PROspec data_spec = config.m_channel_variable_plot_bool.at(io) ?  FillSpectra(config, prop, variable_systs[io], *model, allparams, !eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
             if(poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(myseed.global_rng));
             Eigen::VectorXf data_vec = CollapseMatrix(config, data_spec.Spec(), io);
-            if(injected_cov.size()) {
+            if(config.m_channel_variable_plot_bool.at(io) && injected_cov.size()) {
                 PROspec cv = FillSpectra(config, prop, PROsyst(), *model, cv_osc_param_vector,true,io);
                 PROsyst injected_cov_syst = variable_systs[io].subset(injected_cov);
                 float frac = 0.5 * (1+std::erf(cov_shift/std::sqrt(2)));
