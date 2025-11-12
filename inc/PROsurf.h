@@ -99,7 +99,7 @@ namespace PROfit {
             std::vector<surfOut> PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, int start, int end, uint32_t seed);
 
             void FillSurfaceStat(const PROconfig &config, const PROfitterConfig &fitconfig, std::string filename);
-            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, int nthreads = 1);
+            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, int nthreads = 1, float min_chi = 0);
 
     };
 

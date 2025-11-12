@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
     std::map<std::string, float> scan_fit_options;
     std::map<std::string, float> global_fit_options;
     size_t maxevents;
-    int global_seed = -1;
+    long global_seed = -1;
     std::string log_file = "";
     std::string fit_preset = "good";
     static const std::unordered_set<std::string> allowed_preset = {"good","fast","overkill"};
@@ -180,6 +180,14 @@ int main(int argc, char* argv[])
     //PROtest, test things
     CLI::App *protest_command = app.add_subcommand("protest", "Testing ground for rapid quick tests.");
 
+    app.set_config("--config");
+    surface_command->configurable(true);
+    process_command->configurable(true);
+    profile_command->configurable(true);
+    protest_command->configurable(true);
+    unblind_command->configurable(true);
+    profc_command->configurable(true);
+    proplot_command->configurable(true);
 
     //Parse inputs. 
     CLI11_PARSE(app, argc, argv);
@@ -388,10 +396,10 @@ int main(int argc, char* argv[])
             }
         }
 
-        if(*profile_command || *surface_command || *protest_command){
-            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
-            return 1;
-        }
+        //if(*profile_command || *surface_command || *protest_command){
+        //    log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
+        //    return 1;
+        //}
 
 
     }//if no data, use injected or fake data;
@@ -620,20 +628,20 @@ int main(int argc, char* argv[])
         Eigen::VectorXf best_fit = fitter.best_fit;
        
        
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
-        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
-
-        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
-            float chi_freq = fitter.freq_seed_values.at(i);
-             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
-                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
-                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
-                chi2 = chi_freq;
-                best_fit = fitter.freq_seed_points.at(i);
-            }
-        }
+//        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+//        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+//        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+//        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+//
+//        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+//            float chi_freq = fitter.freq_seed_values.at(i);
+//             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+//                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+//                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+//                chi2 = chi_freq;
+//                best_fit = fitter.freq_seed_points.at(i);
+//            }
+//        }
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
@@ -838,6 +846,7 @@ int main(int argc, char* argv[])
 
 
             }
+            metric->setBounds(lb, ub);
             PROfitter fitter(ub, lb, fitconfig);
 
             log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
@@ -921,7 +930,7 @@ int main(int argc, char* argv[])
             if(statonly)
                 surface.FillSurfaceStat(config, scanFitConfig, final_output_tag+"_statonly_surface.txt");
             else
-                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread);
+                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread, global_fit_chi2_surf);
         }
 
         std::vector<float> binedges_x, binedges_y;
@@ -1239,6 +1248,16 @@ int main(int argc, char* argv[])
             }
             c.Print((final_output_tag+"_PROplot_Covar.pdf" + "]").c_str(), "pdf");
         }
+
+        auto allmatrices = covarianceTH2D(allcovsyst, config, spec);
+        c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "[").c_str(), "pdf");
+        for(const auto &[name, mat]: allmatrices) {
+            if(name == "collapsed_total_cor") {
+                mat->Draw("colz");
+                c.Print((final_output_tag+"_PROplot_CovarAll.pdf").c_str(), "pdf");
+            }
+        }
+        c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "]").c_str(), "pdf");
 
         //errorband
         int global_channel_index = 0;

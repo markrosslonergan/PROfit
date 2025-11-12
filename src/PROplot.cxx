@@ -518,10 +518,14 @@ namespace PROfit{
                             //one->SetMaximum(std::min(1.5f,std::max(yhigh,1.148f)));
                             one->SetMinimum(std::min(ylow,0.85f));
                             one->SetMaximum(std::max(yhigh,1.148f));
+                            //one->SetMinimum(0.5);
+                            //one->SetMaximum(1.5);
 
                         }else{
                             one->SetMinimum(std::min(ylow,0.85f));
                             one->SetMaximum(std::max(yhigh,1.148f));
+                            //one->SetMinimum(0.5);
+                            //one->SetMaximum(1.5);
 
                         }
 
@@ -774,7 +778,8 @@ namespace PROfit{
                     hsum->SetMinimum(0);
                     hsum->SetStats(0);  
                     hsum->Draw("HIST");
-                    hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                    //hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                    hsum->SetMaximum(1.2);
                     gPad->Modified();
                     gPad->Update();
                     for(auto &h:hvec) h->Draw("HIST SAME");

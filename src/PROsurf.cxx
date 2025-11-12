@@ -332,7 +332,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
         }
 
 
-        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads) {
+        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads, float min_chi) {
             std::ofstream chi_file;
             if(!filename.empty()){
                 chi_file.open(filename);
@@ -381,9 +381,12 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 for(size_t i = 0; i < metric.GetModel().nparams + metric.GetSysts().GetNSplines(); ++i)
                     chi_file << " p" << i;
             }
-            float min_chi = 1e9;
+            //float min_chi = 1e9;
             for(const auto &item: combinedResults) {
-                if(item.chi < min_chi) min_chi = item.chi;
+                if(item.chi < min_chi) {
+                    log<LOG_WARNING>(L"%1% || Found chi2 on surface %2% lower than global fit chi2 %3%.") % __func__ % item.chi % min_chi;
+                    min_chi = item.chi;
+                }
             }
             for (const auto& item : combinedResults) {
                 log<LOG_INFO>(L"%1% || Finished  : %2% %3% %4%") % __func__ % item.grid_val[1] % item.grid_val[0] % (item.chi - min_chi);
