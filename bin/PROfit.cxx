@@ -1023,6 +1023,21 @@ int main(int argc, char* argv[])
                     log<LOG_ERROR>(L"%1% || Unrecognized chi2 function %2%") % __func__ % chi2.c_str();
                     abort();
                 }
+                size_t nphys = metric->GetModel().nparams;
+                Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+                Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+                for(size_t i = 0; i < nphys; ++i) {
+                    lb(i) = metric->GetModel().lb(i);
+                    ub(i) = metric->GetModel().ub(i);
+                }
+                for(size_t i = nphys; i < nparams; ++i) {
+                    lb(i) = metric->GetSysts().spline_lo[i-nphys];
+                    ub(i) = metric->GetSysts().spline_hi[i-nphys];
+                }
+                metric->setBounds(lb, ub);
+                PROfitter fitter(ub, lb, fitconfig);
+                float brazil_chi2 = fitter.Fit(*metric); 
+                fitter.calcFreqSeedPoints(*metric);
 
                 brazil_band_surfaces.emplace_back(*metric, xaxis_idx, yaxis_idx, nbinsx, logx ? PROsurf::LogAxis : PROsurf::LinAxis, xlo, xhi,
                         nbinsy, logy ? PROsurf::LogAxis : PROsurf::LinAxis, ylo, yhi);
@@ -1030,7 +1045,7 @@ int main(int argc, char* argv[])
                 if(statonly)
                     brazil_band_surfaces.back().FillSurfaceStat(config, scanFitConfig, "");
                 else
-                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread);
+                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread, brazil_chi2, fitter.freq_seed_points);
 
                 TH2D surf("surf", (";"+xlabel+";"+ylabel).c_str(), surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data());
 
@@ -1332,6 +1347,11 @@ int main(int argc, char* argv[])
         for(const auto &[name, hist]: cv_hists) {
             hist->Write(name.c_str());
         }
+        for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
+          TH1D data_hist = data.toTH1D(config, channel);
+          data_hist.Write(("data_"+config.m_channel_plotnames[channel]).c_str());
+        }
+
         int io = 0;
         for(const auto &other: other_hists) {
             for(const auto &[name, hist]: other) {

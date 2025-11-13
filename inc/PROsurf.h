@@ -96,10 +96,10 @@ namespace PROfit {
 
             PROsurf(PROmetric &metric, size_t x_idx, size_t y_idx, size_t nbinsx, LogLin llx, float x_lo, float x_hi, size_t nbinsy, LogLin lly, float y_lo, float y_hi);
 
-            std::vector<surfOut> PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, int start, int end, uint32_t seed);
+            std::vector<surfOut> PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, int start, int end, uint32_t seed, const std::vector<Eigen::VectorXf> seed_pts);
 
             void FillSurfaceStat(const PROconfig &config, const PROfitterConfig &fitconfig, std::string filename);
-            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, int nthreads = 1, float min_chi = 0);
+            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, int nthreads = 1, float min_chi = 0, const std::vector<Eigen::VectorXf> &seed_pts = {});
 
     };
 

@@ -279,7 +279,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             return outs;
         }
 
-        std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, int start, int end, uint32_t seed){
+        std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, int start, int end, uint32_t seed, const std::vector<Eigen::VectorXf> seed_pts){
 
             std::vector<surfOut> outs;
 
@@ -315,13 +315,16 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 lb(y_idx) = multi_physics_params[i].grid_val[0];
                 ub(y_idx) = multi_physics_params[i].grid_val[0];
                 local_metric->setBounds(lb,ub);
+                std::vector<Eigen::VectorXf> seeds = seed_pts;
+                if(i != start) seeds.push_back(outs.back().best_fit);
 
                 PROfitter fitter(ub, lb, fitconfig, seed+i);
-                if(i!=start){
-                    output.chi = fitter.Fit(*local_metric, outs.back().best_fit);
-                }else{
-                    output.chi = fitter.Fit(*local_metric);
-                }
+                output.chi = fitter.Fit(*local_metric, seeds);
+               // if(i!=start){
+               //     output.chi = fitter.Fit(*local_metric, outs.back().best_fit);
+               // }else{
+               //     output.chi = fitter.Fit(*local_metric);
+               // }
                 output.best_fit = fitter.best_fit;
                 outs.push_back(output);
             }
@@ -332,7 +335,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
         }
 
 
-        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads, float min_chi) {
+        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads, float min_chi, const std::vector<Eigen::VectorXf &seed_pts) {
             std::ofstream chi_file;
             if(!filename.empty()){
                 chi_file.open(filename);
@@ -359,7 +362,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 int start = t * chunkSize;
                 int end = (t == nThreads - 1) ? loopSize : start + chunkSize;
                 futures.emplace_back(std::async(std::launch::async, [&, start, end]() {
-                            return this->PointHelper(fitconfig, grid, start, end, proseed.getThreadSeeds()->at(t));
+                            return this->PointHelper(fitconfig, grid, start, end, proseed.getThreadSeeds()->at(t), seed_pts);
                             }));
 
             }
