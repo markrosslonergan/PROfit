@@ -335,7 +335,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
         }
 
 
-        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads, float min_chi, const std::vector<Eigen::VectorXf &seed_pts) {
+        void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, int nThreads, float min_chi, const std::vector<Eigen::VectorXf> &seed_pts) {
             std::ofstream chi_file;
             if(!filename.empty()){
                 chi_file.open(filename);

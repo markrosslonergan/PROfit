@@ -628,20 +628,21 @@ int main(int argc, char* argv[])
         Eigen::VectorXf best_fit = fitter.best_fit;
        
        
-//        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-//        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
-//        log<LOG_INFO>(L"%1% || ################################################") % __func__;
-//        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
-//
-//        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
-//            float chi_freq = fitter.freq_seed_values.at(i);
-//             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
-//                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
-//                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
-//                chi2 = chi_freq;
-//                best_fit = fitter.freq_seed_points.at(i);
-//            }
-//        }
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
+        log<LOG_INFO>(L"%1% || ################################################") % __func__;
+        int nminima = 0;
+        if(!systs_only_profile) nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+
+        for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+            float chi_freq = fitter.freq_seed_values.at(i);
+             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+                log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                chi2 = chi_freq;
+                best_fit = fitter.freq_seed_points.at(i);
+            }
+        }
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
@@ -810,8 +811,10 @@ int main(int argc, char* argv[])
         c.Print((final_output_tag+"_postfit_correlation_matrix_nuisance_only.pdf").c_str());
         log<LOG_INFO>(L"%1% ||  Beginning full PROfile ") % __func__;
 
+        std::vector<Eigen::VectorXf> seed_pts = fitter.freq_seed_points;
+        if(seed_pts.empty()) seed_pts.push_back(fitter.best_fit);
         PROfile profile(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed, scanFitConfig, 
-                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, fitter.freq_seed_points,
+                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, seed_pts,
                 systs_only_profile ? systparams : allparams);
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
