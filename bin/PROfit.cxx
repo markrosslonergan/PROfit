@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
     std::map<std::string, float> scan_fit_options;
     std::map<std::string, float> global_fit_options;
     size_t maxevents;
-    int global_seed = -1;
+    long global_seed = -1;
     std::string log_file = "";
     std::string fit_preset = "good";
     static const std::unordered_set<std::string> allowed_preset = {"good","fast","overkill"};
@@ -180,6 +180,14 @@ int main(int argc, char* argv[])
     //PROtest, test things
     CLI::App *protest_command = app.add_subcommand("protest", "Testing ground for rapid quick tests.");
 
+    app.set_config("--config");
+    surface_command->configurable(true);
+    process_command->configurable(true);
+    profile_command->configurable(true);
+    protest_command->configurable(true);
+    unblind_command->configurable(true);
+    profc_command->configurable(true);
+    proplot_command->configurable(true);
 
     //Parse inputs. 
     CLI11_PARSE(app, argc, argv);
@@ -388,10 +396,10 @@ int main(int argc, char* argv[])
             }
         }
 
-        if(*profile_command || *surface_command || *protest_command){
-            log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
-            return 1;
-        }
+        //if(*profile_command || *surface_command || *protest_command){
+        //    log<LOG_ERROR>(L"%1% || ERROR --data can only be used with plot and unblind subcommands! ") % __func__  ;
+        //    return 1;
+        //}
 
 
     }//if no data, use injected or fake data;
@@ -623,7 +631,8 @@ int main(int argc, char* argv[])
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Freq Minima Finder     ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
-        int nminima = fitter.calcFreqSeedPoints(*metric_to_use);
+        int nminima = 0;
+        if(!systs_only_profile) nminima = fitter.calcFreqSeedPoints(*metric_to_use);
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
             float chi_freq = fitter.freq_seed_values.at(i);
@@ -802,8 +811,10 @@ int main(int argc, char* argv[])
         c.Print((final_output_tag+"_postfit_correlation_matrix_nuisance_only.pdf").c_str());
         log<LOG_INFO>(L"%1% ||  Beginning full PROfile ") % __func__;
 
+        std::vector<Eigen::VectorXf> seed_pts = fitter.freq_seed_points;
+        if(seed_pts.empty()) seed_pts.push_back(fitter.best_fit);
         PROfile profile(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed, scanFitConfig, 
-                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, fitter.freq_seed_points,
+                final_output_tag+"_PROfile", chi2, !systs_only_profile, nthread, seed_pts,
                 systs_only_profile ? systparams : allparams);
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
@@ -838,6 +849,7 @@ int main(int argc, char* argv[])
 
 
             }
+            metric->setBounds(lb, ub);
             PROfitter fitter(ub, lb, fitconfig);
 
             log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
@@ -918,10 +930,13 @@ int main(int argc, char* argv[])
                 nbinsy, logy ? PROsurf::LogAxis : PROsurf::LinAxis, ylo, yhi);
 
         if(!only_brazil) {
+            std::vector<Eigen::VectorXf> seeds;
+            if(global_fit_result_surf.size()) seeds.push_back(global_fit_result_surf);
+            else seeds.push_back(global_fit_result);
             if(statonly)
                 surface.FillSurfaceStat(config, scanFitConfig, final_output_tag+"_statonly_surface.txt");
             else
-                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread);
+                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread, global_fit_chi2_surf, seeds);
         }
 
         std::vector<float> binedges_x, binedges_y;
@@ -1014,6 +1029,21 @@ int main(int argc, char* argv[])
                     log<LOG_ERROR>(L"%1% || Unrecognized chi2 function %2%") % __func__ % chi2.c_str();
                     abort();
                 }
+                size_t nphys = metric->GetModel().nparams;
+                Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+                Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+                for(size_t i = 0; i < nphys; ++i) {
+                    lb(i) = metric->GetModel().lb(i);
+                    ub(i) = metric->GetModel().ub(i);
+                }
+                for(size_t i = nphys; i < nparams; ++i) {
+                    lb(i) = metric->GetSysts().spline_lo[i-nphys];
+                    ub(i) = metric->GetSysts().spline_hi[i-nphys];
+                }
+                metric->setBounds(lb, ub);
+                PROfitter fitter(ub, lb, fitconfig);
+                float brazil_chi2 = fitter.Fit(*metric); 
+                fitter.calcFreqSeedPoints(*metric);
 
                 brazil_band_surfaces.emplace_back(*metric, xaxis_idx, yaxis_idx, nbinsx, logx ? PROsurf::LogAxis : PROsurf::LinAxis, xlo, xhi,
                         nbinsy, logy ? PROsurf::LogAxis : PROsurf::LinAxis, ylo, yhi);
@@ -1021,7 +1051,7 @@ int main(int argc, char* argv[])
                 if(statonly)
                     brazil_band_surfaces.back().FillSurfaceStat(config, scanFitConfig, "");
                 else
-                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread);
+                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread, brazil_chi2, {fitter.best_fit});
 
                 TH2D surf("surf", (";"+xlabel+";"+ylabel).c_str(), surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data());
 
@@ -1240,6 +1270,16 @@ int main(int argc, char* argv[])
             c.Print((final_output_tag+"_PROplot_Covar.pdf" + "]").c_str(), "pdf");
         }
 
+        auto allmatrices = covarianceTH2D(allcovsyst, config, spec);
+        c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "[").c_str(), "pdf");
+        for(const auto &[name, mat]: allmatrices) {
+            if(name == "collapsed_total_cor") {
+                mat->Draw("colz");
+                c.Print((final_output_tag+"_PROplot_CovarAll.pdf").c_str(), "pdf");
+            }
+        }
+        c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "]").c_str(), "pdf");
+
         //errorband
         int global_channel_index = 0;
         std::unique_ptr<PROmetric> allcov_metric(metric->Clone());
@@ -1313,6 +1353,11 @@ int main(int argc, char* argv[])
         for(const auto &[name, hist]: cv_hists) {
             hist->Write(name.c_str());
         }
+        for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
+          TH1D data_hist = data.toTH1D(config, channel);
+          data_hist.Write(("data_"+config.m_channel_plotnames[channel]).c_str());
+        }
+
         int io = 0;
         for(const auto &other: other_hists) {
             for(const auto &[name, hist]: other) {
