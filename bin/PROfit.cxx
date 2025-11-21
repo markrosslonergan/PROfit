@@ -930,10 +930,13 @@ int main(int argc, char* argv[])
                 nbinsy, logy ? PROsurf::LogAxis : PROsurf::LinAxis, ylo, yhi);
 
         if(!only_brazil) {
+            std::vector<Eigen::VectorXf> seeds;
+            if(global_fit_result_surf.size()) seeds.push_back(global_fit_result_surf);
+            else seeds.push_back(global_fit_result);
             if(statonly)
                 surface.FillSurfaceStat(config, scanFitConfig, final_output_tag+"_statonly_surface.txt");
             else
-                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread, global_fit_chi2_surf);
+                surface.FillSurface(scanFitConfig, final_output_tag+"_surface.txt",myseed,nthread, global_fit_chi2_surf, seeds);
         }
 
         std::vector<float> binedges_x, binedges_y;
@@ -1048,7 +1051,7 @@ int main(int argc, char* argv[])
                 if(statonly)
                     brazil_band_surfaces.back().FillSurfaceStat(config, scanFitConfig, "");
                 else
-                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread, brazil_chi2, fitter.freq_seed_points);
+                    brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, nthread, brazil_chi2, {fitter.best_fit});
 
                 TH2D surf("surf", (";"+xlabel+";"+ylabel).c_str(), surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data());
 
