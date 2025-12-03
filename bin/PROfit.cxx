@@ -969,8 +969,7 @@ int main(int argc, char* argv[])
 
         std::vector<float> binedges_x, binedges_y;
         for(size_t i = 0; i < surface.nbinsx+1; i++)
-            binedges_x.push_back(logx ? std::pow(10, surfa
-        ce.edges_x(i)) : surface.edges_x(i));
+            binedges_x.push_back(logx ? std::pow(10, surface.edges_x(i)) : surface.edges_x(i));
         for(size_t i = 0; i < surface.nbinsy+1; i++)
             binedges_y.push_back(logy ? std::pow(10, surface.edges_y(i)) : surface.edges_y(i));
 

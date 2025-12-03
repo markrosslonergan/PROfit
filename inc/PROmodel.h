@@ -616,20 +616,11 @@ public:
         default_val = Eigen::VectorXf(3);
 
         // Δm²: 10^[-2,2] eV²
-        lb(0) = -2.0f;
-        ub(0) =  2.0f;
+        lb << -2.0f, -std::numeric_limits<float>::infinity(),   0.001f;
+        ub <<  2.0f,   -1e-3f,    1.0f;
 
-        // sin²2θ_μμ: log10, < 1 (so < 10^0); cap at -1e-3 for safety
-        lb(1) = -std::numeric_limits<float>::infinity();
-        ub(1) = -1e-3f;
-
-        // sB ∈ [0,1]
-        lb(2) = 0.001f;
-        ub(2) = 1.0f;
-
-        // Some reasonable defaults
         default_val << -2.0f, -8.0f, 0.0f;
-
+        
         // -----------------------------------------
         // 5) Unitarity / physicality constraint
         // -----------------------------------------
@@ -645,10 +636,10 @@ public:
     // 0 ≤ sB ≤ 1 and Ue4² + Uμ4² < 1
     // ---------------------------------------------
     int UnitarityConstraint(const Eigen::VectorXf &v) {
-        float s2mumu = std::pow(10.0f, v(1));  // sin²2θμμ
+        float sinsq2thmumu = std::pow(10.0f, v(1));  // sin²2θμμ
         float sB     = v(2);                   // ratio parameter
 
-        float rad = 1.0f - s2mumu;
+        float rad = 1.0f - sinsq2thmumu;
         float Um4sq = (1.0f - std::sqrt(rad)) / 2.0f;
         float Ue4sq = sB * (1.0f - Um4sq);     // from definition of sB
 
@@ -658,13 +649,13 @@ public:
     // ---------------------------------------------
     // νμ → νμ disappearance
     // ---------------------------------------------
-    float Pmumu(float dmsq_log, float s2mumu_log, float sB, float le) const {
-        float dmsq   = std::pow(10.0f, dmsq_log);
-        float s2mumu = std::pow(10.0f, s2mumu_log);
+    float Pmumu(float dmsq, float sinsq2thmumu, float sB, float le) const {
+        dmsq   = std::pow(10.0f, dmsq);
+        sinsq2thmumu = std::pow(10.0f, sinsq2thmumu);
 
 
         float sinterm = std::sin(1.27f * dmsq * le);
-        float prob    = 1.0f - s2mumu * sinterm * sinterm;
+        float prob    = 1.0f - sinsq2thmumu * sinterm * sinterm;
 
         if (prob < 0.0f || prob > 1.0f) {
             log<LOG_ERROR>(
@@ -681,11 +672,11 @@ public:
     // ---------------------------------------------
     // νμ → νe appearance
     // ---------------------------------------------
-    float Pmue(float dmsq_log, float s2mumu_log, float sB, float le) const {
-        float dmsq   = std::pow(10.0f, dmsq_log);
-        float s2mumu = std::pow(10.0f, s2mumu_log);
+    float Pmue(float dmsq, float sinsq2thmumu, float sB, float le) const {
+        dmsq   = std::pow(10.0f, dmsq);
+        sinsq2thmumu = std::pow(10.0f, sinsq2thmumu);
 
-        float rad = 1.0f - s2mumu;
+        float rad = 1.0f - sinsq2thmumu;
         float Um4sq = (1.0f - std::sqrt(rad)) / 2.0f;
         float Ue4sq = sB * (1.0f - Um4sq);
 
@@ -707,11 +698,11 @@ public:
     // ---------------------------------------------
     // νe → νe disappearance
     // ---------------------------------------------
-    float Pee(float dmsq_log, float s2mumu_log, float sB, float le) const {
-        float dmsq   = std::pow(10.0f, dmsq_log);
-        float s2mumu = std::pow(10.0f, s2mumu_log);
+    float Pee(float dmsq, float sinsq2thmumu, float sB, float le) const {
+        dmsq   = std::pow(10.0f, dmsq);
+        sinsq2thmumu = std::pow(10.0f, sinsq2thmumu);
 
-        float rad = 1.0f - s2mumu;
+        float rad = 1.0f - sinsq2thmumu;
         float Um4sq = (1.0f - std::sqrt(rad)) / 2.0f;
         float Ue4sq = sB * (1.0f - Um4sq);  
 
@@ -849,10 +840,10 @@ public:
     // --------------------------------------------------------
     // νμ → νμ disappearance
     // --------------------------------------------------------
-    float Pmumu(float dmsq_log, float sinsq2thee_log, float rA, float le) const {
+    float Pmumu(float dmsq, float sinsq2thee, float rA, float le) const {
 
-        float dmsq        = std::pow(10.0f, dmsq_log);
-        float sinsq2thee  = std::pow(10.0f, sinsq2thee_log);
+        dmsq        = std::pow(10.0f, dmsq);
+        sinsq2thee  = std::pow(10.0f, sinsq2thee);
 
         float rad   = 1.0f - sinsq2thee;
         float root  = std::sqrt(rad);
@@ -872,10 +863,10 @@ public:
     // --------------------------------------------------------
     // νμ → νe appearance
     // --------------------------------------------------------
-    float Pmue(float dmsq_log, float sinsq2thee_log, float rA, float le) const {
+    float Pmue(float dmsq, float sinsq2thee, float rA, float le) const {
 
-        float dmsq        = std::pow(10.0f, dmsq_log);
-        float sinsq2thee  = std::pow(10.0f, sinsq2thee_log);
+        dmsq        = std::pow(10.0f, dmsq);
+        sinsq2thee  = std::pow(10.0f, sinsq2thee);
 
         float rad   = 1.0f - sinsq2thee;
         float root  = std::sqrt(rad);
@@ -895,10 +886,10 @@ public:
     // --------------------------------------------------------
     // νe → νe disappearance
     // --------------------------------------------------------
-    float Pee(float dmsq_log, float sinsq2thee_log, float rA, float le) const {
+    float Pee(float dmsq, float sinsq2thee, float rA, float le) const {
 
-        float dmsq        = std::pow(10.0f, dmsq_log);
-        float sinsq2thee  = std::pow(10.0f, sinsq2thee_log);
+        dmsq        = std::pow(10.0f, dmsq);
+        sinsq2thee  = std::pow(10.0f, sinsq2thee);
 
         float sinterm = std::sin(1.27f * dmsq * le);
         float prob    = 1.0f - sinsq2thee * sinterm * sinterm;
@@ -1147,6 +1138,7 @@ public:
 
 };
 
+
 // Main interface to different models
 static inline
 std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const PROpeller &prop) {
@@ -1162,6 +1154,12 @@ std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const P
         return std::unique_ptr<PROmodel>(new PRO3p1(prop,config.m_model_parameter_map));
     } else if(name == "3+1_3C") {
         return std::unique_ptr<PROmodel>(new PRO3p1_3C(prop,config.m_model_parameter_map));
+    } else if(name == "3+1_3A") {
+        return std::unique_ptr<PROmodel>(new PRO3p1_3A(prop,config.m_model_parameter_map));
+    } else if(name == "3+1_3B") {
+        return std::unique_ptr<PROmodel>(new PRO3p1_3B(prop,config.m_model_parameter_map));
+    } else if(name == "3+2") {
+        return std::unique_ptr<PROmodel>(new PRO3p2(prop,config.m_model_parameter_map));
     }
     log<LOG_ERROR>(L"%1% || Unrecognized model name %2%. Try numudis, nueapp, 3+1 or 3+1_3C for now. Terminating.") % __func__ % name.c_str();
     exit(EXIT_FAILURE);
