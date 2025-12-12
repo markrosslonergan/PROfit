@@ -819,12 +819,18 @@ int main(int argc, char* argv[])
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
                 systs_only_profile ? systparams : allparams);
+
         TFile fout((final_output_tag+"_PROfile.root").c_str(), "RECREATE");
         profile.onesig.Write("one_sigma_errs");
+        for(const auto &g : profile.graphs)
+            g->Write(g->GetTitle());
         pre_hist.Write("cv");
         err_band->Write("prefit_errband");
         post_err_band->Write("postfit_errband");
         post_hist.Write("best_fit");
+        spline_cov.Write("spline_corr");
+        corrhist.Write("all_corr");
+        data.toTH1D(config, 0).Write("data"); // Hardcoded to first mode/detector/channel
 
         //***********************************************************************
         //***********************************************************************
