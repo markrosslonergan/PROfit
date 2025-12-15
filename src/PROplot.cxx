@@ -672,6 +672,8 @@ namespace PROfit{
 
                         TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
                         leg->SetNColumns(3);
+                        leg->SetFillStyle(0);
+                        leg->SetLineWidth(0);
                         //leg->SetHeader(tag.c_str(), "C");  // Center-aligned header
 
 
@@ -721,9 +723,9 @@ namespace PROfit{
                         for (size_t i = 0; i < nbins; ++i) {
                             hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                         }
-                        leg->AddEntry(hsum,"Sum","l");
+                        leg->AddEntry(hsum,("All "+tag).c_str(),"l");
 
-                        hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+                        hsum->SetXTitle(config.m_channel_units[channel].c_str());
                         hsum->SetYTitle("Fractional Uncertainty");
                         hsum->SetLineColor(kBlack);
                         hsum->SetLineWidth(2);
@@ -751,6 +753,8 @@ namespace PROfit{
                     hsum->Reset();
                     TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
                     leg->SetNColumns(3);
+                    leg->SetFillStyle(0);
+                    leg->SetLineWidth(0);
                     std::vector<TH1F*> hvec;
                     for(size_t t=0; t< vsums.size(); t++){
                         int color_idx = t % colors.size();
@@ -768,9 +772,9 @@ namespace PROfit{
                     for (size_t i = 0; i < nbins; ++i) {
                         hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                     }
-                    leg->AddEntry(hsum,"Sum","l");
-                    hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
-                    hsum->SetTitle("Summary!");
+                    leg->AddEntry(hsum,"All Systematics","l");
+                    hsum->SetXTitle(config.m_channel_units[channel].c_str());
+                    hsum->SetTitle("");
                     hsum->SetYTitle("Fractional Uncertainty");
                     hsum->SetLineColor(kBlack);
                     hsum->SetLineWidth(2);
