@@ -2,6 +2,14 @@
 
 namespace PROfit{
 
+int Black;
+int Blue;
+int Orange;
+int Green;
+int SkyBlue;
+int Vermilion;
+int Purple;
+
 
     std::map<std::string, std::unique_ptr<TH1D>> getCVHists(const PROspec &spec, const PROconfig& inconfig, bool scale, int other_index) {
         std::map<std::string, std::unique_ptr<TH1D>> hists;  
@@ -575,30 +583,19 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename) {
+    std::map<std::string, std::unique_ptr<TH1F>> plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, float frac_max, std::vector<std::string> fracsummary_order, std::string fracsummary_allname) {
         //Input PROsyst needs to be the allsplinesyst for now
 
+        std::map<std::string, std::unique_ptr<TH1F>> hists;
+
         std::vector<int> colors = {
-            kAzure+1,      // Light blue
-            kRed+1,        // Bright red
-            kGreen+3,      // Medium green
-            kOrange+7,      // Deep orange
-            kBlue+2,        // Darker blue
-            kViolet+2,      // Purple/violet
-            kGray+1,         // Light gray
-            kYellow+2,      // Golden yellow
-            kTeal+3,        // Teal
-            kPink+2,        // Pink
-            kMagenta+2,     // Magenta
-            kSpring+5      // Blue-green
+            Blue, Orange, Green, SkyBlue, Vermilion, Purple
         };
 
         std::vector<int> line_styles = {
             1,  // Solid (base style)
             1,  // Dashed
         };
-
-
 
         //some testing
         for (const auto& [syst_name, tags] : config.m_mcgen_variation_tags) {
@@ -670,7 +667,7 @@ namespace PROfit{
                         c.cd(padIndex++);
                         bool first=true;
 
-                        TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                        TLegend* leg = new TLegend(0.14, 0.6, 0.89, 0.89);
                         leg->SetNColumns(3);
                         leg->SetFillStyle(0);
                         leg->SetLineWidth(0);
@@ -718,6 +715,7 @@ namespace PROfit{
                             h->SetLineColor(colors[color_idx]);
                             h->SetLineStyle(line_styles[style_idx]);
                             hvec.push_back(h);
+                            hists[plotname] = std::make_unique<TH1F>(*h);
 
                         }//end syst
                         for (size_t i = 0; i < nbins; ++i) {
@@ -734,6 +732,7 @@ namespace PROfit{
                         hsum->SetStats(0);  
                         hsum->Draw("HIST");
                         hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                        //hsum->SetMaximum(frac_max);
                         gPad->Modified();
                         gPad->Update();
 
@@ -741,6 +740,7 @@ namespace PROfit{
                         vsums.push_back(hsum);
                         vnames.push_back(tag);
                         for(auto &h:hvec) h->Draw("HIST SAME");
+                        gPad->RedrawAxis();
 
                         leg->Draw();
                     }//end tag
@@ -751,28 +751,41 @@ namespace PROfit{
 
                     TH1F* hsum = new TH1F( ("USum_"+std::to_string(global_channel_index)).c_str(),"Summary!", bin_edges.size()-1, bin_edges.data());
                     hsum->Reset();
-                    TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                    TLegend* leg = new TLegend(0.14, 0.6, 0.89, 0.89);
                     leg->SetNColumns(3);
                     leg->SetFillStyle(0);
                     leg->SetLineWidth(0);
                     std::vector<TH1F*> hvec;
+                    std::map<std::string, TH1F*> hs;
                     for(size_t t=0; t< vsums.size(); t++){
                         int color_idx = t % colors.size();
                         for (size_t i = 0; i < nbins; ++i) {
                             hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+pow(vsums.at(t)->GetBinContent(i+1),2));
                         }
                         TH1F * h = (TH1F*)vsums.at(t)->Clone((to_string(global_channel_index)+vnames[t]).c_str());
-                        leg->AddEntry(h, vnames[t].c_str(), "l");
+                        if(!fracsummary_order.size()) leg->AddEntry(h, vnames[t].c_str(), "l");
+                        else hs[vnames[t]] = h;
                         h->SetLineColor(colors[color_idx]);
                         h->SetLineStyle(1);
                         h->SetLineWidth(1);
                         hvec.push_back(h);
+                        hists[vnames[t]] = std::make_unique<TH1F>(*h);
+                    }
+                    if(fracsummary_order.size()) {
+                        for(const auto &name : fracsummary_order) {
+                            if(hs.find(name) == hs.end()) {
+                                log<LOG_ERROR>(L"%1% || Could not find %2% in fractional uncertainty list.")
+                                    % __func__ % name.c_str();
+                                std::abort();
+                            }
+                            leg->AddEntry(hs.at(name), name.c_str(), "l");
+                        }
                     }
 
                     for (size_t i = 0; i < nbins; ++i) {
                         hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                     }
-                    leg->AddEntry(hsum,"All Systematics","l");
+                    leg->AddEntry(hsum,fracsummary_allname.c_str(),"l");
                     hsum->SetXTitle(config.m_channel_units[channel].c_str());
                     hsum->SetTitle("");
                     hsum->SetYTitle("Fractional Uncertainty");
@@ -783,14 +796,26 @@ namespace PROfit{
                     hsum->SetStats(0);  
                     hsum->Draw("HIST");
                     //hsum->SetMaximum(hsum->GetMaximum()*1.7);
-                    hsum->SetMaximum(1.2);
+                    hsum->SetMaximum(frac_max);
                     gPad->Modified();
                     gPad->Update();
                     for(auto &h:hvec) h->Draw("HIST SAME");
+                    gPad->RedrawAxis();
                     leg->Draw();
+                    hists["all"] = std::make_unique<TH1F>(*hsum);
 
 
                     c.Print(filename.c_str());
+                    TCanvas c2;
+                    hsum->SetLineWidth(2);
+                    hsum->Draw("HIST");
+                    for(auto &h:hvec) { h->SetLineWidth(2); h->Draw("HIST SAME"); }
+                    gPad->RedrawAxis();
+                    leg->Draw();
+                    c2.Print((filename+".summary.pdf").c_str());
+
+                    c.cd();
+
                     global_channel_index++;
                 }
             }
@@ -799,6 +824,6 @@ namespace PROfit{
 
 
         c.Print((filename+"]").c_str());
-        return 0;
+        return hists;
     };
 }

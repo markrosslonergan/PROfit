@@ -35,6 +35,14 @@
 #include "TLine.h"
 namespace PROfit{
 
+    extern int Black;
+    extern int Blue;
+    extern int Orange;
+    extern int Green;
+    extern int SkyBlue;
+    extern int Vermilion;
+    extern int Purple;
+
     enum class PlotOptions {
         Default = 0,
         CVasStack = 1 << 0,
@@ -69,7 +77,7 @@ namespace PROfit{
     std::map<std::string, std::vector<std::pair<std::unique_ptr<TGraph>,std::unique_ptr<TGraph>>>> getSplineGraphs(const PROsyst &systs, const PROconfig &config);
     std::unique_ptr<TGraphAsymmErrors> getErrorBand(const PROconfig &config, const PROpeller &prop, const PROsyst &syst, bool scale = false, int other_index = -1);
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename);
+    std::map<std::string, std::unique_ptr<TH1F>> plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, float frac_max = 1.0f, std::vector<std::string> fracsummary_order = {}, std::string fracsummary_allname = "All Systematics");
 
     template<class T, class P>
     std::unique_ptr<TGraphAsymmErrors> getMCMCErrorBand(Metropolis<T, P> met, size_t burnin, size_t iterations, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, bool scale = false) {

@@ -103,7 +103,7 @@
   
   <!---Normalization systematics-->
   <allowlist type="norm" binning="reco" plotname="Flux Normalization" tag="Flux Systematics">nu_ICARUS_numu_n:0.02</allowlist>
-  <allowlist type="norm" plotname="Fiducial Volume" tag="Detector Systematics">nu_ICARUS:0.01</allowlist>
+  <allowlist type="norm" plotname="Fiducial Volume" tag="Fiducial Volume">nu_ICARUS:0.01</allowlist>
 
   <!--For Fake Data Studies-->
   <!--<allowlist type="spline"  binning="other0" plotname="LQCD_QE" tag="fakedata" knobvals="0 1">GENIEReWeight_SBNNuSyst_LQCDZExpFit_multisim_ZExpAVariationResponse</allowlist>-->

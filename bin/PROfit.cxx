@@ -52,10 +52,37 @@ std::wostream *OSTREAM = &wcout;
 std::wofstream LOG_FILE_STREAM;
 bool LOGGING_TO_FILE = false;
 
+// Copied from DUNE
+void set_colors() {
+    //const TColor __kOIOrange(TColor::GetFreeColorIndex(), 0.90, 0.60, 0);
+    PROfit::Orange = TColor::GetColor("#E69F00");
+
+    //const TColor __kOISkyBlue(TColor::GetFreeColorIndex(), 0.35, 0.70, 0.90);
+    PROfit::SkyBlue = TColor::GetColor("#56B4E9");
+
+    //const TColor __kOIBlueGreen(TColor::GetFreeColorIndex(), 0, 0.60, 0.50);
+    PROfit::Green = TColor::GetColor("#009E73");
+
+    // We don't use Yellow in ICARUS
+    //const TColor __kOIYellow(TColor::GetFreeColorIndex(), 0.95, 0.90, 0.25);
+    //PROfit::Yellow = #F0E442
+
+    //const TColor __kOIBlue(TColor::GetFreeColorIndex(), 0, 0.45, 0.70);
+    PROfit::Blue = TColor::GetColor("#0072B2");
+
+    //const TColor __kOIVermilion(TColor::GetFreeColorIndex(), 0.80, 0.40, 0);
+    PROfit::Vermilion = TColor::GetColor("#D55E00");
+
+    //const TColor __kOIRedPurple(TColor::GetFreeColorIndex(), 0.80, 0.60, 0.70);
+    PROfit::Purple = TColor::GetColor("#CC79A7");
+
+    PROfit::Black = kBlack;
+}
 
 int main(int argc, char* argv[])
 {
     gStyle->SetOptStat(0);
+    set_colors();
     CLI::App app{"PROfit: a PROfessional, PROductive fitting and oscillation framework. Together let's minimize PROfit!"}; 
     std::ios_base::sync_with_stdio(true);
 
@@ -87,6 +114,9 @@ int main(int argc, char* argv[])
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool systs_only_profile = false;
+    float frac_max = 1.0f;
+    std::vector<std::string> fracsummary_order;
+    std::string fracsummary_allname = "All Systematics";
 
     float xlo, xhi, ylo, yhi;
     std::array<float, 2> xlims, ylims;
@@ -169,6 +199,9 @@ int main(int argc, char* argv[])
     CLI::App *proplot_command = app.add_subcommand("plot", "Make plots of CV, or injected point with error bars and covariance.");
     proplot_command->add_flag("--with-splines", with_splines, "Include graphs of splines in output.");
     proplot_command->add_flag("--area-norm", area_normalized, "Make area normalized histograms.");
+    proplot_command->add_option("--frac-max", frac_max, "Maximum value for fractional uncertainty plots");
+    proplot_command->add_option("--fracsummary-order", fracsummary_order, "Order of labels in summary plot for fractional uncertainties.");
+    proplot_command->add_option("--fracsummary-allname", fracsummary_allname, "Legend name for 'All Systematics' line in summary plot of fractional uncertainties.");
 
     //PROfc, Feldmand-Cousins
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
@@ -1157,7 +1190,7 @@ int main(int argc, char* argv[])
         }
 
         std::string filename = final_output_tag+"_fractional_systematics.pdf";
-        plotPriorFractionalSystematicBreakdown(config, spec, allcovsyst, filename);
+        std::map<std::string, std::unique_ptr<TH1F>> frac_uncert = plotPriorFractionalSystematicBreakdown(config, spec, allcovsyst, filename, frac_max, fracsummary_order, fracsummary_allname);
 
         std::map<std::string, std::unique_ptr<TH1D>> cv_hists = getCVHists(spec, config, binwidth_scale);
         std::vector<std::map<std::string, std::unique_ptr<TH1D>>> other_hists;
@@ -1381,6 +1414,11 @@ int main(int argc, char* argv[])
                 hist->Write(name.c_str());
             }
         }
+
+        fout.mkdir("Fractional");
+        fout.cd("Fractional");
+        for(const auto &[name, frac]: frac_uncert)
+            frac->Write(name.c_str());
 
         fout.mkdir("Covariance");
         fout.cd("Covariance");
