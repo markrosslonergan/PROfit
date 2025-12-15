@@ -1,0 +1,162 @@
+<?xml version="1.0" ?>
+
+<!--specifies neutrino mode or antineutrino mode-->
+<mode name="nu" />
+
+<detector name="ICARUS" />
+
+<channel name="numu" unit="Reconstructed Neutrino Energy [GeV]">
+    <bins edges="0.3 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1.0 1.25 1.5 2.0 2.5"/>
+    <truebins min="0" max="3" nbins="150"/>
+    <otherbins unit="True E [GeV]" min="0.3" max="3" nbins="20"/>
+    <subchannel name="intime" plotname="Intime Cosmics" color="#FBBC04"/>
+    <subchannel name="cos" plotname="Cosmics" color="#E37400"/>
+    <subchannel name="nc" plotname="NC" color="#FF6961"/>
+    <subchannel name="nuecc" plotname="#nu_{e} CC" color="#34A853"/>
+    <subchannel name="numucc" plotname="#nu_{#mu} CC" color="#99CCFF"/>
+
+</channel>
+
+<plotpot value="1.596e20"/>
+
+<variation_list>
+    <!-- MC Statistics -->
+    <allowlist type="mcstat" plotname="MC Stats" tag="stat"></allowlist>
+    
+    <!-- Interaction Model Systematics -->
+    <allowlist type="spline" binning="other0" plotname="ZExp_b1" tag="xsecsyst">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b1</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b2" tag="xsecsyst">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b2</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b3" tag="xsecsyst">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b3</allowlist>
+    <allowlist type="spline" binning="other0" plotname="ZExp_b4" tag="xsecsyst">ZExpPCAWeighter_SBNNuSyst_ZExpPCA_multisigma_b4</allowlist>
+    <allowlist type="covariance" plotname="NCELVariationResponse" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NCELVariationResponse</allowlist>
+    <allowlist type="spline" binning="other0" plotname="MaCCRES" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_MaCCRES</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="MvCCRES" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_MvCCRES</allowlist>
+    <allowlist type="covariance" plotname="NCRESVariationResponse" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NCRESVariationResponse</allowlist>
+    <allowlist type="covariance" plotname="COHVariationResponse" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_COHVariationResponse</allowlist>
+    <allowlist type="covariance" plotname="DISBYVariationResponse" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_DISBYVariationResponse</allowlist>
+    <allowlist type="covariance" plotname="FSI_pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_FSI_pi_VariationResponse</allowlist>
+    <allowlist type="covariance" plotname="FSI_N" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_FSI_N_VariationResponse</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="RPA_CCQE" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_RPA_CCQE</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="CoulombCCQE" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_CoulombCCQE</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="NormCCMEC" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_NormCCMEC</allowlist>
+    <allowlist type="covariance" plotname="NormNCMEC" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NormNCMEC</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpCC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvpCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpCC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvpCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpNC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvpNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvpNC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvpNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnCC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvnCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnCC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvnCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnNC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvnNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvnNC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvnNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpCC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpCC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpNC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarpNC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarpNC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnCC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnCC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnCC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnCC2pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnNC1pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnNC1pi</allowlist>
+    <allowlist type="covariance" plotname="NonRESBGvbarnNC2pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisim_NonRESBGvbarnNC2pi</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="FrCEx_N" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_FrCEx_N</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="FrCEx_pi" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_FrCEx_pi</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="DecayAngMEC" tag="xsecsyst">GENIEReWeight_SBN_v1_multisigma_DecayAngMEC</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="XSecShape_CCMEC" tag="xsecsyst">GENIEReWeight_SBNNuSyst_GENIE_multisigma_XSecShape_CCMEC</allowlist>
+    <allowlist type="spline"  binning="other0" plotname="FracPN_CCMEC" tag="xsecsyst">GENIEReWeight_SBNNuSyst_GENIE_multisigma_FracPN_CCMEC</allowlist>
+
+    <!--- Flux covariance syststematics -->
+    <allowlist type="covariance" tag="fluxsyst">expskin_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">horncurrent_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">nucleoninexsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">nucleonqexsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">nucleontotxsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">pioninexsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">pionqexsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">piontotxsec_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">piplus_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">piminus_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">kplus_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">kminus_Flux</allowlist>  
+    <allowlist type="covariance" tag="fluxsyst">kzero_Flux</allowlist> 
+
+    <!--- Detector and Reconstruction Systematics -->
+    <allowlist type="spline" binning="reco" plotname="8msLifetime" tag="detsyst">var01</allowlist>
+    <allowlist type="spline" binning="reco" plotname="Ind1WireGap" tag="detsyst">var04</allowlist>
+    <allowlist type="spline" binning="reco" plotname="Ind2ShapingTime" tag="detsyst">var11</allowlist>
+    <allowlist type="spline" binning="reco" plotname="Recomb" tag="detsyst">var05</allowlist>
+    <allowlist type="spline" binning="reco" plotname="PMTQE" tag="detsyst">var06</allowlist>
+    <allowlist type="spline" binning="reco" plotname="CohNoise" tag="detsyst">var10</allowlist>
+    <allowlist type="spline" binning="reco" plotname="IntNoise" tag="detsyst">var13</allowlist>
+    <allowlist type="spline" binning="reco" plotname="TPCYZNonUni" tag="detsyst">var07</allowlist>
+    <allowlist type="spline" binning="reco" plotname="SignalShape" tag="detsyst">var12</allowlist>
+
+    <!-- Unused Detector and Reconstruction Systematics -->
+    <!--<allowlist type="spline" binning="reco" plotname="OldIntrinsicNoise" tag="det">var09</allowlist>-->
+    <!--<allowlist type="spline" binning="reco" plotname="FrontInductionGain" tag="det">var03</allowlist>-->
+
+    <!--- Normalization Systematics -->
+    <allowlist type="norm" binning="reco" plotname="FluxNorm">nu_ICARUS_numu_n:0.02</allowlist>
+    <allowlist type="norm" plotname="FiducialVol">nu_ICARUS:0.01</allowlist>
+</variation_list>
+
+<model tag="numudis">
+    <rule index="0" name="No Osc"/>
+    <rule index="1" name="Numu Dis"/>
+</model>
+
+<MCFile treename="events/full/selected" filename="spine_mc.root" scale = "1.0" pot="1.67528e21"> 
+    <friend treename="events/full/multisigmaTree" />
+    <friend treename="events/full/multisimTree" />
+    <friend treename="events/full/variationTree" />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_numucc"
+        name                  = "reco_visible_energy"
+        true_param_name       = "true_neutrino_energy" 
+        model_rule            = "1"
+        true_L_name           = "true_baseline / 1000"
+        pdg_name              = "true_pdg"
+        additional_weight     = "true_cc && (true_pdg == 14 || true_pdg == -14) && true_neutrino_id >= 0"
+        other_param_names     = "true_neutrino_energy"
+        />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_nuecc"
+        name                  = "reco_visible_energy"
+        true_param_name       = "true_neutrino_energy" 
+        model_rule            = "0"
+        true_L_name           = "true_baseline / 1000"
+        pdg_name              = "true_pdg"
+        additional_weight     = "true_cc && (true_pdg == 12 || true_pdg == -12) && true_neutrino_id >= 0"
+        other_param_names     = "true_neutrino_energy"
+        />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_nc"
+        name                  = "reco_visible_energy"
+        true_param_name       = "true_neutrino_energy" 
+        model_rule            = "1"
+        true_L_name           = "true_baseline / 1000"
+        pdg_name              = "true_pdg"
+        additional_weight     = "true_cc == 0 && true_neutrino_id >= 0"
+        other_param_names     = "true_neutrino_energy"
+        />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_cos"
+        name                  = "reco_visible_energy"
+        incl_systematics      = "false"
+        model_rule            = "0"
+        true_param_name       = "0"
+        true_L_name           = "0"
+        pdg_name              = "0"
+        additional_weight     = "true_neutrino_id < 0"
+        other_param_names     = "0"
+        />
+</MCFile>
+<MCFile treename="events/offbeam/selected" filename="spine_mc.root" scale = "1.0" pot="1.596e20"> 
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_intime"
+        name                  = "reco_visible_energy"
+        incl_systematics      = "false"
+        model_rule            = "0"
+        true_param_name       = "0"
+        true_L_name           = "0"
+        pdg_name              = "0"
+        other_param_names     = "0"
+        />
+</MCFile>

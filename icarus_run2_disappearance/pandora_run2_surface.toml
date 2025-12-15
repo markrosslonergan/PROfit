@@ -1,0 +1,13 @@
+xml = pandora_mc.xml
+tag = pandora
+output = run2
+chi2 = PROCNP
+verbosity = 2
+nthread = 8
+data = pandora_data.xml
+
+[surface]
+grid = 60
+#xlo = 1e-2
+xlo = 1e-1
+ylims = 0.3 100

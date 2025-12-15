@@ -1,0 +1,13 @@
+xml = spine_mc.xml
+data = spine_data.xml
+tag = spine
+output = run2
+chi2 = PROCNP
+verbosity = 2
+nthread = 8
+
+[surface]
+grid = 60
+#xlo = 1e-2
+xlo = 5e-2
+ylo = 0.3

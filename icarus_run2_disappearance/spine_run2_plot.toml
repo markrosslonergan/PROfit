@@ -1,0 +1,10 @@
+xml = spine_mc.xml
+data = spine_data.xml
+tag = spine
+output = run2
+chi2 = PROCNP
+verbosity = 2
+nthread = 8
+scale-by-width = true
+
+[plot]

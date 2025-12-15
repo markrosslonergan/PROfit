@@ -1,0 +1,10 @@
+xml = pandora_mc.xml
+tag = pandora
+output = run2
+chi2 = PROCNP
+verbosity = 2
+nthread = 8
+data = pandora_data.xml
+scale-by-width = true
+
+[plot]
