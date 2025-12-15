@@ -5,6 +5,7 @@ chi2 = PROCNP
 verbosity = 2
 nthread = 8
 data = pandora_data.xml
+label = Pandora
 
 [surface]
 grid = 60

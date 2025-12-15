@@ -6,5 +6,6 @@ chi2 = PROCNP
 verbosity = 2
 nthread = 8
 scale-by-width = true
+label = SPINE
 
 [plot]

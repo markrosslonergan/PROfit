@@ -5,6 +5,7 @@ output = run2
 chi2 = PROCNP
 verbosity = 2
 nthread = 8
+label = SPINE
 
 [surface]
 grid = 60

@@ -193,7 +193,7 @@ int Purple;
     }
 
 
-    void plot_channels(const std::string &filename, const PROconfig &config, std::optional<PROspec> cv, std::optional<PROspec> best_fit, std::optional<PROdata> data, std::optional<TGraphAsymmErrors*> errband, std::optional<TGraphAsymmErrors*> posterrband, std::vector<TPaveText> &texts, PlotOptions opt, int other_index) {
+    void plot_channels(const std::string &filename, const PROconfig &config, std::optional<PROspec> cv, std::optional<PROspec> best_fit, std::optional<PROdata> data, std::optional<TGraphAsymmErrors*> errband, std::optional<TGraphAsymmErrors*> posterrband, std::vector<TPaveText> &texts, std::string label, PlotOptions opt, int other_index) {
         TCanvas c;
         c.Print((filename+"[").c_str());
 
@@ -218,13 +218,17 @@ int Purple;
                 for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
                     size_t channel_nbins = other_index < 0 ? config.m_channel_num_bins[channel] : config.m_channel_num_other_bins[channel][other_index];
 
-                    Color_t bfcol = TColor::GetColor(234, 67, 53);//ncie red
-                    Color_t cvcol =  TColor::GetColor(66, 103, 210);//nice blue :)
+                    //Color_t bfcol = TColor::GetColor(234, 67, 53);//ncie red
+                    //Color_t cvcol =  TColor::GetColor(66, 103, 210);//nice blue :)
+                    int bfcol = Vermilion;
+                    int cvcol = Blue;
                     if(!best_fit)cvcol=kBlack;
 
                     std::vector<float> edges = other_index < 0 ? config.GetChannelBinEdges(0) : config.GetChannelOtherBinEdges(0, other_index);
                     std::string xtitle = other_index < 0 ? config.m_channel_units[channel] : config.m_channel_other_units[channel][other_index];
-                    std::string hist_title = config.m_detector_plotnames[det]  + " "+ config.m_channel_plotnames[channel]+";"+xtitle+";"+ytitle;
+                    // Remove channel name for ICARUS papaer
+                    //std::string hist_title = config.m_detector_plotnames[det]  + " "+ config.m_channel_plotnames[channel]+";"+xtitle+";"+ytitle;
+                    std::string hist_title = ";"+xtitle+";"+ytitle;
                     //std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.11,0.75,0.89,0.89); 4
                     std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.38,0.69,0.89,0.89);
                     leg->SetNColumns(2);
@@ -233,6 +237,7 @@ int Purple;
                     TH1D cv_hist(std::to_string(global_channel_index).c_str(), hist_title.c_str(), channel_nbins, edges.data());
                     cv_hist.SetLineWidth(2);
                     cv_hist.SetLineColor(cvcol);
+                    cv_hist.SetLineStyle(bool(opt&PlotOptions::CVasStack) ? kSolid : kDashed);
                     cv_hist.SetFillStyle(0);
                     for(size_t bin = 0; bin < channel_nbins; ++bin) {
                         cv_hist.SetBinContent(bin+1, 0);
@@ -265,7 +270,8 @@ int Purple;
                         }
                         if(bool(opt&PlotOptions::CVasStack)) {
                             for(size_t sc = subplots.size(); sc > 0; --sc)
-                                leg->AddEntry(cvhists[subplots[sc-1].first].get(), subplots[sc-1].second ,"f");
+                                if(strlen(subplots[sc-1].second))
+                                    leg->AddEntry(cvhists[subplots[sc-1].first].get(), subplots[sc-1].second ,"f");
                         }
                         if(bool(opt&PlotOptions::AreaNormalized)) {
                             float integral = cv_hist.Integral();
@@ -321,7 +327,7 @@ int Purple;
                         }
                         //bf_hist.SetLineColor(TColor::GetColor(234, 67, 53)); // pastel red
                         bf_hist.SetLineColor(bfcol); 
-                        bf_hist.SetLineStyle(kDashed); 
+                        bf_hist.SetLineStyle(kSolid); 
                         bf_hist.SetLineWidth(2);
                         //leg->AddEntry(&bf_hist, "Best Fit", "l");
 
@@ -398,7 +404,8 @@ int Purple;
                     if(cv) {
                         if(bool(opt&PlotOptions::CVasStack)) {
                             cvstack->SetMaximum(std::max(top_modifier*cvstack->GetMaximum(),top_modifier*data_hist.GetMaximum()));
-                            cvstack->Draw("hist");
+                            cv_hist.Draw("hist");
+                            cvstack->Draw("hist same");
                             cv_hist.Draw("same hist");
 
                         } else {
@@ -570,8 +577,25 @@ int Purple;
                     t->SetTextFont(42);                          
                     t->SetTextSize(0.03);      
                     t->SetTextAlign(33);        
-                    std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
-                    t->DrawText(0.895, 0.955, pv.c_str()); 
+                    // Disable for paper
+                    //std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+                    //t->DrawText(0.895, 0.955, pv.c_str()); 
+
+                    TText *ti = new TText();
+                    ti->SetNDC();
+                    ti->SetTextFont(42);
+                    ti->SetTextSize(0.045);
+                    ti->SetTextColor(kGray+1);
+                    //ti->SetTextAlign(33);
+                    ti->DrawText(0.13, 0.87, "ICARUS Run 2");
+
+                    TText *tl = new TText();
+                    tl->SetNDC();
+                    tl->SetTextFont(42);
+                    tl->SetTextSize(0.045);
+                    tl->SetTextColor(kGray+1);
+                    //tl->SetTextAlign(33);
+                    tl->DrawText(0.13, 0.825, label.c_str());
 
                     c.Print(filename.c_str());
 
@@ -589,7 +613,7 @@ int Purple;
         std::map<std::string, std::unique_ptr<TH1F>> hists;
 
         std::vector<int> colors = {
-            Blue, Orange, Green, SkyBlue, Vermilion, Purple
+            Blue, Green, Orange, SkyBlue, Vermilion, Purple
         };
 
         std::vector<int> line_styles = {

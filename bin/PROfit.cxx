@@ -117,6 +117,7 @@ int main(int argc, char* argv[])
     float frac_max = 1.0f;
     std::vector<std::string> fracsummary_order;
     std::string fracsummary_allname = "All Systematics";
+    std::string plot_label = "";
 
     float xlo, xhi, ylo, yhi;
     std::array<float, 2> xlims, ylims;
@@ -164,6 +165,7 @@ int main(int argc, char* argv[])
     app.add_flag("--statonly", statonly, "Run a stats only surface instead of fitting systematics");
     app.add_flag("--force",force,"Force loading binary data even if hash is incorrect (Be Careful!)");
     app.add_flag("--no-xrootd",noxrootd,"Do not use XRootD, which is enabled by default");
+    app.add_option("--label", plot_label, "Label for plots");
     auto* shape_flag = app.add_flag("--shapeonly", shapeonly, "Run a shape only analysis");
     auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
     shape_flag->excludes(rate_flag);   //PROcess, into binary data [Do this once first!]
@@ -816,7 +818,7 @@ int main(int argc, char* argv[])
         PlotOptions opt = PlotOptions::DataPostfitRatio;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
-        plot_channels((final_output_tag+"_PROfile_hists.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts, opt);
+        plot_channels((final_output_tag+"_PROfile_hists.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts, plot_label, opt);
 
         TCanvas c;
         c.Print((final_output_tag+"_postfit_posteriors.pdf[").c_str());
@@ -1182,11 +1184,11 @@ int main(int argc, char* argv[])
         std::vector<TPaveText> notext;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
-        plot_channels(final_output_tag+"_PROplot_CV.pdf", config, spec, {}, {}, {}, {}, notext, opt);
+        plot_channels(final_output_tag+"_PROplot_CV.pdf", config, spec, {}, {}, {}, {}, notext, plot_label, opt);
         std::vector<PROspec> other_cvs;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
             other_cvs.push_back(FillOtherCVSpectrum(config, prop, io));
-            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, opt, io);
+            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, plot_label, opt, io);
         }
 
         std::string filename = final_output_tag+"_fractional_systematics.pdf";
@@ -1337,19 +1339,21 @@ int main(int argc, char* argv[])
                     chi2text.SetFillColor(0);
                     chi2text.SetBorderSize(0);
                     chi2text.SetTextAlign(12);
-                    channel_chitexts.push_back(chi2text);
+                    // Don't plot this for ICARUS paper
+                    //channel_chitexts.push_back(chi2text);
                     global_channel_index++;
                 }
             }
         }
 
         std::unique_ptr<TGraphAsymmErrors> err_band = getErrorBand(config, prop, systs, binwidth_scale);
-        plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, opt | PlotOptions::DataMCRatio);
+        //plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio);
+        plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio);
         std::vector<std::unique_ptr<TGraphAsymmErrors>> other_err_bands;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
             other_err_bands.push_back(getErrorBand(config, prop, other_systs[io], binwidth_scale, io));
             plot_channels(final_output_tag+"_PROplot_other_"+std::to_string(io)+"_ErrorBand.pdf", config, other_cvs[io], {}, other_data[io], 
-                    other_err_bands.back().get(), {}, other_channel_chitexts, opt | PlotOptions::DataMCRatio, io);
+                    other_err_bands.back().get(), {}, other_channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio, io);
         }
 
         if(with_splines) {
