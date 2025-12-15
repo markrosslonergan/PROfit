@@ -262,6 +262,8 @@ int Purple;
                         for(size_t subchannel = 0; subchannel < config.m_num_subchannels[channel]; ++subchannel){
                             const std::string& subchannel_name  = config.m_fullnames[global_subchannel_index];
                             if(bool(opt&PlotOptions::CVasStack)) {
+                                if(!config.m_subchannel_plotnames[channel][subchannel].size())
+                                    cvhists[subchannel_name]->SetLineColor(config.HexToROOTColor(config.m_subchannel_colors[channel][subchannel]));
                                 cvstack->Add(cvhists[subchannel_name].get());
                                 subplots.push_back({subchannel_name, config.m_subchannel_plotnames[channel][subchannel].c_str()});
                             }
@@ -406,15 +408,20 @@ int Purple;
                             cvstack->SetMaximum(std::max(top_modifier*cvstack->GetMaximum(),top_modifier*data_hist.GetMaximum()));
                             cv_hist.Draw("hist");
                             cvstack->Draw("hist same");
+                            cv_hist.GetYaxis()->SetTitleSize(0.05);  
+                            cv_hist.GetYaxis()->SetTitleOffset(0.9);
+                            cv_hist.GetYaxis()->SetLabelSize(0.04);
+                            cv_hist.SetMinimum(0.01);
                             cv_hist.Draw("same hist");
+                            gPad->RedrawAxis();
 
                         } else {
                             cv_hist.SetMaximum(top_modifier*cv_hist.GetMaximum());
 
                             cv_hist.Draw("hist");
-                            cv_hist.GetYaxis()->SetTitleSize(0.06);  
-                            cv_hist.GetYaxis()->SetTitleOffset(0.75);
-                            cv_hist.GetYaxis()->SetLabelSize(0.05);
+                            cv_hist.GetYaxis()->SetTitleSize(0.05);  
+                            cv_hist.GetYaxis()->SetTitleOffset(0.9);
+                            cv_hist.GetYaxis()->SetLabelSize(0.04);
                             cv_hist.SetMinimum(0.01);
                         }
                     }
