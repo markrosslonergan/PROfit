@@ -108,7 +108,7 @@ int main(int argc, char* argv[])
     std::string log_file = "";
     std::string fit_preset = "good";
     static const std::unordered_set<std::string> allowed_preset = {"good","fast","overkill"};
-    bool with_splines = false, binwidth_scale = false, area_normalized = false;
+    bool with_splines = false, binwidth_scale = false, area_normalized = false, other_binwidth_scale = false;
     std::map<std::string, float> osc_params;
     std::map<std::string, float> injected_systs;
     std::vector<std::string> syst_list, systs_excluded;
@@ -161,6 +161,7 @@ int main(int argc, char* argv[])
     app.add_option("-r, --mockrw",   mockreweights, "Vector of reweights to use for mock data");
     app.add_option("--log", log_file, "File to save log to. Warning: Will overwrite this file.");
     app.add_flag("--scale-by-width", binwidth_scale, "Scale histgrams by 1/(bin width).");
+    app.add_flag("--other-scale-by-width", other_binwidth_scale, "Scale other histgrams by 1/(bin width).");
     app.add_flag("--event-by-event", eventbyevent, "Do you want to weight event-by-event?");
     app.add_flag("--statonly", statonly, "Run a stats only surface instead of fitting systematics");
     app.add_flag("--force",force,"Force loading binary data even if hash is incorrect (Be Careful!)");
@@ -655,12 +656,25 @@ int main(int argc, char* argv[])
 
         }
         PROfitter fitter(ub, lb, fitconfig);
+        std::vector<std::pair<int, std::string>> global_PB_configs;
+        global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+        global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+        global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+        global_PB_configs.push_back({180, "(4) HarmonicScan"});
+        global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+        MultiPROgressBar global_progress(global_PB_configs);
+        global_progress.initialize_display();
+        global_progress.start_display_thread(); 
+
+        fitter.setProgressBar(&global_progress);
 
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
 
         metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
         Eigen::VectorXf best_fit = fitter.best_fit;
+        global_progress.finish_all();
        
        
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
@@ -671,7 +685,8 @@ int main(int argc, char* argv[])
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
             float chi_freq = fitter.freq_seed_values.at(i);
-             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+             //if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+             if(chi_freq < chi2){
                 log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
                 log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
                 chi2 = chi_freq;
@@ -1181,14 +1196,17 @@ int main(int argc, char* argv[])
         //PROspec spec = FillCVSpectrum(config, prop, !eventbyevent);
         PROspec spec = FillRecoSpectra(config, prop, systs, *model, CVpparams, !eventbyevent);
         PlotOptions opt = PlotOptions::CVasStack;
+        PlotOptions other_opt = PlotOptions::CVasStack;
         std::vector<TPaveText> notext;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
+        if(other_binwidth_scale) other_opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
+        if(area_normalized) other_opt |= PlotOptions::AreaNormalized;
         plot_channels(final_output_tag+"_PROplot_CV.pdf", config, spec, {}, {}, {}, {}, notext, plot_label, opt);
         std::vector<PROspec> other_cvs;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
             other_cvs.push_back(FillOtherCVSpectrum(config, prop, io));
-            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, plot_label, opt, io);
+            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, plot_label, other_opt, io);
         }
 
         std::string filename = final_output_tag+"_fractional_systematics.pdf";
@@ -1351,9 +1369,9 @@ int main(int argc, char* argv[])
         plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio);
         std::vector<std::unique_ptr<TGraphAsymmErrors>> other_err_bands;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
-            other_err_bands.push_back(getErrorBand(config, prop, other_systs[io], binwidth_scale, io));
+            other_err_bands.push_back(getErrorBand(config, prop, other_systs[io], other_binwidth_scale, io));
             plot_channels(final_output_tag+"_PROplot_other_"+std::to_string(io)+"_ErrorBand.pdf", config, other_cvs[io], {}, other_data[io], 
-                    other_err_bands.back().get(), {}, other_channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio, io);
+                    other_err_bands.back().get(), {}, other_channel_chitexts, plot_label, other_opt | PlotOptions::DataMCRatio, io);
         }
 
         if(with_splines) {

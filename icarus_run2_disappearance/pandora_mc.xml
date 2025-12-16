@@ -9,6 +9,11 @@
     <bins edges="0.3 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1.0 1.25 1.5 2.0 2.5"/>
     <truebins min="0" max="3" nbins="150"/>
     <otherbins unit="True E [GeV]" min="0.3" max="3" nbins="20"/>
+    <otherbins unit="Reconstructed Muon Momentum [GeV]" min="0.2" max="1.6" nbins="20"/>
+    <otherbins unit="Reconstructed Leading Proton Momentum [GeV]" min="0.3" max="1.3" nbins="20"/>
+    <otherbins unit="#deltap^{T}" min="0" max="1.2" nbins="20"/>
+    <otherbins unit="Muon #chi^{2}_{#mu}" min="0" max="30" nbins="30"/>
+    <otherbins unit="Leading Proton #chi^{2}_{p}" min="0" max="100" nbins="40"/>
     <subchannel name="intime" plotname="" color="#E69F00"/>
     <subchannel name="cos" plotname="Cosmics" color="#E69F00"/>
     <subchannel name="nc" plotname="NC" color="#D55E00"/>
@@ -129,7 +134,7 @@
         true_param_name       = "trueE" 
         model_rule            = "1"
         true_L_name           = "trueL / 1000"
-        other_param_names     = "trueE"
+        other_param_names     = "trueE;reco_muon_p;leading_proton_p;deltaPt;chi2_mu;chi2_p"
         pdg_name              = "truePDG"
         additional_weight     = "CC && (truePDG == 14 || truePDG == -14)"
     />
@@ -139,7 +144,7 @@
         true_param_name       = "trueE" 
         model_rule            = "0"
         true_L_name           = "trueL / 1000"
-        other_param_names     = "trueE"
+        other_param_names     = "trueE;reco_muon_p;leading_proton_p;deltaPt;chi2_mu;chi2_p"
         pdg_name              = "truePDG"
         additional_weight     = "CC && (truePDG == 12 || truePDG == -12)"
     />
@@ -149,7 +154,7 @@
         true_param_name       = "trueE" 
         model_rule            = "1"
         true_L_name           = "trueL / 1000"
-        other_param_names     = "trueE"
+        other_param_names     = "trueE;reco_muon_p;leading_proton_p;deltaPt;chi2_mu;chi2_p"
         pdg_name              = "truePDG"
         additional_weight     = "CC == 0"
     />
@@ -164,7 +169,7 @@
         true_param_name       = "0"
         true_L_name           = "0"
         pdg_name              = "0"
-        other_param_names     = "0"
+        other_param_names     = "0;reco_muon_p;leading_proton_p;deltaPt;chi2_mu;chi2_p"
         />
 </MCFile>
 
@@ -177,6 +182,6 @@
         true_param_name       = "0"
         true_L_name           = "0"
         pdg_name              = "0"
-        other_param_names     = "0"
+        other_param_names     = "0;reco_muon_p;leading_proton_p;deltaPt;chi2_mu;chi2_p"
         />
 </MCFile>

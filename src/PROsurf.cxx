@@ -822,28 +822,30 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 //if(mask_osc && i < model.nparams) continue;
                 // Always mask osc for now
                 int j = i + model.nparams;
-                TMarker* initstar = new TMarker(i+0.5, init_seed[j], 29);
-                initstar->SetMarkerSize(0.6); 
-                initstar->SetMarkerColor(kBlue); 
-                initstar->Draw();
+                //TMarker* initstar = new TMarker(i+0.5, init_seed[j], 29);
+                //initstar->SetMarkerSize(0.6); 
+                //initstar->SetMarkerColor(kBlue); 
+                //initstar->Draw();
 
-                if (i < true_params.size()) {
+                //if (i < true_params.size()) {
 
-                    TMarker* truestar = new TMarker(i+0.5, true_params[j], 29);
-                    truestar->SetMarkerSize(0.5); 
-                    truestar->SetMarkerColor(kRed); 
-                    truestar->Draw();
-                }
+                //    TMarker* truestar = new TMarker(i+0.5, true_params[j], 29);
+                //    truestar->SetMarkerSize(0.5); 
+                //    truestar->SetMarkerColor(kRed); 
+                //    truestar->Draw();
+                //}
 
-                TMarker* star = new TMarker(i+0.5, bfvalues[j], 29);
-                star->SetMarkerSize(0.5); 
+                // Make Black start global best fit
+                //TMarker* star = new TMarker(i+0.5, bfvalues[j], 29);
+                TMarker* star = new TMarker(i+0.5, init_seed[j], 29);
+                star->SetMarkerSize(0.6); 
                 star->SetMarkerColor(kBlack); 
                 star->Draw();
             }
 
 
 
-            t->DrawText(0.895, 0.955, pv.c_str()); 
+            //t->DrawText(0.895, 0.955, pv.c_str()); 
             c2->SaveAs((filename+"_1sigma.pdf").c_str(),"pdf");
             delete c2;
 

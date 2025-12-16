@@ -7,5 +7,6 @@ nthread = 8
 data = pandora_data.xml
 scale-by-width = true
 label = Pandora
+seed = 1234
 
 [profile]
