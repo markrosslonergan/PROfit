@@ -136,6 +136,8 @@ int main(int argc, char* argv[])
     std::vector<TH2D*> weighthists;
 
     size_t nuniv;
+    bool gof_pvalue = false;
+    bool pvalue = false;
 
 
     //Global Arguments for all PROfit enables subcommands.
@@ -209,6 +211,8 @@ int main(int argc, char* argv[])
     //PROfc, Feldmand-Cousins
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
     profc_command->add_option("-u,--universes", nuniv, "Number of Feldman Cousins universes to throw")->default_val(1000);
+    profc_command->add_flag("--gof", gof_pvalue, "Get GOF pvalue");
+    profc_command->add_flag("--pval", pvalue, "Get FC pvalue")->excludes("--gof");
 
     // Unblinding
     CLI::App *unblind_command = app.add_subcommand("unblind", "Run unblinding sequence for ICARUS run 2 numu disappearance analysis.");
@@ -674,7 +678,6 @@ int main(int argc, char* argv[])
         metric_to_use->setBounds(lb,ub);
         float chi2 = fitter.Fit(*metric_to_use); 
         Eigen::VectorXf best_fit = fitter.best_fit;
-        global_progress.finish_all();
        
        
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
@@ -693,6 +696,7 @@ int main(int argc, char* argv[])
                 best_fit = fitter.freq_seed_points.at(i);
             }
         }
+        global_progress.finish_all();
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
@@ -790,7 +794,7 @@ int main(int argc, char* argv[])
         }
         log<LOG_INFO>(L"%1% || MCMC acceptance is  %2%. ") % __func__% ((double)count /fitconfig.MCMCiter);
 
-        std::string hname = "#chi^{2}/ndof = " + to_string_prec(chi2,3) + "/" + to_string(config.m_num_bins_total_collapsed);
+        std::string hname = "#chi^{2}/ndof = " + to_string_prec(chi2,1) + "/" + to_string(config.m_num_bins_total_collapsed);
         PROspec cv = FillCVSpectrum(config, prop, true);
         PROspec bf = FillRecoSpectra(config, prop, metric_to_use->GetSysts(), metric_to_use->GetModel(), best_fit, true);
         TH1D post_hist("ph", hname.c_str(), config.m_num_bins_total_collapsed, config.m_channel_bin_edges[0].data());
@@ -1479,6 +1483,75 @@ int main(int argc, char* argv[])
     //***********************************************************************
 
     if(*profc_command) {
+        float global_chi2 = 0, null_chi2 = 0;
+        if(gof_pvalue || pvalue) {
+            size_t nparams = metric->GetModel().nparams + metric->GetSysts().GetNSplines();
+            size_t nphys = metric->GetModel().nparams;
+            Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+            Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+            for(size_t i = 0; i < nphys; ++i) {
+                lb(i) = metric->GetModel().lb(i);
+                ub(i) = metric->GetModel().ub(i);
+            }
+            for(size_t i = nphys; i < nparams; ++i) {
+                lb(i) = metric->GetSysts().spline_lo[i-nphys];
+                ub(i) = metric->GetSysts().spline_hi[i-nphys];
+            }
+            metric->setBounds(lb, ub);
+            PROfitter fitter(ub, lb, fitconfig);
+            std::vector<std::pair<int, std::string>> global_PB_configs;
+            global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+            global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+            global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+            global_PB_configs.push_back({180, "(4) HarmonicScan"});
+            global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+            MultiPROgressBar global_progress(global_PB_configs);
+            global_progress.initialize_display();
+            global_progress.start_display_thread(); 
+
+            fitter.setProgressBar(&global_progress);
+            float fit_chi2 = fitter.Fit(*metric); 
+            fitter.calcFreqSeedPoints(*metric);
+
+            for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+                float chi_freq = fitter.freq_seed_values.at(i);
+                 if(chi_freq < chi2){
+                    log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                    log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                    fit_chi2 = chi_freq;
+                    //best_fit = fitter.freq_seed_points.at(i);
+                }
+            }
+            global_chi2 = fit_chi2;
+            global_progress.finish_all();
+        }
+        if(pvalue) {
+            size_t nparams = metric->GetSysts().GetNSplines();
+            Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+            Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+            for(size_t i = 0; i < nparams; ++i) {
+                lb(i) = metric->GetSysts().spline_lo[i];
+                ub(i) = metric->GetSysts().spline_hi[i];
+            }
+            null_metric->setBounds(lb, ub);
+            PROfitter fitter(ub, lb, fitconfig);
+            std::vector<std::pair<int, std::string>> global_PB_configs;
+            global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+            global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+            global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+            global_PB_configs.push_back({180, "(4) HarmonicScan"});
+            global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+            MultiPROgressBar global_progress(global_PB_configs);
+            global_progress.initialize_display();
+            global_progress.start_display_thread(); 
+
+            fitter.setProgressBar(&global_progress);
+            float fit_chi2 = fitter.Fit(*null_metric); 
+            null_chi2 = fit_chi2;
+            global_progress.finish_all();
+        }
         size_t FCthreads = nthread > nuniv ? nuniv : nthread;
         Eigen::MatrixXf cv_vec = FillCVSpectrum(config, prop, !eventbyevent).Spec();
         Eigen::MatrixXf L = systs.DecomposeFractionalCovariance(config, cv_vec);
@@ -1570,6 +1643,27 @@ int main(int argc, char* argv[])
         std::sort(flattened_dchi2s.begin(), flattened_dchi2s.end());
         log<LOG_INFO>(L"%1% || 90%% Feldman-Cousins delta chi2 after throwing %2% universes is %3%") 
             % __func__ % nuniv % flattened_dchi2s[0.9*flattened_dchi2s.size()];
+        if(gof_pvalue) {
+            log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_dchi2s;
+            log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % global_chi2;
+            auto it = std::lower_bound(flattened_dchi2s.begin(), flattened_dchi2s.end(), global_chi2);
+            size_t index =  std::distance(flattened_dchi2s.begin(),it);
+            size_t count_above = flattened_dchi2s.size()-index;
+            float pval = (float)count_above/(float)nuniv;
+            log<LOG_ERROR>(L"%1% || Finished throws. %2% %3%") % __func__ % index % count_above;
+            log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
+        }
+        if(pvalue) {
+            log<LOG_ERROR>(L"%1% || All Delta Chis: %2% ") % __func__ % flattened_dchi2s;
+            log<LOG_ERROR>(L"%1% || Delta chi bkg-min: %2% ") % __func__ % float(null_chi2 - global_chi2);
+            auto itFC = std::lower_bound(flattened_dchi2s.begin(), flattened_dchi2s.end(), float(null_chi2-global_chi2));
+            size_t indexFC =  std::distance(flattened_dchi2s.begin(),itFC);
+            size_t count_aboveFC = flattened_dchi2s.size()-indexFC;
+            float pvalFC = (float)count_aboveFC/(float)nuniv;
+
+            log<LOG_ERROR>(L"%1% || Finished throws. %2% %3%") % __func__ % indexFC % count_aboveFC;
+            log<LOG_ERROR>(L"%1% || FC Corrected pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
+        }
     }
 
     if(*unblind_command) {

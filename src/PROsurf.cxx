@@ -717,7 +717,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //Next version
             TCanvas *c2 =  new TCanvas((filename+"1sigma").c_str(), (filename+"1sigma").c_str() , 20*nparams, 400);
             c2->cd();
-            c2->SetBottomMargin(0.25);
+            c2->SetBottomMargin(0.27);
             c2->SetRightMargin(0.05);
 
             log<LOG_DEBUG>(L"%1% || Are all lines the same : %2% %3% %4% %5% %6%") % __func__ % nBins % barvalues.size() % bfvalues.size() % values1_down.size() % values1_up.size() ;
@@ -768,7 +768,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //onesig.Draw("A2");
             //onesig.GetYaxis()->SetTitle("#sigma Shift");
             todraw.GetYaxis()->SetTitle("Posterior 1#sigma Error");
-            todraw.GetYaxis()->SetTitleOffset(0.8);
+            todraw.GetYaxis()->SetTitleOffset(0.9);
 
             float y_min = todraw.GetMinimum();
             for (size_t i = 0; i < barvalues.size() - model.nparams; ++i) {
@@ -786,7 +786,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             t->SetTextSize(0.03);      
             t->SetTextAlign(33);        
             std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
-            t->DrawText(0.895, 0.955, pv.c_str()); 
+            //t->DrawText(0.895, 0.955, pv.c_str()); 
 
             c2->Update();
 
@@ -838,16 +838,41 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 // Make Black start global best fit
                 //TMarker* star = new TMarker(i+0.5, bfvalues[j], 29);
                 TMarker* star = new TMarker(i+0.5, init_seed[j], 29);
-                star->SetMarkerSize(0.6); 
+                star->SetMarkerSize(0.9); 
                 star->SetMarkerColor(kBlack); 
                 star->Draw();
             }
+
+            TMarker* dummy = new TMarker(0.5, 0, 29);
+            dummy->SetMarkerSize(0.9); 
+            dummy->SetMarkerColor(kBlack); 
+            TLegend leg(0.75,0.75,0.89,0.89);
+            leg.SetFillStyle(0);
+            leg.SetLineWidth(0);
+            leg.AddEntry(dummy, "Best Fit", "p");
+            leg.Draw();
+
 
 
 
             //t->DrawText(0.895, 0.955, pv.c_str()); 
             c2->SaveAs((filename+"_1sigma.pdf").c_str(),"pdf");
             delete c2;
+
+            std::unique_ptr<TCanvas> c3 = std::make_unique<TCanvas>();
+            c3->Divide(model.nparams);
+            c3->SetLeftMargin(0.05);
+
+            for(size_t w = 0; w< model.nparams; w++ ){
+                if(mask_osc) continue;
+
+                c3->cd(w+1);
+                std::string xval = "Log_{10}(" + model.pretty_param_names[w]+")";
+                //graphs[w]->SetTitle(xval.c_str());
+                graphs[w]->SetTitle("");
+                graphs[w]->Draw("AL");
+            }
+            c3->SaveAs((filename+"_model_params.pdf").c_str(), "pdf");
 
             return;
         }

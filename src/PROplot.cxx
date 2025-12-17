@@ -397,7 +397,7 @@ int Purple;
                     /*******************/
                     /* Draw everything */
                     /*******************/
-                    double top_modifier = 1.65;
+                    double top_modifier = 1.35;
 
                     if(bool(opt&PlotOptions::DataMCRatio) || bool(opt&PlotOptions::DataPostfitRatio))
                         p1.cd();

@@ -126,7 +126,7 @@ namespace PROfit {
                 });
 
         progress.increment_bar(args.thread);
-        args.dchi2s->push_back( args.gof_mode ? -999 :std::abs(chi2_syst - chi2_osc ));
+        args.dchi2s->push_back( args.gof_mode ? chi2_syst : chi2_syst - chi2_osc);
         delete metric;
     }
 };
