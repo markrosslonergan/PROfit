@@ -9,3 +9,4 @@ scale-by-width = true
 label = SPINE
 
 [plot]
+correlation-label = "All Systematics"

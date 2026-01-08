@@ -9,9 +9,9 @@
     <bins edges="0.3 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1.0 1.25 1.5 2.0 2.5"/>
     <truebins min="0" max="3" nbins="150"/>
     <otherbins unit="True E [GeV]" min="0.3" max="3" nbins="20"/>
-    <otherbins unit="Reconstructed Muon Momentum [GeV]" min="0.2" max="1.6" nbins="20"/>
-    <otherbins unit="Reconstructed Leading Proton Momentum [GeV]" min="0.3" max="1.3" nbins="20"/>
-    <otherbins unit="#deltap^{T}" min="0" max="1.2" nbins="20"/>
+    <otherbins unit="Reconstructed Muon Momentum [GeV/c]" min="0.2" max="1.6" nbins="20"/>
+    <otherbins unit="Reconstructed Leading Proton Momentum [GeV/c]" min="0.3" max="1.3" nbins="20"/>
+    <otherbins unit="#deltap^{T} [GeV/c]" min="0" max="1.2" nbins="20"/>
     <otherbins unit="Muon Softmax Score" min="0.5" max="1" nbins="25"/>
     <otherbins unit="Leading Proton Softmax Score" min="0.5" max="1" nbins="25"/>
     <subchannel name="intime" plotname="" color="#E69F00"/>
@@ -89,7 +89,7 @@
     <allowlist type="spline" binning="reco" plotname="Recombination" tag="Detector Systematics">var05</allowlist>
     <allowlist type="spline" binning="reco" plotname="PMT QE" tag="Detector Systematics">var06</allowlist>
     <allowlist type="spline" binning="reco" plotname="Coherent Noise" tag="Detector Systematics">var10</allowlist>
-    <allowlist type="spline" binning="reco" plotname="IntrinsicNoise" tag="Detector Systematics">var13</allowlist>
+    <allowlist type="spline" binning="reco" plotname="Intrinsic Noise" tag="Detector Systematics">var13</allowlist>
     <allowlist type="spline" binning="reco" plotname="TPC YZ Non-Uniformity" tag="Detector Systematics">var07</allowlist>
     <allowlist type="spline" binning="reco" plotname="Signal Shape" tag="Detector Systematics">var12</allowlist>
 

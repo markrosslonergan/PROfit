@@ -505,13 +505,13 @@ int Purple;
 
                         for(size_t i = 0; i < channel_nbins; ++i) {
                             float numerator = data_hist.GetBinContent(i+1);
-                            float denonminator = 
+                            float denominator = 
                                 bool(opt&PlotOptions::DataMCRatio)
                                 ? cv_hist.GetBinContent(i+1)
                                 : bf_hist.GetBinContent(i+1);
-                            float rat = numerator/denonminator;
+                            float rat = numerator/denominator;
                             if(isnan(rat)) rat = 1;
-                            ratio->SetBinError(i+1, 1.0 / sqrt(numerator));
+                            ratio->SetBinError(i+1, data_hist.GetBinError(i+1)/denominator);
                             ratio->SetBinContent(i+1, rat);
                             one->SetBinContent(i+1, 1.0);
                             ratio_err->SetPointEYhigh(i, ratio_err->GetErrorYhigh(i)/ratio_err->GetPointY(i));
@@ -586,7 +586,8 @@ int Purple;
                     t->SetTextAlign(33);        
                     // Disable for paper
                     //std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
-                    //t->DrawText(0.895, 0.955, pv.c_str()); 
+                    std::string pv = "PROfit";
+                    t->DrawText(0.895, 0.955, pv.c_str()); 
 
                     TText *ti = new TText();
                     ti->SetNDC();

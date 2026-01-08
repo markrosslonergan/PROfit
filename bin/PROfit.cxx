@@ -118,6 +118,8 @@ int main(int argc, char* argv[])
     std::vector<std::string> fracsummary_order;
     std::string fracsummary_allname = "All Systematics";
     std::string plot_label = "";
+    std::string correlation_matrix_label = "";
+    std::vector<std::string> spline_order;
 
     float xlo, xhi, ylo, yhi;
     std::array<float, 2> xlims, ylims;
@@ -199,6 +201,7 @@ int main(int argc, char* argv[])
     CLI::App *profile_command = app.add_subcommand("profile", "Make a 1D profiled chi2 for each physics and nuisence parameter.");
     profile_command->add_flag("--syst-only", systs_only_profile, "Profile over nuisance parameters only");
     profile_command->add_flag("--mcmc-prefit", MCMC_prefit_errors, "Use MCMC to sample the systematic priors for the pre-fit error band.");
+    profile_command->add_option("--spline-order", spline_order, "Order of spline names for the plots.");
 
     //PROplot, plot things
     CLI::App *proplot_command = app.add_subcommand("plot", "Make plots of CV, or injected point with error bars and covariance.");
@@ -207,6 +210,7 @@ int main(int argc, char* argv[])
     proplot_command->add_option("--frac-max", frac_max, "Maximum value for fractional uncertainty plots");
     proplot_command->add_option("--fracsummary-order", fracsummary_order, "Order of labels in summary plot for fractional uncertainties.");
     proplot_command->add_option("--fracsummary-allname", fracsummary_allname, "Legend name for 'All Systematics' line in summary plot of fractional uncertainties.");
+    proplot_command->add_option("--correlation-label", correlation_matrix_label, "Label for collapsed correlation matrix in CovarAll plots");
 
     //PROfc, Feldmand-Cousins
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
@@ -740,6 +744,26 @@ int main(int argc, char* argv[])
         Eigen::VectorXf inv_sqrt_diag = fraccovmat.diagonal().array().abs().max(1e-10f).sqrt().inverse();
         Eigen::MatrixXf corrmat = inv_sqrt_diag.asDiagonal() * fraccovmat * inv_sqrt_diag.asDiagonal();
 
+        std::vector<int> permutation;
+        std::vector<int> spline_permutation;
+        if(spline_order.size()) {
+
+            for(size_t i = 0; i < nphys; ++i)
+                permutation.push_back(i);
+            for(const std::string &name : spline_order) {
+                for(size_t i = 0; i < metric_to_use->GetSysts().GetNSplines(); ++i) {
+                    const std::string &spline = metric_to_use->GetSysts().spline_names[i];
+                    if(name == spline) {
+                        permutation.push_back(i+nphys);
+                        spline_permutation.push_back(i);
+                        break;
+                    }
+                }
+            }
+            //corrmat = corrmat(permutation, permutation);
+            Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> P(Eigen::VectorXi::Map(permutation.data(), permutation.size()));
+            corrmat = P.transpose() * corrmat * P;
+        }
 
         TH2D corrhist("crh", "", nparams, 0, nparams, nparams, 0, nparams);
         TH2D fraccovhist("fch", "", nparams, 0, nparams, nparams, 0, nparams);
@@ -749,6 +773,8 @@ int main(int argc, char* argv[])
         for(size_t i = 0; i < nparams; ++i) {
             std::string label = i < metric_to_use->GetModel().nparams 
                 ? metric_to_use->GetModel().pretty_param_names[i]
+                : spline_order.size()
+                ?  config.m_mcgen_variation_plotname_map[spline_order[i-metric_to_use->GetModel().nparams]].c_str()
                 : config.m_mcgen_variation_plotname_map[metric_to_use->GetSysts().spline_names[i-metric_to_use->GetModel().nparams]].c_str();
             covhist.GetXaxis()->SetBinLabel(i+1, label.c_str());
             covhist.GetYaxis()->SetBinLabel(i+1, label.c_str());
@@ -766,7 +792,7 @@ int main(int argc, char* argv[])
                     physhist.SetBinContent(i+1, j+1, covmat(i,j));
             }
         }
-        TCanvas c1;
+        TCanvas c1("c1","c1",1800,1000);
         corrhist.SetMaximum(1);
         corrhist.SetMinimum(-1);
         covhist.SetMaximum(1);
@@ -778,10 +804,16 @@ int main(int argc, char* argv[])
         //fraccovhist.Draw("colz");
         //c1.Print((final_output_tag+"_postfit_fraccov.pdf").c_str());
         c1.SetLeftMargin(0.18);   
-        corrhist.SetTitle("Post-Fit Correlation Matrix");
+        //corrhist.SetTitle("Post-Fit Correlation Matrix");
         corrhist.Draw("colz");
         gPad->Update();
 
+        TText *t = new TText();
+        t->SetNDC();                
+        t->SetTextFont(42);                          
+        t->SetTextSize(0.03);      
+        t->SetTextAlign(33);        
+        t->DrawText(0.895, 0.955, "PROfit"); 
         TLine line;
         line.SetLineColor(kBlack);
         line.SetLineWidth(2);
@@ -794,7 +826,7 @@ int main(int argc, char* argv[])
         }
         log<LOG_INFO>(L"%1% || MCMC acceptance is  %2%. ") % __func__% ((double)count /fitconfig.MCMCiter);
 
-        std::string hname = "#chi^{2}/ndof = " + to_string_prec(chi2,1) + "/" + to_string(config.m_num_bins_total_collapsed);
+        std::string hname = "#chi^{2}/nbins = " + to_string_prec(chi2,1) + "/" + to_string(config.m_num_bins_total_collapsed);
         PROspec cv = FillCVSpectrum(config, prop, true);
         PROspec bf = FillRecoSpectra(config, prop, metric_to_use->GetSysts(), metric_to_use->GetModel(), best_fit, true);
         TH1D post_hist("ph", hname.c_str(), config.m_num_bins_total_collapsed, config.m_channel_bin_edges[0].data());
@@ -872,7 +904,7 @@ int main(int argc, char* argv[])
                 systs_only_profile ? systparams : allparams);
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
-                systs_only_profile ? systparams : allparams);
+                systs_only_profile ? systparams : allparams, false, spline_permutation);
 
         TFile fout((final_output_tag+"_PROfile.root").c_str(), "RECREATE");
         profile.onesig.Write("one_sigma_errs");
@@ -1337,7 +1369,14 @@ int main(int argc, char* argv[])
         c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "[").c_str(), "pdf");
         for(const auto &[name, mat]: allmatrices) {
             if(name == "collapsed_total_cor") {
+                mat->SetTitle(correlation_matrix_label.c_str());
                 mat->Draw("colz");
+                TText *t = new TText();
+                t->SetNDC();                
+                t->SetTextFont(42);                          
+                t->SetTextSize(0.03);      
+                t->SetTextAlign(33);        
+                t->DrawText(0.895, 0.955, "PROfit"); 
                 c.Print((final_output_tag+"_PROplot_CovarAll.pdf").c_str(), "pdf");
             }
         }
@@ -1563,7 +1602,7 @@ int main(int argc, char* argv[])
         std::vector<std::thread> threads;
         size_t todo = nuniv/FCthreads;
         size_t addone = FCthreads - nuniv%FCthreads;
-        bool gof_mode = false;
+        bool gof_mode = gof_pvalue;
 
         std::vector<std::pair<int, std::string>> fc_PB_configs;
         for (size_t i = 0; i < FCthreads; ++i) {
@@ -1577,7 +1616,7 @@ int main(int argc, char* argv[])
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent,gof_mode};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent, gof_mode};
 
 
             threads.emplace_back([args, &fc_progress]() {

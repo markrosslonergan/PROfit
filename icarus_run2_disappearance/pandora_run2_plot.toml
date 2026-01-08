@@ -9,3 +9,4 @@ scale-by-width = true
 label = Pandora
 
 [plot]
+correlation-label = "All Systematics"
