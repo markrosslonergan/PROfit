@@ -739,7 +739,8 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //TGraphAsymmErrors todraw = onesig;
             // Always mask out oscillation points
             TGraphAsymmErrors todraw(onesig.GetN() - model.nparams);
-            todraw.SetFillColor(Blue);
+            todraw.SetFillColor(SkyBlue);
+            //todraw.SetFillColorAlpha(Blue, 0.8);
             todraw.SetStats(0);
             //todraw.SetMinimum(min(-1.2,minVal*1.2));
             todraw.SetMinimum(minVal*1.1);
@@ -753,7 +754,6 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 int j = 0;
                 for(int i : permutation) {
                     double x = onesig.GetPointX(j), y = onesig.GetPointY(i + model.nparams);
-                    log<LOG_ERROR>(L"%1% || Point x %2% and y %3%") % __func__ % x % y;
                     todraw.SetPoint(j, x, y);
                     todraw.SetPointError(j,
                             onesig.GetErrorXlow(j),
@@ -857,13 +857,18 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
                 // Make Black start global best fit
                 //TMarker* star = new TMarker(i+0.5, bfvalues[j], 29);
                 TMarker* star = new TMarker(i+0.5, init_seed[j], 29);
-                star->SetMarkerSize(0.9); 
+                star->SetMarkerSize(1.8); 
                 star->SetMarkerColor(kBlack); 
+                //star->SetMarkerColor(Vermilion); 
+                TMarker* staroutline = new TMarker(i+0.5, init_seed[j], 30);
+                staroutline->SetMarkerSize(0.9); 
+                staroutline->SetMarkerColor(kWhite); 
                 star->Draw();
+                //staroutline->Draw();
             }
 
             TMarker* dummy = new TMarker(0.5, 0, 29);
-            dummy->SetMarkerSize(0.9); 
+            dummy->SetMarkerSize(1.8); 
             dummy->SetMarkerColor(kBlack); 
             TLegend leg(0.13,0.79,0.33,0.89);
             leg.SetFillStyle(0);
