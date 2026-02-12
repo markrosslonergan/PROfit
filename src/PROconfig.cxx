@@ -600,13 +600,12 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
             }
 
+            // Read treename and filename, but do not immediately push them.
             const char* tree = pMC->Attribute("treename");
             if(tree==NULL){
                 log<LOG_ERROR>(L"%1% || ERROR: You must have an associated root TTree name for all MonteCarloFile tags.. eg. treename='events' @ line %2% in %3% ") % __func__ % __LINE__  % __FILE__;
                 log<LOG_ERROR>(L"Terminating.");
                 exit(EXIT_FAILURE);
-            }else{
-                m_mcgen_tree_name.push_back(tree);
             }
 
             const char* file = pMC->Attribute("filename");
@@ -614,9 +613,20 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 log<LOG_ERROR>(L"%1% || ERROR: You must have an associated root TFile name for all MonteCarloFile tags.. eg. filename='my.root' @ line %2% in %3% ") % __func__ % __LINE__  % __FILE__;
                 log<LOG_ERROR>(L"Terminating.");
                 exit(EXIT_FAILURE);
-            }else{
-                m_mcgen_file_name.push_back(file);
             }
+
+            // Treat duplicate MCFile filename as an error. Instruct the user to add another <branch>
+            // to the existing <MCFile> block instead of creating a new <MCFile> for the same ROOT file.
+            std::string file_str(file);
+            if(std::find(m_mcgen_file_name.begin(), m_mcgen_file_name.end(), file_str) != m_mcgen_file_name.end()){
+                log<LOG_ERROR>(L"%1% || ERROR: Duplicate <MCFile filename=\"%2%\"> found. Add a <branch> inside the existing <MCFile filename=\"%2%\"> instead of creating another <MCFile>. @ line %3% in %4%") % __func__ % file % __LINE__ % __FILE__;
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+
+            // New file: push treename & filename and prepare per-file containers
+            m_mcgen_tree_name.push_back(tree);
+            m_mcgen_file_name.push_back(file_str);
 
 
             const char* maxevents = pMC->Attribute("maxevents");
@@ -649,8 +659,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 m_mcgen_fake.push_back(true);
             }
 
-            log<LOG_DEBUG>(L"%1% || MultisimFile %2%, treename: %3%  ") % __func__ % m_mcgen_file_name.back().c_str() % m_mcgen_tree_name.back().c_str();
-
+            // Initialize friend count for this new file
             m_mcgen_numfriends.push_back(0);
 
             //Here we can grab some friend tree information
@@ -668,19 +677,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
                     }
                 }
 
-
                 std::string ffname;
                 const char* friend_filename = pFriend->Attribute("filename");
                 if(friend_filename==NULL){
-                    ffname = m_mcgen_file_name.back();
+                    ffname = m_mcgen_file_name.back(); // default friend filename is the primary file
                 }else{
                     ffname = friend_filename;
                 }
 
-
+                // Append friend info keyed by the primary file name
                 m_mcgen_file_friend_treename_map[m_mcgen_file_name.back()].push_back( pFriend->Attribute("treename") );
                 m_mcgen_file_friend_map[m_mcgen_file_name.back()].push_back(ffname);
-                m_mcgen_numfriends.back()+=1;
+                m_mcgen_numfriends.back() += 1;
                 pFriend = pFriend->NextSiblingElement("friend");
             }//END of friend loop
 
@@ -880,6 +888,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 pBranch = pBranch->NextSiblingElement("branch");
             }
 
+            // Push per-file vectors for this (new) file
             m_mcgen_weight_names.push_back(TEMP_weight_names);
             m_mcgen_num_weights.push_back(TEMP_num_weights);
             m_branch_variables.push_back(TEMP_branch_variables);

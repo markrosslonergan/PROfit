@@ -402,6 +402,112 @@ public:
 
 };
 
+class PROncnumudis : public PROmodel {
+public:
+  PROncnumudis(const PROpeller &prop, const std::map<std::string,int> &parameter_map) {
+
+    // model rule 0: no oscillation
+    model_functions.push_back([this]([[maybe_unused]] const Eigen::VectorXf &v, float) {
+      (void)this;
+      return 1.0f;
+    });
+
+    // model rule 1: NC "active survival" for nu_mu disappearance into sterile
+    model_functions.push_back([this](const Eigen::VectorXf &v, float le) {
+      return this->Pactive(v(0), v(1), le);
+    });
+
+    prob_types = {0, 1};
+
+    if(parameter_map.find("L/E") == parameter_map.end()) {
+      log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'. Make sure its in your model section of XML. ")
+        % __func__ % __LINE__;
+      throw std::runtime_error("Missing parameter: L/E");
+    }
+    ivar = parameter_map.at("L/E");
+
+    size_t nvar = prop.variable_mc_stat_err.size();
+    hists.resize(nvar);
+    for(size_t v = 0; v < nvar; v++){
+      for(size_t m = 0; m < model_functions.size(); ++m) {
+        hists.at(v).emplace_back(Eigen::MatrixXf::Constant(
+          prop.variable_hist_storage(ivar,v).rows(),
+          prop.variable_hist_storage(ivar,v).cols(),
+          0.0f
+        ));
+
+        Eigen::MatrixXf &h = hists.at(v).back();
+        for(size_t i = 0; i < prop.NEvent(); ++i) {
+          if(prop.model_rule[i] != (int)m) continue;
+          int tbin = prop.VariableBinIndex(ivar, i), rbin = prop.VariableBinIndex(v, i);
+          if(tbin < 0 || rbin < 0) continue;
+          h(tbin, rbin) += prop.added_weights[i];
+        }
+      }
+    }
+
+    // === physics parameters ===
+    nparams = 2;
+    param_names         = {"dmsq", "sinsq2thmus"};
+    pretty_param_names  = {"#Deltam^{2}", "sin^{2}2#theta_{#mus}"};
+    pretty_param_units  = {"eV^{2}", ""};
+
+    // keep consistent with your existing style (log10 scan)
+    is_log10 = {true, true};
+    build_param_index();
+
+    lb = Eigen::VectorXf(2);
+    ub = Eigen::VectorXf(2);
+    default_val = Eigen::VectorXf(2);
+
+    // dmsq: log10 range [-2, 2] => 1e-2 to 1e2 eV^2 (same as your example)
+    // sinsq2thmus: log10 range [-inf, 0] => 0 to 1
+    lb << -2, -std::numeric_limits<float>::infinity();
+    ub <<  2,  0;
+    default_val << -10, -10;  // tiny by default, same convention
+  };
+
+  /* Function: NC active survival in SBL approx: 1 - sin^2(2θ_μs) sin^2(Δ) */
+  float Pactive(float dmsq, float sinsq2thmus, float le) const {
+
+    dmsq = maybe_convert_log("dmsq", dmsq);
+    sinsq2thmus = maybe_convert_log("sinsq2thmus", sinsq2thmus);
+
+    float sinterm = std::sin(1.266932679f * dmsq * le);
+    float prob = 1.0f - (sinsq2thmus * sinterm * sinterm);
+
+    if(prob < 0.0f || prob > 1.0f) {
+      log<LOG_ERROR>(L"%1% || Probability out of bounds. dmsq=%2%, sinsq2thmus=%3%, L/E=%4%, prob=%5%")
+        % __func__ % dmsq % sinsq2thmus % le % prob;
+      exit(EXIT_FAILURE);
+    }
+
+    return prob;
+  }
+
+  Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys,
+                            const std::vector<float> &le_arr) const override {
+
+    float dmsq = maybe_convert_log("dmsq", phys(0));
+    float sinsq2thmus = maybe_convert_log("sinsq2thmus", phys(1));
+
+    if(sinsq2thmus > 1) sinsq2thmus = 1;
+    if(sinsq2thmus < 0) sinsq2thmus = 0;
+
+    float freq = 1.266932679f * dmsq;
+
+    Eigen::MatrixXf probs(le_arr.size(), model_functions.size());
+
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+      probs(i, 0) = 1.0f; // no osc
+
+      float sinterm = std::sin(freq * le_arr[i]);
+      probs(i, 1) = 1.0f - (sinsq2thmus * sinterm * sinterm); // active survival
+    }
+
+    return probs;
+  }
+};
 
 class PRO3p1 : public PROmodel {
 public:
@@ -1749,13 +1855,15 @@ static inline
 std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const PROpeller &prop) {
      std::string name = config.m_model_tag;
 
-     if(name == "numudis") {
+    if(name == "numudis") {
         return std::unique_ptr<PROmodel>(new PROnumudis(prop,config.m_model_parameter_map));
     } else if(name == "nueapp") {
         return std::unique_ptr<PROmodel>(new PROnueapp(prop,config.m_model_parameter_map));
     } else if(name == "nuedis") {
         return std::unique_ptr<PROmodel>(new PROnuedis(prop,config.m_model_parameter_map));
-    } else if(name == "3+1") {
+    } else if(name == "ncnumudis") {
+        return std::unique_ptr<PROmodel>(new PROncnumudis(prop,config.m_model_parameter_map));
+    }  else if(name == "3+1") {
         return std::unique_ptr<PROmodel>(new PRO3p1(prop,config.m_model_parameter_map));
     } else if(name == "3+1_angles") {
         return std::unique_ptr<PROmodel>(new PRO3p1_angles(prop,config.m_model_parameter_map));
