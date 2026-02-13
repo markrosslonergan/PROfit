@@ -678,7 +678,6 @@ int PROconfig::LoadFromXML(const std::string &filename){
                     }
                 }
 
-                
                 std::string ffname;
                 const char* friend_filename = pFriend->Attribute("filename");
                 if(friend_filename==NULL){
