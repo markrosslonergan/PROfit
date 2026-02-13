@@ -678,6 +678,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                     }
                 }
 
+                
                 std::string ffname;
                 const char* friend_filename = pFriend->Attribute("filename");
                 if(friend_filename==NULL){
@@ -688,7 +689,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
                 m_mcgen_file_friend_treename_map[m_mcgen_file_name.back()].push_back( pFriend->Attribute("treename") );
                 m_mcgen_file_friend_map[m_mcgen_file_name.back()].push_back(ffname);
-                m_mcgen_numfriends.back()+= 1;
+                m_mcgen_numfriends.back()+=1;
                 pFriend = pFriend->NextSiblingElement("friend");
             }//END of friend loop
 
