@@ -130,6 +130,45 @@ namespace PROfit {
         log<LOG_INFO>(L"%1% || SumMatrix for index %2% ") % __func__ % other_index;
         fractional_covariance = this->SumMatrices();
         log<LOG_INFO>(L"%1% || SumMatrix for index %2% DONE ") % __func__ % other_index;
+
+        Eigen::VectorXf cvparams;
+        if(params != nullptr){
+            cvparams = *params;
+        }else{
+            cvparams = Eigen::VectorXf::Zero(model->nparams + splines.size());
+            cvparams.segment(0, model->nparams) = model->default_val;
+        }
+
+	LinearResponse = CalcLinearResponse(config, prop, *model, cvparams, other_index);
+    }
+
+    std::vector<Eigen::MatrixXf> PROsyst::CalcLinearResponse(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index) const{
+        int nbins =  config.m_num_variable_bins_total_collapsed[other_index];
+	Eigen::MatrixXf cv = CollapseMatrix(config, FillSpectra(config, prop, *this, model, params , true, other_index).Spec());
+	std::vector<Eigen::MatrixXf> ret(n_covar, Eigen::VectorXf::Zero(nbins));
+        Eigen::MatrixXf R = Eigen::MatrixXf::Zero(nbins, 1); // Follow notation of tech note
+        for(size_t i=0; i<n_covar; i++){
+            Eigen::MatrixXf coll_cov = CollapseMatrix(config, covmat.at(i));
+	    Eigen::MatrixXf diff = coll_cov - Eigen::MatrixXf::Identity(nbins, nbins);
+	    ret.at(i) = diff*cv;
+        }
+
+	return ret;
+    }
+
+    std::vector<double> PROsyst::CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const{
+    	int nbins =  config.m_num_variable_bins_total_collapsed[other_index];
+	Eigen::MatrixXf cv = CollapseMatrix(config, FillSpectra(config, prop, *this, model, params , true, other_index).Spec());
+        Eigen::MatrixXf u = data.Spec() - cv;
+	std::vector<double> ret(n_covar, 0.0);
+        for(size_t i=0; i<n_covar; i++){
+	    Eigen::MatrixXf stat_covariance = (data.Spec()).matrix().asDiagonal();
+	    Eigen::MatrixXf inverted_collapsed_full_covariance = (stat_covariance + LinearResponse.at(i).transpose()*LinearResponse.at(i)).inverse(); 
+            Eigen::MatrixXf result = LinearResponse.at(i)*inverted_collapsed_full_covariance*u;
+	    ret.at(i) = result(0,0);
+        }
+
+	return ret;
     }
 
     PROsyst PROsyst::subset(const std::vector<std::string> &systs) const {
