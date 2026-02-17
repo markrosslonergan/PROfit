@@ -129,7 +129,7 @@ namespace PROfit {
             float GetSplineShift(std::string name, float shift, int bin) const;
 
             /* Function: Get linear response function R for cov systematics */
-	    Eigen::MatrixXf GetLinearResponse() const;
+	    std::map<std::string, Eigen::MatrixXf> GetLinearResponse() const;
 
             /* Function: Get cv spectrum shifted using spline */
             PROspec GetSplineShiftedSpectrum(const PROconfig& config, const PROpeller& prop, std::string name, float shift) const;
@@ -152,11 +152,12 @@ namespace PROfit {
             std::vector<int> spline_binnings;
             Eigen::VectorXf spline_priors;
             Eigen::VectorXf spline_centers;
-	    std::vector<Eigen::MatrixXf> LinearResponse;
+
 	    std::vector<double> CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const;
         private:
 	    /* Function: Calculate linear response function R for cov systematics */
-	    std::vector<Eigen::MatrixXf> CalcLinearResponse(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index) const;
+	    std::map<std::string, Eigen::MatrixXf> LinearResponse;
+	    std::map<std::string, Eigen::MatrixXf> CalcLinearResponse(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index) const;
             std::map<std::string, std::pair<size_t, SystType>> syst_map;
             std::vector<Spline> splines;
             [[maybe_unused]] size_t n_splines = 0;

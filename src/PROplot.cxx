@@ -1237,7 +1237,7 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index) {
+    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::vector<double> alphas) {
         //Input PROsyst needs to be the allsplinesyst for now
 
         std::vector<int> colors = {
@@ -1294,8 +1294,6 @@ namespace PROfit{
         for(const auto &[tag, vec]: used_tags) {
             log<LOG_INFO>(L"%1% || So for tag %2% we include %3%") % __func__ % tag.c_str() % vec;
         }
-
-
 
         int nTags = used_tags.size()+1;
         int gridCols = std::ceil(std::sqrt(nTags));
@@ -1416,6 +1414,7 @@ namespace PROfit{
 			size_t channel_nbins_y = 1;// start with assumption of 1d
                         size_t channel_nbins_x = config.m_channel_variable_bins[channel][other_index].NBinsAlong(0);
 
+                        int alphai=0;
                         for(const auto & systname:vec){
 
                             Eigen::MatrixXf frac_covariance = allsplinesyst.GrabMatrix(systname);
@@ -1457,21 +1456,40 @@ namespace PROfit{
 			    Eigen::VectorXf diag1d = Eigen::VectorXf::Zero(channel_nbins_x);
 			    Eigen::MatrixXf channel_diag = collapsed_diag(channel_bins, channel_bins);
 
-                            for(int i = 0; i < channel_nbins_x; i++){
-			        for(int j = channel_nbins_y*i; j < channel_nbins_y*(i+1); j++){
-				    diag1d(i) += channel_diag(j, j);
-			            for(int k = channel_nbins_y*i; k < channel_nbins_y*(i+1); k++){
-			                VarVec(i) += channel_cov(j, k);
-			            }
-			        }
+                            if(allsplinesyst.GetLinearResponse().size() < alphas.size()){
+                                log<LOG_ERROR>(L"%1% || Number of linear response fit parameters %2% greater than num available linear response functions %3%!") % __func__ % alphas.size() % allsplinesyst.GetLinearResponse().size();
+				return 1;
 			    }
 
-			    float inv_diag1d;
-                            for (size_t i = 0; i < channel_nbins_x; ++i) {
-				inv_diag1d = 1/diag1d(i);
-                                h->SetBinContent(i+1, sqrt(inv_diag1d*VarVec(i)*inv_diag1d));
-                                hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+inv_diag1d*VarVec(i)*inv_diag1d);
-                            }
+                            if(allsplinesyst.GetLinearResponse().count(systname) >= 1 && alphas.size() > 0){
+                                log<LOG_INFO>(L"%1% || found linear response for %2%") % __func__ % systname.c_str();
+				double alpha = alphas.at(alphai);
+				Eigen::MatrixXf content = allsplinesyst.GetLinearResponse()[systname].transpose()*alpha;
+				for (size_t i = 0; i < channel_nbins_x; ++i) {
+                                    h->SetBinContent(i+1, content(i));
+                                    hsum->SetBinContent(i+1, content(i)*content(i));
+                                }
+				alphai++;
+			    }
+			    else{
+                                log<LOG_INFO>(L"%1% || did not find linear response for %2%") % __func__ % systname.c_str();
+
+                                for(int i = 0; i < channel_nbins_x; i++){
+			            for(int j = channel_nbins_y*i; j < channel_nbins_y*(i+1); j++){
+			                diag1d(i) += channel_diag(j, j);
+			                for(int k = channel_nbins_y*i; k < channel_nbins_y*(i+1); k++){
+			                    VarVec(i) += channel_cov(j, k);
+			                }
+			            }
+			        }
+
+			        float inv_diag1d;
+                                for (size_t i = 0; i < channel_nbins_x; ++i) {
+			            inv_diag1d = 1/diag1d(i);
+                                    h->SetBinContent(i+1, sqrt(inv_diag1d*VarVec(i)*inv_diag1d));
+                                    hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+inv_diag1d*VarVec(i)*inv_diag1d);
+                                }
+			    }
 
                             const std::string &plotname = config.m_mcgen_variation_plotname_map.at(systname);
                             leg->AddEntry(h, plotname.c_str(), "l");

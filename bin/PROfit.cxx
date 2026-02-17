@@ -1794,6 +1794,7 @@ int main(int argc, char* argv[])
         if(!global_fixed[0] || !systs_only) fitter.calcFreqSeedPoints(*metric);
 
         PROsyst pre_allcovsyst = variable_systs[config.i_prime].allsplines2cov(config, prop, *model, CVParams, dseed(PROseed::global_rng));
+	std::vector<double> alphas = variable_systs[config.i_prime].CalcMinLinearParam(config, prop, *model, best_fit, config.i_prime, data);
         PROsyst post_allcovsyst = variable_systs[config.i_prime].allsplines2cov(config, prop, *model, best_fit, dseed(PROseed::global_rng));
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
@@ -1957,8 +1958,8 @@ int main(int argc, char* argv[])
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
         plot_channels((final_output_tag+"_PROglobal_hists.pdf"), config, cv, bf, data, err_band, post_err_band, pre_allcovsyst, post_allcovsyst, texts, pbounds,opt);
-
-
+        plotPriorFractionalSystematicBreakdown(config, cv, pre_allcovsyst, final_output_tag+"_PROglobal_unc_pre.pdf", config.i_prime);
+        plotPriorFractionalSystematicBreakdown(config, bf, post_allcovsyst, final_output_tag+"_PROglobal_unc_post.pdf", config.i_prime, alphas);
     }
 
     //***********************************************************************
