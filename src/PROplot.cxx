@@ -1237,7 +1237,7 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::map<std::string, double> alphas) {
+    int plotFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::map<std::string, double> alphas) {
         //Input PROsyst needs to be the allsplinesyst for now
 
         std::vector<int> colors = {
@@ -1299,7 +1299,7 @@ namespace PROfit{
         int gridCols = std::ceil(std::sqrt(nTags));
         int gridRows = std::ceil(nTags / float(gridCols));
 
-        TCanvas c("c", "Systematics Comparison", 1600, 1200);  
+        TCanvas c("c", "Systematics Comparison", 1600, 900);
         c.Print((filename+"[").c_str());
         c.Divide(gridCols, gridRows);
 
@@ -1355,10 +1355,21 @@ namespace PROfit{
             log<LOG_ERROR>(L"%1% || FATAL: collapsed_diag.inverse() contains NaN or Inf! This will cause empty plots.") % __func__;
         }
 
+
         size_t global_channel_index = 0;
         for(size_t mode = 0; mode < config.m_num_modes; ++mode) {
             for(size_t det = 0; det < config.m_num_detectors; ++det) {
                 for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
+                    std::string xtitle;
+                    if(config.m_channel_variable_dims[channel][other_index] == 2){
+                    std::string joined_title = config.m_channel_variable_units[channel][other_index];
+                    string del = ";";
+                    auto pos = joined_title.find(del);
+                    std::string xtitle2d = joined_title.substr(0, pos);
+                    xtitle = joined_title.substr(0, pos);}
+                            else{
+                    xtitle = config.m_channel_variable_units[channel][other_index];
+                    }
 
                     std::string name = config.m_mode_plotnames[mode]+" "+config.m_detector_plotnames[det]+" "+config.m_channel_plotnames[channel]; 
                     c.Clear();
@@ -1411,7 +1422,7 @@ namespace PROfit{
                         hsum->Reset();
                         std::vector<TH1F*> hvec;
                         int i = 0;
-			size_t channel_nbins_y = 1;// start with assumption of 1d
+                        size_t channel_nbins_y = 1;// start with assumption of 1d
                         size_t channel_nbins_x = config.m_channel_variable_bins[channel][other_index].NBinsAlong(0);
 
                         for(const auto & systname:vec){
@@ -1451,18 +1462,18 @@ namespace PROfit{
 
                             if(config.m_channel_variable_dims[channel][other_index] == 2)  channel_nbins_y = config.m_channel_variable_bins[channel][other_index].NBinsAlong(1);
 
-			    Eigen::VectorXf VarVec = Eigen::VectorXf::Zero(channel_nbins_x);
-			    Eigen::VectorXf diag1d = Eigen::VectorXf::Zero(channel_nbins_x);
-			    Eigen::MatrixXf channel_diag = collapsed_diag(channel_bins, channel_bins);
+                            Eigen::VectorXf VarVec = Eigen::VectorXf::Zero(channel_nbins_x);
+                            Eigen::VectorXf diag1d = Eigen::VectorXf::Zero(channel_nbins_x);
+                            Eigen::MatrixXf channel_diag = collapsed_diag(channel_bins, channel_bins);
 
                             if(allsplinesyst.GetLinearResponse().size() < alphas.size()){
                                 log<LOG_ERROR>(L"%1% || Number of linear response fit parameters %2% greater than num available linear response functions %3%!") % __func__ % alphas.size() % allsplinesyst.GetLinearResponse().size();
-				return 1;
-			    }
+                                return 1;
+                            }
 
                             if(allsplinesyst.GetLinearResponse().count(systname) >= 1 && alphas.count(systname) >= 1){
                                 log<LOG_INFO>(L"%1% || found linear response for %2%") % __func__ % systname.c_str();
-				double alpha = alphas[systname];
+                                double alpha = alphas[systname];
                                 Eigen::MatrixXf content = allsplinesyst.GetLinearResponse()[systname].transpose() * alpha;
                                 
                                 for (size_t i = 0; i < channel_nbins_x; ++i) {
@@ -1471,26 +1482,26 @@ namespace PROfit{
                                     
                                     hsum->SetBinContent(i + 1, hsum->GetBinContent(i + 1) + fractional_unc * fractional_unc);
                                 }
-			    }
-			    else{
+                            }
+                            else{
                                 log<LOG_INFO>(L"%1% || did not find linear response for %2%") % __func__ % systname.c_str();
 
                                 for(int i = 0; i < channel_nbins_x; i++){
-			            for(int j = channel_nbins_y*i; j < channel_nbins_y*(i+1); j++){
-			                diag1d(i) += channel_diag(j, j);
-			                for(int k = channel_nbins_y*i; k < channel_nbins_y*(i+1); k++){
-			                    VarVec(i) += channel_cov(j, k);
-			                }
-			            }
-			        }
+                                    for(int j = channel_nbins_y*i; j < channel_nbins_y*(i+1); j++){
+                                        diag1d(i) += channel_diag(j, j);
+                                        for(int k = channel_nbins_y*i; k < channel_nbins_y*(i+1); k++){
+                                            VarVec(i) += channel_cov(j, k);
+                                        }
+                                    }
+                                }
 
-			        float inv_diag1d;
+                                float inv_diag1d;
                                 for (size_t i = 0; i < channel_nbins_x; ++i) {
-			            inv_diag1d = 1/diag1d(i);
+                                    inv_diag1d = 1/diag1d(i);
                                     h->SetBinContent(i+1, sqrt(inv_diag1d*VarVec(i)*inv_diag1d));
                                     hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+inv_diag1d*VarVec(i)*inv_diag1d);
                                 }
-			    }
+                            }
 
                             const std::string &plotname = config.m_mcgen_variation_plotname_map.at(systname);
                             leg->AddEntry(h, plotname.c_str(), "l");
@@ -1503,7 +1514,6 @@ namespace PROfit{
                             hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                         }
                         leg->AddEntry(hsum,"Sum","l");
-
                         // Diagnostic: Check hsum for bad values before drawing
                         bool hsum_has_bad = false;
                         for (int bin = 1; bin <= hsum->GetNbinsX(); ++bin) {
@@ -1520,7 +1530,8 @@ namespace PROfit{
                         log<LOG_INFO>(L"%1% || hsum for tag '%2%': nbins=%3%, max=%4%, integral=%5%")
                             % __func__ % tag.c_str() % hsum->GetNbinsX() % hsum->GetMaximum() % hsum->Integral();
 
-                        hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+
+                        hsum->SetXTitle(xtitle.c_str());
                         hsum->SetYTitle("Fractional Uncertainty");
                         hsum->SetLineColor(kBlack);
                         hsum->SetLineWidth(2);
@@ -1575,14 +1586,14 @@ namespace PROfit{
                         hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                     }
                     leg->AddEntry(hsum,"Sum","l");
-                    hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+                    hsum->SetXTitle(xtitle.c_str());
                     hsum->SetTitle(("Summary: "+name).c_str());
                     hsum->SetYTitle("Fractional Uncertainty");
                     hsum->SetLineColor(kBlack);
                     hsum->SetLineWidth(2);
                     hsum->SetLineStyle(1);
                     hsum->SetMinimum(0);
-                    hsum->SetStats(0);  
+                    hsum->SetStats(0);
                     hsum->Draw("HIST");
                     hsum->SetMaximum(hsum->GetMaximum()*1.7);
                     gPad->Modified();
