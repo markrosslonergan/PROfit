@@ -147,41 +147,66 @@ namespace PROfit {
 
     std::map<std::string, Eigen::MatrixXf> PROsyst::CalcLinearResponse(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index) const{
         int nbins =  config.m_num_variable_bins_total_collapsed[other_index];
-	Eigen::MatrixXf cv = CollapseMatrix(config, FillSpectra(config, prop, *this, model, params , true, other_index).Spec());
+	Eigen::MatrixXf diag = FillSpectra(config, prop, *this, model, params , true, other_index).Spec().array().matrix().asDiagonal();
+	Eigen::MatrixXf collapsed_diag = CollapseMatrix(config, diag);
+	Eigen::MatrixXf collapsed_diag_inv = collapsed_diag.inverse();
+
+
+        Eigen::MatrixXf R;
 	std::map<std::string, Eigen::MatrixXf> ret;
-        Eigen::MatrixXf R = Eigen::MatrixXf::Zero(nbins, 1); // Follow notation of tech note
         for(const auto &[name, spair]: syst_map) {
             const auto &[idx, stype] = spair;
+	    R = Eigen::MatrixXf::Zero(nbins, 1);
+
 	    if(stype == SystType::Covariance){
-            log<LOG_INFO>(L"%1% || Calculating linear response %2% ") % __func__ % name.c_str();
-                Eigen::MatrixXf coll_cov = CollapseMatrix(config, covmat.at(idx));
-	        Eigen::MatrixXf diff = coll_cov - Eigen::MatrixXf::Identity(nbins, nbins);
-	        ret[name] = (diff*cv).transpose();
+		Eigen::MatrixXf frac_covariance = covmat.at(idx);
+		Eigen::MatrixXf full_covariance = diag*(frac_covariance)*diag;
+		Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance);
+
+	        for(int i=0; i < nbins; i++){
+	            R(i) = std::sqrt(collapsed_diag_inv(i,i)*collapsed_full_covariance(i, i)*collapsed_diag_inv(i,i));
+	        }
+
+	        ret[name] = R.transpose();
 	    }
         }
 
 	return ret;
     }
 
-    std::vector<double> PROsyst::CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const{
+    std::map<std::string, double> PROsyst::CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const{
     	int nbins =  config.m_num_variable_bins_total_collapsed[other_index];
-	Eigen::MatrixXf cv = CollapseMatrix(config, FillSpectra(config, prop, *this, model, params , true, other_index).Spec());
-        Eigen::MatrixXf u = data.Spec() - cv;
-	std::vector<double> ret(n_covar, 0.0);
-	Eigen::MatrixXf stat_covariance = (data.Spec()).matrix().asDiagonal();
+	Eigen::MatrixXf bf = CollapseMatrix(config, FillSpectra(config, prop, *this, model, params , true, other_index).Spec());
+        Eigen::MatrixXf data_mat = data.Spec().matrix();	
+        Eigen::VectorXf sigma = data_mat.array().sqrt();
+        Eigen::VectorXf u = (data_mat - bf).array() / sigma.array(); 
+
+	int row_i = 0;
+	Eigen::MatrixXf R = Eigen::MatrixXf::Zero(LinearResponse.size(), nbins);
 	for(const auto &[name, spair]: syst_map) {
             const auto &[idx, stype] = spair;
 	    if(stype == SystType::Covariance){
-	        Eigen::MatrixXf inverted_collapsed_full_covariance = stat_covariance + LinearResponse.at(name).transpose()*LinearResponse.at(name); 
-	        inverted_collapsed_full_covariance = (stat_covariance + LinearResponse.at(name).transpose()*LinearResponse.at(name)).inverse(); 
-                Eigen::MatrixXf result = LinearResponse.at(name)*inverted_collapsed_full_covariance*u;
-	        ret.at(idx) = result(0,0);
+		R.row(row_i) = LinearResponse.at(name);
+		row_i++;
+            }
+	}
+
+	Eigen::MatrixXf stat_covariance = data_mat.asDiagonal();
+	Eigen::MatrixXf alphas = R*(Eigen::MatrixXf::Identity(nbins, nbins)+R.transpose()*R).inverse()*u;
+
+	std::map<std::string, double> ret;
+	row_i = 0;
+	for(const auto &[name, spair]: syst_map) {
+            const auto &[idx, stype] = spair;
+	    if(stype == SystType::Covariance){
+
+	        ret[name] = alphas.row(row_i)(0);
+                row_i++;
 	    }
         }
 
 	return ret;
     }
-
 
     PROsyst PROsyst::subset(const std::vector<std::string> &systs) const {
         PROsyst ret;

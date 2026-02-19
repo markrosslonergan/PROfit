@@ -1237,7 +1237,7 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::vector<double> alphas) {
+    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::map<std::string, double> alphas) {
         //Input PROsyst needs to be the allsplinesyst for now
 
         std::vector<int> colors = {
@@ -1414,14 +1414,13 @@ namespace PROfit{
 			size_t channel_nbins_y = 1;// start with assumption of 1d
                         size_t channel_nbins_x = config.m_channel_variable_bins[channel][other_index].NBinsAlong(0);
 
-                        int alphai=0;
                         for(const auto & systname:vec){
 
                             Eigen::MatrixXf frac_covariance = allsplinesyst.GrabMatrix(systname);
+
                             Eigen::MatrixXf full_covariance = diag*(frac_covariance)*diag;
                             Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance);
                             Eigen::MatrixXf collapsed_frac_covariance = collapsed_diag_inv*collapsed_full_covariance*collapsed_diag_inv;
-
                             Eigen::MatrixXf channel_cov = collapsed_full_covariance(channel_bins, channel_bins);
 
                             // Diagnostic: Check channel_cov diagonal for bad values
@@ -1461,15 +1460,17 @@ namespace PROfit{
 				return 1;
 			    }
 
-                            if(allsplinesyst.GetLinearResponse().count(systname) >= 1 && alphas.size() > 0){
+                            if(allsplinesyst.GetLinearResponse().count(systname) >= 1 && alphas.count(systname) >= 1){
                                 log<LOG_INFO>(L"%1% || found linear response for %2%") % __func__ % systname.c_str();
-				double alpha = alphas.at(alphai);
-				Eigen::MatrixXf content = allsplinesyst.GetLinearResponse()[systname].transpose()*alpha;
-				for (size_t i = 0; i < channel_nbins_x; ++i) {
-                                    h->SetBinContent(i+1, content(i));
-                                    hsum->SetBinContent(i+1, content(i)*content(i));
+				double alpha = alphas[systname];
+                                Eigen::MatrixXf content = allsplinesyst.GetLinearResponse()[systname].transpose() * alpha;
+                                
+                                for (size_t i = 0; i < channel_nbins_x; ++i) {
+                                    double fractional_unc = content(i + binstart);
+                                    h->SetBinContent(i + 1, std::abs(fractional_unc));
+                                    
+                                    hsum->SetBinContent(i + 1, hsum->GetBinContent(i + 1) + fractional_unc * fractional_unc);
                                 }
-				alphai++;
 			    }
 			    else{
                                 log<LOG_INFO>(L"%1% || did not find linear response for %2%") % __func__ % systname.c_str();

@@ -1794,7 +1794,7 @@ int main(int argc, char* argv[])
         if(!global_fixed[0] || !systs_only) fitter.calcFreqSeedPoints(*metric);
 
         PROsyst pre_allcovsyst = variable_systs[config.i_prime].allsplines2cov(config, prop, *model, CVParams, dseed(PROseed::global_rng));
-	std::vector<double> alphas = variable_systs[config.i_prime].CalcMinLinearParam(config, prop, *model, best_fit, config.i_prime, data);
+	std::map<std::string, double> alphas = variable_systs[config.i_prime].CalcMinLinearParam(config, prop, *model, best_fit, config.i_prime, data);
         PROsyst post_allcovsyst = variable_systs[config.i_prime].allsplines2cov(config, prop, *model, best_fit, dseed(PROseed::global_rng));
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){

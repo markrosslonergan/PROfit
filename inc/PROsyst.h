@@ -153,7 +153,7 @@ namespace PROfit {
             Eigen::VectorXf spline_priors;
             Eigen::VectorXf spline_centers;
 
-	    std::vector<double> CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const;
+	    std::map<std::string, double> CalcMinLinearParam(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, int other_index, const PROdata &data) const;
         private:
 	    /* Function: Calculate linear response function R for cov systematics */
 	    std::map<std::string, Eigen::MatrixXf> LinearResponse;
