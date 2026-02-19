@@ -1272,7 +1272,7 @@ int main(int argc, char* argv[])
         }
 
         std::string filename = final_output_tag+"_fractional_systematics.pdf";
-        plotPriorFractionalSystematicBreakdown(config, variable_cvs[config.i_prime], allcovsyst, filename,config.i_prime);
+        plotFractionalSystematicBreakdown(config, variable_cvs[config.i_prime], allcovsyst, filename,config.i_prime);
 
         std::vector<std::map<std::string, std::unique_ptr<TH1D>>> other_hists;
         for(size_t io = 0; io < config.m_num_variables; ++io) {
@@ -1958,8 +1958,8 @@ int main(int argc, char* argv[])
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
         plot_channels((final_output_tag+"_PROglobal_hists.pdf"), config, cv, bf, data, err_band, post_err_band, pre_allcovsyst, post_allcovsyst, texts, pbounds,opt);
-        plotPriorFractionalSystematicBreakdown(config, cv, pre_allcovsyst, final_output_tag+"_PROglobal_unc_pre.pdf", config.i_prime);
-        plotPriorFractionalSystematicBreakdown(config, bf, post_allcovsyst, final_output_tag+"_PROglobal_unc_post.pdf", config.i_prime, alphas);
+        plotFractionalSystematicBreakdown(config, cv, pre_allcovsyst, final_output_tag+"_PROglobal_unc_pre.pdf", config.i_prime);
+        plotFractionalSystematicBreakdown(config, bf, post_allcovsyst, final_output_tag+"_PROglobal_unc_post.pdf", config.i_prime, alphas);
     }
 
     //***********************************************************************

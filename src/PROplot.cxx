@@ -1237,7 +1237,7 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::map<std::string, double> alphas) {
+    int plotFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, int other_index, std::map<std::string, double> alphas) {
         //Input PROsyst needs to be the allsplinesyst for now
 
         std::vector<int> colors = {
