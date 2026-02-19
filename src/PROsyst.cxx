@@ -139,7 +139,9 @@ namespace PROfit {
             cvparams.segment(0, model->nparams) = model->default_val;
         }
 
-	LinearResponse = CalcLinearResponse(config, prop, *model, cvparams, other_index);
+	if(other_index == 0){
+	    LinearResponse = CalcLinearResponse(config, prop, *model, cvparams, other_index);
+	}
     }
 
     std::map<std::string, Eigen::MatrixXf> PROsyst::GetLinearResponse() const{
