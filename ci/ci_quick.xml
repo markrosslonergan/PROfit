@@ -1,0 +1,127 @@
+<?xml version="1.0" ?>
+
+<!-- One Mode -->
+<mode name="nu" />
+
+<!-- Two Detector SBN Snalysis-->
+<detector name="SBND" pot="9.7e20"/>
+<detector name="ICARUS" pot="13.1e20"/>
+
+<!-- Two Channels, numu and nue selections -->
+<channel name="numu" plotname="#nu_{#mu} Selection">
+    <bins unit = "Reconstructed Neutrino Energy [GeV]" min="0.2" max="3" nbins="28" />
+    <bins unit = "True L/E" min="0" max="3" nbins="250" plot="false"/>
+    <subchannel name="numucc" plotname="#nu_{#mu} CC" color="#99CCFF"/>
+</channel>
+<channel name="nue" plotname="#nu_{e} Selection">
+    <bins unit = "Reconstructed Neutrino Energy [GeV]" min="0.2" max="3" nbins="14"  />
+    <bins unit = "True L/E" min="0" max="3" nbins="250" plot="false"/>
+    <subchannel name="intrinsic" plotname="#nu_{e} CC"                    color="#33CC33"/>
+    <subchannel name="fullosc"   plotname="#nu_{#mu} #rightarrow #nu_{e}" color="#FFFF99"/>
+</channel>
+
+<!-- The Physics model, here nue-appearance only -->
+<model tag="nueapp">
+    <rule index="0" name="No Osc"/>
+    <rule index="1" name="Nue App"/>
+    <parameter variable_index = "1" name="L/E"/>
+</model>
+
+<!-- Where to find the Montecarlo and how to fill all the subchannels defined above-->
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/sbnd_bnbcv_sBrucetree_197.root" scale = "1.0" pot="2.15692e19">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_SBND_numu_numucc"
+        model_rule            = "0"
+        additional_weight     = "0.9*CC*(truePDG == 14 || truePDG == -14)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+</MCFile>
+
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/icarus_bnbcv_sBrucetree_10.root" scale = "1.0" pot="1.60787e20">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_ICARUS_numu_numucc"
+        model_rule            = "0"
+        additional_weight     = "0.9*CC*(truePDG == 14 || truePDG == -14)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+</MCFile>
+
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/sbnd_nue_sBrucetree_12.root" scale = "1.0" pot="1.40322e21">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_SBND_nue_intrinsic"
+        model_rule            = "0"
+        additional_weight     = "0.8*CC*(truePDG == 12 || truePDG == -12)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+</MCFile>
+
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/sbnd_fullosc_sBrucetree_15.root" scale = "1.0" pot="1.0282e19">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_SBND_nue_fullosc"
+        model_rule            = "1"
+        additional_weight     = "0.8*CC*(truePDG == 12 || truePDG == -12)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+</MCFile>
+
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/icarus_nue_sBrucetree_0.root" scale = "1.0" pot="1.30163e22">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />   
+    <branch
+        associated_subchannel = "nu_ICARUS_nue_intrinsic"
+        model_rule            = "0"
+        additional_weight     = "0.8*CC*(truePDG == 12 || truePDG == -12)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+</MCFile>
+
+<MCFile treename="events/selectedNu" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/icarus_fullosc_sBrucetree_0.root" scale = "1.0" pot="8.25357e19">
+    <friend treename="events/multisigmaTree" />
+    <friend treename="events/multisimTree" />
+    <branch
+        associated_subchannel = "nu_ICARUS_nue_fullosc"
+        model_rule            = "1"
+        additional_weight     = "0.8*CC*(truePDG == 12 || truePDG == -12)*(recoE>0)"
+        >
+        <variable>recoE</variable>
+        <variable>trueL/(trueE*1000.0)</variable>
+    </branch>
+
+</MCFile>
+
+<systematics>
+    <!-- Inlcude MC stats, uncomment out to remove -->
+    <systematic type="mcstat" plotname="MC Stats" tag="Other">MCStat</systematic>
+
+    <systematic type="norm" plotname="SBNDDet" tag="Other">nu_SBND:0.02</systematic>
+    <systematic type="norm" plotname="ICARUSDet" tag="Other">nu_ICARUS:0.02</systematic>
+
+    <systematic type="spline"  binning="var1" plotname="ZExpA1CCQE" tag="Zexpansion">GENIEReWeight_SBN_v1_multisigma_ZExpA1CCQE</systematic>
+    <systematic type="spline"  binning="var1" plotname="ZExpA2CCQE" tag="Zexpansion">GENIEReWeight_SBN_v1_multisigma_ZExpA2CCQE</systematic>
+    <systematic type="spline"  binning="var1" plotname="ZExpA3CCQE" tag="Zexpansion">GENIEReWeight_SBN_v1_multisigma_ZExpA3CCQE</systematic>
+    <systematic type="spline"  binning="var1" plotname="ZExpA4CCQE" tag="Zexpansion">GENIEReWeight_SBN_v1_multisigma_ZExpA4CCQE</systematic>
+
+    <!-- use all flux covariance systs from multisimTree-->
+    <systematic type="covariance" tag="Flux">expskin_Flux</systematic>
+    <systematic type="covariance" tag="Flux">horncurrent_Flux</systematic>
+</systematics>
+
+
