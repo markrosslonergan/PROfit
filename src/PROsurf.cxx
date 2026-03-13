@@ -1,6 +1,7 @@
 #include "PROsurf.h"
 #include "PROfitter.h"
 #include "PROlog.h"
+#include "PROplot.h"
 #include "PROversion.h"
 
 #include <Eigen/Eigen>
@@ -609,7 +610,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
         }
 
-        void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc, const Eigen::VectorXf& init_seed, const Eigen::VectorXf & true_params, bool mask_osc) {
+        void PROfile::Plot(const PROconfig &config, const PROsyst &systs, const PROmodel &model, PROmetric &metric, PROseed &proseed, std::string filename, bool with_osc, const Eigen::VectorXf& init_seed, const Eigen::VectorXf & true_params, bool mask_osc, const std::vector<int> &permutation) {
 
             int nparams = systs.GetNSplines() + model.nparams*with_osc;
             int nBins = nparams;
@@ -717,40 +718,79 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             //Next version
             TCanvas *c2 =  new TCanvas((filename+"1sigma").c_str(), (filename+"1sigma").c_str() , 20*nparams, 400);
             c2->cd();
-            c2->SetBottomMargin(0.25);
+            c2->SetBottomMargin(0.27);
             c2->SetRightMargin(0.05);
 
             log<LOG_DEBUG>(L"%1% || Are all lines the same : %2% %3% %4% %5% %6%") % __func__ % nBins % barvalues.size() % bfvalues.size() % values1_down.size() % values1_up.size() ;
 
-            float minVal = *std::min_element(values1_down.begin(), values1_down.end());
-            float maxVal = *std::max_element(values1_up.begin(), values1_up.end());
+            float minVal = *std::min_element(values1_down.begin()+model.nparams, values1_down.end());
+            float maxVal = *std::max_element(values1_up.begin()+model.nparams, values1_up.end());
 
-            onesig.SetFillColor(kBlue-7);
+            onesig.SetFillColor(Blue);
             onesig.SetStats(0);
             //onesig.SetMinimum(min(-1.2,minVal*1.2));
             onesig.SetMinimum(minVal*1.1);
             onesig.SetMaximum(maxVal*1.1);
 
-            onesig.GetXaxis()->SetNdivisions(barvalues.size());  // Set number of tick marks
+            onesig.GetXaxis()->SetNdivisions(barvalues.size() - model.nparams);  // Set number of tick marks
             onesig.GetXaxis()->SetLabelSize(0);  // Hide default numerical labels
 
             onesig.SetTitle("");
-            TGraphAsymmErrors todraw = onesig;
-            if(mask_osc) {
-                for(size_t i = 0; i < model.nparams; ++i) {
-                    todraw.SetPoint(i, 0,0);
-                    todraw.SetPointError(i, 0, 0, 0, 0);
+            //TGraphAsymmErrors todraw = onesig;
+            // Always mask out oscillation points
+            TGraphAsymmErrors todraw(onesig.GetN() - model.nparams);
+            todraw.SetFillColor(SkyBlue);
+            //todraw.SetFillColorAlpha(Blue, 0.8);
+            todraw.SetStats(0);
+            //todraw.SetMinimum(min(-1.2,minVal*1.2));
+            todraw.SetMinimum(minVal*1.1);
+            todraw.SetMaximum(std::max(maxVal*1.1, 1.8));
+
+            todraw.GetXaxis()->SetNdivisions(barvalues.size() - model.nparams);  // Set number of tick marks
+            todraw.GetXaxis()->SetLabelSize(0);  // Hide default numerical labels
+
+            todraw.SetTitle("");
+            if(permutation.size()) {
+                int j = 0;
+                for(int i : permutation) {
+                    double x = onesig.GetPointX(j), y = onesig.GetPointY(i + model.nparams);
+                    todraw.SetPoint(j, x, y);
+                    todraw.SetPointError(j,
+                            onesig.GetErrorXlow(j),
+                            onesig.GetErrorXhigh(j),
+                            onesig.GetErrorYlow(i + model.nparams),
+                            onesig.GetErrorYhigh(i + model.nparams));
+                    j++;
+                }
+            } else {
+                for(size_t i = model.nparams; i < onesig.GetN(); ++i) {
+                    double x = onesig.GetPointX(i - model.nparams), y = onesig.GetPointY(i);
+                    log<LOG_ERROR>(L"%1% || Point x %2% and y %3%") % __func__ % x % y;
+                    todraw.SetPoint(i - model.nparams, x, y);
+                    todraw.SetPointError(i - model.nparams,
+                            onesig.GetErrorXlow(i - model.nparams),
+                            onesig.GetErrorXhigh(i - model.nparams),
+                            onesig.GetErrorYlow(i),
+                            onesig.GetErrorYhigh(i));
                 }
             }
+            //if(mask_osc) {
+            //    for(size_t i = 0; i < model.nparams; ++i) {
+            //        todraw.SetPoint(i, 0,0);
+            //        todraw.SetPointError(i, 0, 0, 0, 0);
+            //    }
+            //}
             todraw.Draw("A2");
             //onesig.Draw("A2");
             //onesig.GetYaxis()->SetTitle("#sigma Shift");
-            todraw.GetYaxis()->SetTitle("Posterior 1#sigma Error");
-            todraw.GetYaxis()->SetTitleOffset(0.8);
+            todraw.GetYaxis()->SetTitle("Parameter Value [#sigma]");
+            todraw.GetYaxis()->SetTitleOffset(0.9);
 
             float y_min = todraw.GetMinimum();
-            for (size_t i = 0; i < barvalues.size(); ++i) {
-                std::string label = i < model.nparams ? "Log_{10}(" + model.pretty_param_names[i]+")" : config.m_mcgen_variation_plotname_map.at(names[i]);
+            for (size_t i = 0; i < barvalues.size() - model.nparams; ++i) {
+                //std::string label = i < model.nparams ? "" : config.m_mcgen_variation_plotname_map.at(names[i]);
+                std::string label = config.m_mcgen_variation_plotname_map.at(names[i+model.nparams]);
+                if(permutation.size()) label = config.m_mcgen_variation_plotname_map.at(names[permutation[i]+model.nparams]);
                 TLatex* text = new TLatex(barvalues[i], y_min - 0.05, label.c_str());  // Position text below axis
                 text->SetTextAlign(13);  
                 text->SetTextSize(0.03); 
@@ -762,7 +802,8 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
             t->SetTextFont(42);                          
             t->SetTextSize(0.03);      
             t->SetTextAlign(33);        
-            std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+            //std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+            std::string pv = "PROfit";
             t->DrawText(0.895, 0.955, pv.c_str()); 
 
             c2->Update();
@@ -795,32 +836,69 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
 
 
-            for (int i = 0; i < nBins; ++i) {
-                if(mask_osc && i < model.nparams) continue;
-                TMarker* initstar = new TMarker(i+0.5, init_seed[i], 29);
-                initstar->SetMarkerSize(0.6); 
-                initstar->SetMarkerColor(kBlue); 
-                initstar->Draw();
+            for (int i = 0; i < nBins - model.nparams; ++i) {
+                //if(mask_osc && i < model.nparams) continue;
+                // Always mask osc for now
+                int j = i + model.nparams;
+                if(permutation.size()) j = permutation[i] + model.nparams;
+                //TMarker* initstar = new TMarker(i+0.5, init_seed[j], 29);
+                //initstar->SetMarkerSize(0.6); 
+                //initstar->SetMarkerColor(kBlue); 
+                //initstar->Draw();
 
-                if (i < true_params.size()) {
+                //if (i < true_params.size()) {
 
-                    TMarker* truestar = new TMarker(i+0.5, true_params[i], 29);
-                    truestar->SetMarkerSize(0.5); 
-                    truestar->SetMarkerColor(kRed); 
-                    truestar->Draw();
-                }
+                //    TMarker* truestar = new TMarker(i+0.5, true_params[j], 29);
+                //    truestar->SetMarkerSize(0.5); 
+                //    truestar->SetMarkerColor(kRed); 
+                //    truestar->Draw();
+                //}
 
-                TMarker* star = new TMarker(i+0.5, bfvalues[i], 29);
-                star->SetMarkerSize(0.5); 
+                // Make Black start global best fit
+                //TMarker* star = new TMarker(i+0.5, bfvalues[j], 29);
+                TMarker* star = new TMarker(i+0.5, init_seed[j], 29);
+                star->SetMarkerSize(1.8); 
                 star->SetMarkerColor(kBlack); 
+                //star->SetMarkerColor(Vermilion); 
+                TMarker* staroutline = new TMarker(i+0.5, init_seed[j], 30);
+                staroutline->SetMarkerSize(0.9); 
+                staroutline->SetMarkerColor(kWhite); 
                 star->Draw();
+                //staroutline->Draw();
             }
+
+            TMarker* dummy = new TMarker(0.5, 0, 29);
+            dummy->SetMarkerSize(1.8); 
+            dummy->SetMarkerColor(kBlack); 
+            TLegend leg(0.13,0.79,0.33,0.89);
+            leg.SetFillStyle(0);
+            leg.SetLineWidth(0);
+            leg.AddEntry(dummy, "Best Fit", "p");
+            leg.AddEntry(&todraw, "Post-fit #pm1#sigma Uncertainty", "f");
+            leg.Draw();
+
 
 
 
             t->DrawText(0.895, 0.955, pv.c_str()); 
             c2->SaveAs((filename+"_1sigma.pdf").c_str(),"pdf");
             delete c2;
+
+            std::unique_ptr<TCanvas> c3 = std::make_unique<TCanvas>();
+            c3->Divide(model.nparams);
+            c3->SetLeftMargin(0.2);
+
+            for(size_t w = 0; w< model.nparams; w++ ){
+                if(mask_osc) continue;
+
+                c3->cd(w+1);
+                std::string xval = "Log_{10}(" + model.pretty_param_names[w]+")";
+                //graphs[w]->SetTitle(xval.c_str());
+                graphs[w]->SetTitle("");
+                graphs[w]->Draw("AL");
+                t->DrawText(0.895, 0.955, pv.c_str()); 
+            }
+            c3->SaveAs((filename+"_model_params.pdf").c_str(), "pdf");
 
             return;
         }

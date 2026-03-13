@@ -2,6 +2,14 @@
 
 namespace PROfit{
 
+int Black;
+int Blue;
+int Orange;
+int Green;
+int SkyBlue;
+int Vermilion;
+int Purple;
+
 
     std::map<std::string, std::unique_ptr<TH1D>> getCVHists(const PROspec &spec, const PROconfig& inconfig, bool scale, int other_index) {
         std::map<std::string, std::unique_ptr<TH1D>> hists;  
@@ -185,7 +193,7 @@ namespace PROfit{
     }
 
 
-    void plot_channels(const std::string &filename, const PROconfig &config, std::optional<PROspec> cv, std::optional<PROspec> best_fit, std::optional<PROdata> data, std::optional<TGraphAsymmErrors*> errband, std::optional<TGraphAsymmErrors*> posterrband, std::vector<TPaveText> &texts, PlotOptions opt, int other_index) {
+    void plot_channels(const std::string &filename, const PROconfig &config, std::optional<PROspec> cv, std::optional<PROspec> best_fit, std::optional<PROdata> data, std::optional<TGraphAsymmErrors*> errband, std::optional<TGraphAsymmErrors*> posterrband, std::vector<TPaveText> &texts, std::string label, PlotOptions opt, int other_index) {
         TCanvas c;
         c.Print((filename+"[").c_str());
 
@@ -210,13 +218,17 @@ namespace PROfit{
                 for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
                     size_t channel_nbins = other_index < 0 ? config.m_channel_num_bins[channel] : config.m_channel_num_other_bins[channel][other_index];
 
-                    Color_t bfcol = TColor::GetColor(234, 67, 53);//ncie red
-                    Color_t cvcol =  TColor::GetColor(66, 103, 210);//nice blue :)
+                    //Color_t bfcol = TColor::GetColor(234, 67, 53);//ncie red
+                    //Color_t cvcol =  TColor::GetColor(66, 103, 210);//nice blue :)
+                    int bfcol = Vermilion;
+                    int cvcol = Blue;
                     if(!best_fit)cvcol=kBlack;
 
                     std::vector<float> edges = other_index < 0 ? config.GetChannelBinEdges(0) : config.GetChannelOtherBinEdges(0, other_index);
                     std::string xtitle = other_index < 0 ? config.m_channel_units[channel] : config.m_channel_other_units[channel][other_index];
-                    std::string hist_title = config.m_detector_plotnames[det]  + " "+ config.m_channel_plotnames[channel]+";"+xtitle+";"+ytitle;
+                    // Remove channel name for ICARUS papaer
+                    //std::string hist_title = config.m_detector_plotnames[det]  + " "+ config.m_channel_plotnames[channel]+";"+xtitle+";"+ytitle;
+                    std::string hist_title = ";"+xtitle+";"+ytitle;
                     //std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.11,0.75,0.89,0.89); 4
                     std::unique_ptr<TLegend> leg = std::make_unique<TLegend>(0.38,0.69,0.89,0.89);
                     leg->SetNColumns(2);
@@ -225,6 +237,7 @@ namespace PROfit{
                     TH1D cv_hist(std::to_string(global_channel_index).c_str(), hist_title.c_str(), channel_nbins, edges.data());
                     cv_hist.SetLineWidth(2);
                     cv_hist.SetLineColor(cvcol);
+                    cv_hist.SetLineStyle(bool(opt&PlotOptions::CVasStack) ? kSolid : kDashed);
                     cv_hist.SetFillStyle(0);
                     for(size_t bin = 0; bin < channel_nbins; ++bin) {
                         cv_hist.SetBinContent(bin+1, 0);
@@ -249,6 +262,8 @@ namespace PROfit{
                         for(size_t subchannel = 0; subchannel < config.m_num_subchannels[channel]; ++subchannel){
                             const std::string& subchannel_name  = config.m_fullnames[global_subchannel_index];
                             if(bool(opt&PlotOptions::CVasStack)) {
+                                if(!config.m_subchannel_plotnames[channel][subchannel].size())
+                                    cvhists[subchannel_name]->SetLineColor(config.HexToROOTColor(config.m_subchannel_colors[channel][subchannel]));
                                 cvstack->Add(cvhists[subchannel_name].get());
                                 subplots.push_back({subchannel_name, config.m_subchannel_plotnames[channel][subchannel].c_str()});
                             }
@@ -257,7 +272,8 @@ namespace PROfit{
                         }
                         if(bool(opt&PlotOptions::CVasStack)) {
                             for(size_t sc = subplots.size(); sc > 0; --sc)
-                                leg->AddEntry(cvhists[subplots[sc-1].first].get(), subplots[sc-1].second ,"f");
+                                if(strlen(subplots[sc-1].second))
+                                    leg->AddEntry(cvhists[subplots[sc-1].first].get(), subplots[sc-1].second ,"f");
                         }
                         if(bool(opt&PlotOptions::AreaNormalized)) {
                             float integral = cv_hist.Integral();
@@ -313,7 +329,7 @@ namespace PROfit{
                         }
                         //bf_hist.SetLineColor(TColor::GetColor(234, 67, 53)); // pastel red
                         bf_hist.SetLineColor(bfcol); 
-                        bf_hist.SetLineStyle(kDashed); 
+                        bf_hist.SetLineStyle(kSolid); 
                         bf_hist.SetLineWidth(2);
                         //leg->AddEntry(&bf_hist, "Best Fit", "l");
 
@@ -390,16 +406,22 @@ namespace PROfit{
                     if(cv) {
                         if(bool(opt&PlotOptions::CVasStack)) {
                             cvstack->SetMaximum(std::max(top_modifier*cvstack->GetMaximum(),top_modifier*data_hist.GetMaximum()));
-                            cvstack->Draw("hist");
+                            cv_hist.Draw("hist");
+                            cvstack->Draw("hist same");
+                            cv_hist.GetYaxis()->SetTitleSize(0.05);  
+                            cv_hist.GetYaxis()->SetTitleOffset(0.9);
+                            cv_hist.GetYaxis()->SetLabelSize(0.04);
+                            cv_hist.SetMinimum(0.01);
                             cv_hist.Draw("same hist");
+                            gPad->RedrawAxis();
 
                         } else {
                             cv_hist.SetMaximum(top_modifier*cv_hist.GetMaximum());
 
                             cv_hist.Draw("hist");
-                            cv_hist.GetYaxis()->SetTitleSize(0.06);  
-                            cv_hist.GetYaxis()->SetTitleOffset(0.75);
-                            cv_hist.GetYaxis()->SetLabelSize(0.05);
+                            cv_hist.GetYaxis()->SetTitleSize(0.05);  
+                            cv_hist.GetYaxis()->SetTitleOffset(0.9);
+                            cv_hist.GetYaxis()->SetLabelSize(0.04);
                             cv_hist.SetMinimum(0.01);
                         }
                     }
@@ -483,13 +505,13 @@ namespace PROfit{
 
                         for(size_t i = 0; i < channel_nbins; ++i) {
                             float numerator = data_hist.GetBinContent(i+1);
-                            float denonminator = 
+                            float denominator = 
                                 bool(opt&PlotOptions::DataMCRatio)
                                 ? cv_hist.GetBinContent(i+1)
                                 : bf_hist.GetBinContent(i+1);
-                            float rat = numerator/denonminator;
+                            float rat = numerator/denominator;
                             if(isnan(rat)) rat = 1;
-                            ratio->SetBinError(i+1, 1.0 / sqrt(numerator));
+                            ratio->SetBinError(i+1, data_hist.GetBinError(i+1)/denominator);
                             ratio->SetBinContent(i+1, rat);
                             one->SetBinContent(i+1, 1.0);
                             ratio_err->SetPointEYhigh(i, ratio_err->GetErrorYhigh(i)/ratio_err->GetPointY(i));
@@ -562,8 +584,26 @@ namespace PROfit{
                     t->SetTextFont(42);                          
                     t->SetTextSize(0.03);      
                     t->SetTextAlign(33);        
-                    std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+                    // Disable for paper
+                    //std::string pv = "PROfit v"+std::string(PROJECT_VERSION_STR);
+                    std::string pv = "PROfit";
                     t->DrawText(0.895, 0.955, pv.c_str()); 
+
+                    TText *ti = new TText();
+                    ti->SetNDC();
+                    ti->SetTextFont(42);
+                    ti->SetTextSize(0.045);
+                    ti->SetTextColor(kGray+1);
+                    //ti->SetTextAlign(33);
+                    ti->DrawText(0.13, 0.87, "ICARUS Run 2");
+
+                    TText *tl = new TText();
+                    tl->SetNDC();
+                    tl->SetTextFont(42);
+                    tl->SetTextSize(0.045);
+                    tl->SetTextColor(kGray+1);
+                    //tl->SetTextAlign(33);
+                    tl->DrawText(0.13, 0.825, label.c_str());
 
                     c.Print(filename.c_str());
 
@@ -575,30 +615,19 @@ namespace PROfit{
     }
 
 
-    int plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename) {
+    std::map<std::string, std::unique_ptr<TH1F>> plotPriorFractionalSystematicBreakdown(const PROconfig &config, const PROspec &spec, const PROsyst &allsplinesyst, std::string filename, float frac_max, std::vector<std::string> fracsummary_order, std::string fracsummary_allname) {
         //Input PROsyst needs to be the allsplinesyst for now
 
+        std::map<std::string, std::unique_ptr<TH1F>> hists;
+
         std::vector<int> colors = {
-            kAzure+1,      // Light blue
-            kRed+1,        // Bright red
-            kGreen+3,      // Medium green
-            kOrange+7,      // Deep orange
-            kBlue+2,        // Darker blue
-            kViolet+2,      // Purple/violet
-            kGray+1,         // Light gray
-            kYellow+2,      // Golden yellow
-            kTeal+3,        // Teal
-            kPink+2,        // Pink
-            kMagenta+2,     // Magenta
-            kSpring+5      // Blue-green
+            Blue, Green, Orange, SkyBlue, Vermilion, Purple
         };
 
         std::vector<int> line_styles = {
             1,  // Solid (base style)
             1,  // Dashed
         };
-
-
 
         //some testing
         for (const auto& [syst_name, tags] : config.m_mcgen_variation_tags) {
@@ -670,8 +699,10 @@ namespace PROfit{
                         c.cd(padIndex++);
                         bool first=true;
 
-                        TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                        TLegend* leg = new TLegend(0.14, 0.6, 0.89, 0.89);
                         leg->SetNColumns(3);
+                        leg->SetFillStyle(0);
+                        leg->SetLineWidth(0);
                         //leg->SetHeader(tag.c_str(), "C");  // Center-aligned header
 
 
@@ -716,14 +747,15 @@ namespace PROfit{
                             h->SetLineColor(colors[color_idx]);
                             h->SetLineStyle(line_styles[style_idx]);
                             hvec.push_back(h);
+                            hists[plotname] = std::make_unique<TH1F>(*h);
 
                         }//end syst
                         for (size_t i = 0; i < nbins; ++i) {
                             hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                         }
-                        leg->AddEntry(hsum,"Sum","l");
+                        leg->AddEntry(hsum,("All "+tag).c_str(),"l");
 
-                        hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
+                        hsum->SetXTitle(config.m_channel_units[channel].c_str());
                         hsum->SetYTitle("Fractional Uncertainty");
                         hsum->SetLineColor(kBlack);
                         hsum->SetLineWidth(2);
@@ -732,6 +764,7 @@ namespace PROfit{
                         hsum->SetStats(0);  
                         hsum->Draw("HIST");
                         hsum->SetMaximum(hsum->GetMaximum()*1.7);
+                        //hsum->SetMaximum(frac_max);
                         gPad->Modified();
                         gPad->Update();
 
@@ -739,6 +772,7 @@ namespace PROfit{
                         vsums.push_back(hsum);
                         vnames.push_back(tag);
                         for(auto &h:hvec) h->Draw("HIST SAME");
+                        gPad->RedrawAxis();
 
                         leg->Draw();
                     }//end tag
@@ -749,28 +783,43 @@ namespace PROfit{
 
                     TH1F* hsum = new TH1F( ("USum_"+std::to_string(global_channel_index)).c_str(),"Summary!", bin_edges.size()-1, bin_edges.data());
                     hsum->Reset();
-                    TLegend* leg = new TLegend(0.11, 0.6, 0.89, 0.89);
+                    TLegend* leg = new TLegend(0.14, 0.6, 0.89, 0.89);
                     leg->SetNColumns(3);
+                    leg->SetFillStyle(0);
+                    leg->SetLineWidth(0);
                     std::vector<TH1F*> hvec;
+                    std::map<std::string, TH1F*> hs;
                     for(size_t t=0; t< vsums.size(); t++){
                         int color_idx = t % colors.size();
                         for (size_t i = 0; i < nbins; ++i) {
                             hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+pow(vsums.at(t)->GetBinContent(i+1),2));
                         }
                         TH1F * h = (TH1F*)vsums.at(t)->Clone((to_string(global_channel_index)+vnames[t]).c_str());
-                        leg->AddEntry(h, vnames[t].c_str(), "l");
+                        if(!fracsummary_order.size()) leg->AddEntry(h, vnames[t].c_str(), "l");
+                        else hs[vnames[t]] = h;
                         h->SetLineColor(colors[color_idx]);
                         h->SetLineStyle(1);
                         h->SetLineWidth(1);
                         hvec.push_back(h);
+                        hists[vnames[t]] = std::make_unique<TH1F>(*h);
+                    }
+                    if(fracsummary_order.size()) {
+                        for(const auto &name : fracsummary_order) {
+                            if(hs.find(name) == hs.end()) {
+                                log<LOG_ERROR>(L"%1% || Could not find %2% in fractional uncertainty list.")
+                                    % __func__ % name.c_str();
+                                std::abort();
+                            }
+                            leg->AddEntry(hs.at(name), name.c_str(), "l");
+                        }
                     }
 
                     for (size_t i = 0; i < nbins; ++i) {
                         hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
                     }
-                    leg->AddEntry(hsum,"Sum","l");
-                    hsum->SetXTitle(config.m_channel_plotnames[channel].c_str());
-                    hsum->SetTitle("Summary!");
+                    leg->AddEntry(hsum,fracsummary_allname.c_str(),"l");
+                    hsum->SetXTitle(config.m_channel_units[channel].c_str());
+                    hsum->SetTitle("");
                     hsum->SetYTitle("Fractional Uncertainty");
                     hsum->SetLineColor(kBlack);
                     hsum->SetLineWidth(2);
@@ -779,14 +828,26 @@ namespace PROfit{
                     hsum->SetStats(0);  
                     hsum->Draw("HIST");
                     //hsum->SetMaximum(hsum->GetMaximum()*1.7);
-                    hsum->SetMaximum(1.2);
+                    hsum->SetMaximum(frac_max);
                     gPad->Modified();
                     gPad->Update();
                     for(auto &h:hvec) h->Draw("HIST SAME");
+                    gPad->RedrawAxis();
                     leg->Draw();
+                    hists["all"] = std::make_unique<TH1F>(*hsum);
 
 
                     c.Print(filename.c_str());
+                    TCanvas c2;
+                    hsum->SetLineWidth(2);
+                    hsum->Draw("HIST");
+                    for(auto &h:hvec) { h->SetLineWidth(2); h->Draw("HIST SAME"); }
+                    gPad->RedrawAxis();
+                    leg->Draw();
+                    c2.Print((filename+".summary.pdf").c_str());
+
+                    c.cd();
+
                     global_channel_index++;
                 }
             }
@@ -795,6 +856,6 @@ namespace PROfit{
 
 
         c.Print((filename+"]").c_str());
-        return 0;
+        return hists;
     };
 }

@@ -52,10 +52,37 @@ std::wostream *OSTREAM = &wcout;
 std::wofstream LOG_FILE_STREAM;
 bool LOGGING_TO_FILE = false;
 
+// Copied from DUNE
+void set_colors() {
+    //const TColor __kOIOrange(TColor::GetFreeColorIndex(), 0.90, 0.60, 0);
+    PROfit::Orange = TColor::GetColor("#E69F00");
+
+    //const TColor __kOISkyBlue(TColor::GetFreeColorIndex(), 0.35, 0.70, 0.90);
+    PROfit::SkyBlue = TColor::GetColor("#56B4E9");
+
+    //const TColor __kOIBlueGreen(TColor::GetFreeColorIndex(), 0, 0.60, 0.50);
+    PROfit::Green = TColor::GetColor("#009E73");
+
+    // We don't use Yellow in ICARUS
+    //const TColor __kOIYellow(TColor::GetFreeColorIndex(), 0.95, 0.90, 0.25);
+    //PROfit::Yellow = #F0E442
+
+    //const TColor __kOIBlue(TColor::GetFreeColorIndex(), 0, 0.45, 0.70);
+    PROfit::Blue = TColor::GetColor("#0072B2");
+
+    //const TColor __kOIVermilion(TColor::GetFreeColorIndex(), 0.80, 0.40, 0);
+    PROfit::Vermilion = TColor::GetColor("#D55E00");
+
+    //const TColor __kOIRedPurple(TColor::GetFreeColorIndex(), 0.80, 0.60, 0.70);
+    PROfit::Purple = TColor::GetColor("#CC79A7");
+
+    PROfit::Black = kBlack;
+}
 
 int main(int argc, char* argv[])
 {
     gStyle->SetOptStat(0);
+    set_colors();
     CLI::App app{"PROfit: a PROfessional, PROductive fitting and oscillation framework. Together let's minimize PROfit!"}; 
     std::ios_base::sync_with_stdio(true);
 
@@ -81,12 +108,18 @@ int main(int argc, char* argv[])
     std::string log_file = "";
     std::string fit_preset = "good";
     static const std::unordered_set<std::string> allowed_preset = {"good","fast","overkill"};
-    bool with_splines = false, binwidth_scale = false, area_normalized = false;
+    bool with_splines = false, binwidth_scale = false, area_normalized = false, other_binwidth_scale = false;
     std::map<std::string, float> osc_params;
     std::map<std::string, float> injected_systs;
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool systs_only_profile = false;
+    float frac_max = 1.0f;
+    std::vector<std::string> fracsummary_order;
+    std::string fracsummary_allname = "All Systematics";
+    std::string plot_label = "";
+    std::string correlation_matrix_label = "";
+    std::vector<std::string> spline_order;
 
     float xlo, xhi, ylo, yhi;
     std::array<float, 2> xlims, ylims;
@@ -105,6 +138,8 @@ int main(int argc, char* argv[])
     std::vector<TH2D*> weighthists;
 
     size_t nuniv;
+    bool gof_pvalue = false;
+    bool pvalue = false;
 
 
     //Global Arguments for all PROfit enables subcommands.
@@ -130,10 +165,12 @@ int main(int argc, char* argv[])
     app.add_option("-r, --mockrw",   mockreweights, "Vector of reweights to use for mock data");
     app.add_option("--log", log_file, "File to save log to. Warning: Will overwrite this file.");
     app.add_flag("--scale-by-width", binwidth_scale, "Scale histgrams by 1/(bin width).");
+    app.add_flag("--other-scale-by-width", other_binwidth_scale, "Scale other histgrams by 1/(bin width).");
     app.add_flag("--event-by-event", eventbyevent, "Do you want to weight event-by-event?");
     app.add_flag("--statonly", statonly, "Run a stats only surface instead of fitting systematics");
     app.add_flag("--force",force,"Force loading binary data even if hash is incorrect (Be Careful!)");
     app.add_flag("--no-xrootd",noxrootd,"Do not use XRootD, which is enabled by default");
+    app.add_option("--label", plot_label, "Label for plots");
     auto* shape_flag = app.add_flag("--shapeonly", shapeonly, "Run a shape only analysis");
     auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
     shape_flag->excludes(rate_flag);   //PROcess, into binary data [Do this once first!]
@@ -164,15 +201,22 @@ int main(int argc, char* argv[])
     CLI::App *profile_command = app.add_subcommand("profile", "Make a 1D profiled chi2 for each physics and nuisence parameter.");
     profile_command->add_flag("--syst-only", systs_only_profile, "Profile over nuisance parameters only");
     profile_command->add_flag("--mcmc-prefit", MCMC_prefit_errors, "Use MCMC to sample the systematic priors for the pre-fit error band.");
+    profile_command->add_option("--spline-order", spline_order, "Order of spline names for the plots.");
 
     //PROplot, plot things
     CLI::App *proplot_command = app.add_subcommand("plot", "Make plots of CV, or injected point with error bars and covariance.");
     proplot_command->add_flag("--with-splines", with_splines, "Include graphs of splines in output.");
     proplot_command->add_flag("--area-norm", area_normalized, "Make area normalized histograms.");
+    proplot_command->add_option("--frac-max", frac_max, "Maximum value for fractional uncertainty plots");
+    proplot_command->add_option("--fracsummary-order", fracsummary_order, "Order of labels in summary plot for fractional uncertainties.");
+    proplot_command->add_option("--fracsummary-allname", fracsummary_allname, "Legend name for 'All Systematics' line in summary plot of fractional uncertainties.");
+    proplot_command->add_option("--correlation-label", correlation_matrix_label, "Label for collapsed correlation matrix in CovarAll plots");
 
     //PROfc, Feldmand-Cousins
     CLI::App *profc_command = app.add_subcommand("fc", "Run Feldman-Cousins for this injected signal");
     profc_command->add_option("-u,--universes", nuniv, "Number of Feldman Cousins universes to throw")->default_val(1000);
+    profc_command->add_flag("--gof", gof_pvalue, "Get GOF pvalue");
+    profc_command->add_flag("--pval", pvalue, "Get FC pvalue")->excludes("--gof");
 
     // Unblinding
     CLI::App *unblind_command = app.add_subcommand("unblind", "Run unblinding sequence for ICARUS run 2 numu disappearance analysis.");
@@ -620,6 +664,18 @@ int main(int argc, char* argv[])
 
         }
         PROfitter fitter(ub, lb, fitconfig);
+        std::vector<std::pair<int, std::string>> global_PB_configs;
+        global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+        global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+        global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+        global_PB_configs.push_back({180, "(4) HarmonicScan"});
+        global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+        MultiPROgressBar global_progress(global_PB_configs);
+        global_progress.initialize_display();
+        global_progress.start_display_thread(); 
+
+        fitter.setProgressBar(&global_progress);
 
         log<LOG_INFO>(L"%1% || ########### Starting Global Best Fit Minimizing ############") % __func__;
 
@@ -636,13 +692,15 @@ int main(int argc, char* argv[])
 
         for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
             float chi_freq = fitter.freq_seed_values.at(i);
-             if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+             //if( abs(chi_freq - chi2) <=std::numeric_limits<float>::epsilon()*std::max(chi_freq,chi2)){
+             if(chi_freq < chi2){
                 log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
                 log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
                 chi2 = chi_freq;
                 best_fit = fitter.freq_seed_points.at(i);
             }
         }
+        global_progress.finish_all();
 
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
@@ -686,6 +744,26 @@ int main(int argc, char* argv[])
         Eigen::VectorXf inv_sqrt_diag = fraccovmat.diagonal().array().abs().max(1e-10f).sqrt().inverse();
         Eigen::MatrixXf corrmat = inv_sqrt_diag.asDiagonal() * fraccovmat * inv_sqrt_diag.asDiagonal();
 
+        std::vector<int> permutation;
+        std::vector<int> spline_permutation;
+        if(spline_order.size()) {
+
+            for(size_t i = 0; i < nphys; ++i)
+                permutation.push_back(i);
+            for(const std::string &name : spline_order) {
+                for(size_t i = 0; i < metric_to_use->GetSysts().GetNSplines(); ++i) {
+                    const std::string &spline = metric_to_use->GetSysts().spline_names[i];
+                    if(name == spline) {
+                        permutation.push_back(i+nphys);
+                        spline_permutation.push_back(i);
+                        break;
+                    }
+                }
+            }
+            //corrmat = corrmat(permutation, permutation);
+            Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> P(Eigen::VectorXi::Map(permutation.data(), permutation.size()));
+            corrmat = P.transpose() * corrmat * P;
+        }
 
         TH2D corrhist("crh", "", nparams, 0, nparams, nparams, 0, nparams);
         TH2D fraccovhist("fch", "", nparams, 0, nparams, nparams, 0, nparams);
@@ -695,6 +773,8 @@ int main(int argc, char* argv[])
         for(size_t i = 0; i < nparams; ++i) {
             std::string label = i < metric_to_use->GetModel().nparams 
                 ? metric_to_use->GetModel().pretty_param_names[i]
+                : spline_order.size()
+                ?  config.m_mcgen_variation_plotname_map[spline_order[i-metric_to_use->GetModel().nparams]].c_str()
                 : config.m_mcgen_variation_plotname_map[metric_to_use->GetSysts().spline_names[i-metric_to_use->GetModel().nparams]].c_str();
             covhist.GetXaxis()->SetBinLabel(i+1, label.c_str());
             covhist.GetYaxis()->SetBinLabel(i+1, label.c_str());
@@ -712,7 +792,7 @@ int main(int argc, char* argv[])
                     physhist.SetBinContent(i+1, j+1, covmat(i,j));
             }
         }
-        TCanvas c1;
+        TCanvas c1("c1","c1",1800,1000);
         corrhist.SetMaximum(1);
         corrhist.SetMinimum(-1);
         covhist.SetMaximum(1);
@@ -724,10 +804,16 @@ int main(int argc, char* argv[])
         //fraccovhist.Draw("colz");
         //c1.Print((final_output_tag+"_postfit_fraccov.pdf").c_str());
         c1.SetLeftMargin(0.18);   
-        corrhist.SetTitle("Post-Fit Correlation Matrix");
+        //corrhist.SetTitle("Post-Fit Correlation Matrix");
         corrhist.Draw("colz");
         gPad->Update();
 
+        TText *t = new TText();
+        t->SetNDC();                
+        t->SetTextFont(42);                          
+        t->SetTextSize(0.03);      
+        t->SetTextAlign(33);        
+        t->DrawText(0.895, 0.955, "PROfit"); 
         TLine line;
         line.SetLineColor(kBlack);
         line.SetLineWidth(2);
@@ -740,7 +826,7 @@ int main(int argc, char* argv[])
         }
         log<LOG_INFO>(L"%1% || MCMC acceptance is  %2%. ") % __func__% ((double)count /fitconfig.MCMCiter);
 
-        std::string hname = "#chi^{2}/ndof = " + to_string_prec(chi2,3) + "/" + to_string(config.m_num_bins_total_collapsed);
+        std::string hname = "#chi^{2}/nbins = " + to_string_prec(chi2,1) + "/" + to_string(config.m_num_bins_total_collapsed);
         PROspec cv = FillCVSpectrum(config, prop, true);
         PROspec bf = FillRecoSpectra(config, prop, metric_to_use->GetSysts(), metric_to_use->GetModel(), best_fit, true);
         TH1D post_hist("ph", hname.c_str(), config.m_num_bins_total_collapsed, config.m_channel_bin_edges[0].data());
@@ -783,7 +869,7 @@ int main(int argc, char* argv[])
         PlotOptions opt = PlotOptions::DataPostfitRatio;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
-        plot_channels((final_output_tag+"_PROfile_hists.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts, opt);
+        plot_channels((final_output_tag+"_PROfile_hists.pdf"), config, cv, bf, data, err_band.get(), post_err_band.get(), texts, plot_label, opt);
 
         TCanvas c;
         c.Print((final_output_tag+"_postfit_posteriors.pdf[").c_str());
@@ -818,13 +904,19 @@ int main(int argc, char* argv[])
                 systs_only_profile ? systparams : allparams);
         profile.Plot(config, metric_to_use->GetSysts(), metric_to_use->GetModel(), *metric_to_use, myseed,
                 final_output_tag+"_PROfile", !systs_only_profile, best_fit,
-                systs_only_profile ? systparams : allparams);
+                systs_only_profile ? systparams : allparams, false, spline_permutation);
+
         TFile fout((final_output_tag+"_PROfile.root").c_str(), "RECREATE");
         profile.onesig.Write("one_sigma_errs");
+        for(const auto &g : profile.graphs)
+            g->Write(g->GetTitle());
         pre_hist.Write("cv");
         err_band->Write("prefit_errband");
         post_err_band->Write("postfit_errband");
         post_hist.Write("best_fit");
+        spline_cov.Write("spline_corr");
+        corrhist.Write("all_corr");
+        data.toTH1D(config, 0).Write("data"); // Hardcoded to first mode/detector/channel
 
         //***********************************************************************
         //***********************************************************************
@@ -1140,18 +1232,21 @@ int main(int argc, char* argv[])
         //PROspec spec = FillCVSpectrum(config, prop, !eventbyevent);
         PROspec spec = FillRecoSpectra(config, prop, systs, *model, CVpparams, !eventbyevent);
         PlotOptions opt = PlotOptions::CVasStack;
+        PlotOptions other_opt = PlotOptions::CVasStack;
         std::vector<TPaveText> notext;
         if(binwidth_scale) opt |= PlotOptions::BinWidthScaled;
+        if(other_binwidth_scale) other_opt |= PlotOptions::BinWidthScaled;
         if(area_normalized) opt |= PlotOptions::AreaNormalized;
-        plot_channels(final_output_tag+"_PROplot_CV.pdf", config, spec, {}, {}, {}, {}, notext, opt);
+        if(area_normalized) other_opt |= PlotOptions::AreaNormalized;
+        plot_channels(final_output_tag+"_PROplot_CV.pdf", config, spec, {}, {}, {}, {}, notext, plot_label, opt);
         std::vector<PROspec> other_cvs;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
             other_cvs.push_back(FillOtherCVSpectrum(config, prop, io));
-            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, opt, io);
+            plot_channels(final_output_tag+"_other_"+std::to_string(io)+"_PROplot_CV.pdf", config, other_cvs.back(), {}, {}, {}, {}, notext, plot_label, other_opt, io);
         }
 
         std::string filename = final_output_tag+"_fractional_systematics.pdf";
-        plotPriorFractionalSystematicBreakdown(config, spec, allcovsyst, filename);
+        std::map<std::string, std::unique_ptr<TH1F>> frac_uncert = plotPriorFractionalSystematicBreakdown(config, spec, allcovsyst, filename, frac_max, fracsummary_order, fracsummary_allname);
 
         std::map<std::string, std::unique_ptr<TH1D>> cv_hists = getCVHists(spec, config, binwidth_scale);
         std::vector<std::map<std::string, std::unique_ptr<TH1D>>> other_hists;
@@ -1274,7 +1369,14 @@ int main(int argc, char* argv[])
         c.Print((final_output_tag+"_PROplot_CovarAll.pdf" + "[").c_str(), "pdf");
         for(const auto &[name, mat]: allmatrices) {
             if(name == "collapsed_total_cor") {
+                mat->SetTitle(correlation_matrix_label.c_str());
                 mat->Draw("colz");
+                TText *t = new TText();
+                t->SetNDC();                
+                t->SetTextFont(42);                          
+                t->SetTextSize(0.03);      
+                t->SetTextAlign(33);        
+                t->DrawText(0.895, 0.955, "PROfit"); 
                 c.Print((final_output_tag+"_PROplot_CovarAll.pdf").c_str(), "pdf");
             }
         }
@@ -1298,19 +1400,21 @@ int main(int argc, char* argv[])
                     chi2text.SetFillColor(0);
                     chi2text.SetBorderSize(0);
                     chi2text.SetTextAlign(12);
-                    channel_chitexts.push_back(chi2text);
+                    // Don't plot this for ICARUS paper
+                    //channel_chitexts.push_back(chi2text);
                     global_channel_index++;
                 }
             }
         }
 
         std::unique_ptr<TGraphAsymmErrors> err_band = getErrorBand(config, prop, systs, binwidth_scale);
-        plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, opt | PlotOptions::DataMCRatio);
+        //plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio);
+        plot_channels(final_output_tag+"_PROplot_ErrorBand.pdf", config, spec, {}, data, err_band.get(), {}, channel_chitexts, plot_label, opt | PlotOptions::DataMCRatio);
         std::vector<std::unique_ptr<TGraphAsymmErrors>> other_err_bands;
         for(size_t io = 0; io < config.m_num_other_vars; ++io) {
-            other_err_bands.push_back(getErrorBand(config, prop, other_systs[io], binwidth_scale, io));
+            other_err_bands.push_back(getErrorBand(config, prop, other_systs[io], other_binwidth_scale, io));
             plot_channels(final_output_tag+"_PROplot_other_"+std::to_string(io)+"_ErrorBand.pdf", config, other_cvs[io], {}, other_data[io], 
-                    other_err_bands.back().get(), {}, other_channel_chitexts, opt | PlotOptions::DataMCRatio, io);
+                    other_err_bands.back().get(), {}, other_channel_chitexts, plot_label, other_opt | PlotOptions::DataMCRatio, io);
         }
 
         if(with_splines) {
@@ -1376,6 +1480,11 @@ int main(int argc, char* argv[])
             }
         }
 
+        fout.mkdir("Fractional");
+        fout.cd("Fractional");
+        for(const auto &[name, frac]: frac_uncert)
+            frac->Write(name.c_str());
+
         fout.mkdir("Covariance");
         fout.cd("Covariance");
         for(const auto &[name, mat]: matrices)
@@ -1413,6 +1522,75 @@ int main(int argc, char* argv[])
     //***********************************************************************
 
     if(*profc_command) {
+        float global_chi2 = 0, null_chi2 = 0;
+        if(gof_pvalue || pvalue) {
+            size_t nparams = metric->GetModel().nparams + metric->GetSysts().GetNSplines();
+            size_t nphys = metric->GetModel().nparams;
+            Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+            Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+            for(size_t i = 0; i < nphys; ++i) {
+                lb(i) = metric->GetModel().lb(i);
+                ub(i) = metric->GetModel().ub(i);
+            }
+            for(size_t i = nphys; i < nparams; ++i) {
+                lb(i) = metric->GetSysts().spline_lo[i-nphys];
+                ub(i) = metric->GetSysts().spline_hi[i-nphys];
+            }
+            metric->setBounds(lb, ub);
+            PROfitter fitter(ub, lb, fitconfig);
+            std::vector<std::pair<int, std::string>> global_PB_configs;
+            global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+            global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+            global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+            global_PB_configs.push_back({180, "(4) HarmonicScan"});
+            global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+            MultiPROgressBar global_progress(global_PB_configs);
+            global_progress.initialize_display();
+            global_progress.start_display_thread(); 
+
+            fitter.setProgressBar(&global_progress);
+            float fit_chi2 = fitter.Fit(*metric); 
+            fitter.calcFreqSeedPoints(*metric);
+
+            for(size_t i=0; i< fitter.freq_seed_points.size(); i++){
+                float chi_freq = fitter.freq_seed_values.at(i);
+                 if(chi_freq < chi2){
+                    log<LOG_INFO>(L"%1% || One of the harmonics of first pass best fit, is a lower chi :  %2% ") % __func__ % fitter.freq_seed_values.at(i);
+                    log<LOG_INFO>(L"%1% || -- at params:  %2% ") % __func__ % fitter.freq_seed_points.at(i);
+                    fit_chi2 = chi_freq;
+                    //best_fit = fitter.freq_seed_points.at(i);
+                }
+            }
+            global_chi2 = fit_chi2;
+            global_progress.finish_all();
+        }
+        if(pvalue) {
+            size_t nparams = metric->GetSysts().GetNSplines();
+            Eigen::VectorXf lb = Eigen::VectorXf::Constant(nparams, -3.0);
+            Eigen::VectorXf ub = Eigen::VectorXf::Constant(nparams, 3.0);
+            for(size_t i = 0; i < nparams; ++i) {
+                lb(i) = metric->GetSysts().spline_lo[i];
+                ub(i) = metric->GetSysts().spline_hi[i];
+            }
+            null_metric->setBounds(lb, ub);
+            PROfitter fitter(ub, lb, fitconfig);
+            std::vector<std::pair<int, std::string>> global_PB_configs;
+            global_PB_configs.push_back({fitconfig.n_multistart, "(1) LatinHyperCube"});
+            global_PB_configs.push_back({fitconfig.n_swarm_iterations, "(2) ParticleSwarm"});
+            global_PB_configs.push_back({fitconfig.n_localfit, "(3) BestLBFGSB"});
+            global_PB_configs.push_back({180, "(4) HarmonicScan"});
+            global_PB_configs.push_back({100, "(5) HarmonicLBFGSB"});
+
+            MultiPROgressBar global_progress(global_PB_configs);
+            global_progress.initialize_display();
+            global_progress.start_display_thread(); 
+
+            fitter.setProgressBar(&global_progress);
+            float fit_chi2 = fitter.Fit(*null_metric); 
+            null_chi2 = fit_chi2;
+            global_progress.finish_all();
+        }
         size_t FCthreads = nthread > nuniv ? nuniv : nthread;
         Eigen::MatrixXf cv_vec = FillCVSpectrum(config, prop, !eventbyevent).Spec();
         Eigen::MatrixXf L = systs.DecomposeFractionalCovariance(config, cv_vec);
@@ -1424,7 +1602,7 @@ int main(int argc, char* argv[])
         std::vector<std::thread> threads;
         size_t todo = nuniv/FCthreads;
         size_t addone = FCthreads - nuniv%FCthreads;
-        bool gof_mode = false;
+        bool gof_mode = gof_pvalue;
 
         std::vector<std::pair<int, std::string>> fc_PB_configs;
         for (size_t i = 0; i < FCthreads; ++i) {
@@ -1438,7 +1616,7 @@ int main(int argc, char* argv[])
         for(size_t i = 0; i < nthread; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent,gof_mode};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, systs, chi2, pparams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !eventbyevent, gof_mode};
 
 
             threads.emplace_back([args, &fc_progress]() {
@@ -1504,6 +1682,27 @@ int main(int argc, char* argv[])
         std::sort(flattened_dchi2s.begin(), flattened_dchi2s.end());
         log<LOG_INFO>(L"%1% || 90%% Feldman-Cousins delta chi2 after throwing %2% universes is %3%") 
             % __func__ % nuniv % flattened_dchi2s[0.9*flattened_dchi2s.size()];
+        if(gof_pvalue) {
+            log<LOG_ERROR>(L"%1% || All: %2% ") % __func__ % flattened_dchi2s;
+            log<LOG_ERROR>(L"%1% || chi: %2% ") % __func__ % global_chi2;
+            auto it = std::lower_bound(flattened_dchi2s.begin(), flattened_dchi2s.end(), global_chi2);
+            size_t index =  std::distance(flattened_dchi2s.begin(),it);
+            size_t count_above = flattened_dchi2s.size()-index;
+            float pval = (float)count_above/(float)nuniv;
+            log<LOG_ERROR>(L"%1% || Finished throws. %2% %3%") % __func__ % index % count_above;
+            log<LOG_ERROR>(L"%1% || GOF pval after throwing %2% universes is %3%") % __func__ % nuniv % pval ;
+        }
+        if(pvalue) {
+            log<LOG_ERROR>(L"%1% || All Delta Chis: %2% ") % __func__ % flattened_dchi2s;
+            log<LOG_ERROR>(L"%1% || Delta chi bkg-min: %2% ") % __func__ % float(null_chi2 - global_chi2);
+            auto itFC = std::lower_bound(flattened_dchi2s.begin(), flattened_dchi2s.end(), float(null_chi2-global_chi2));
+            size_t indexFC =  std::distance(flattened_dchi2s.begin(),itFC);
+            size_t count_aboveFC = flattened_dchi2s.size()-indexFC;
+            float pvalFC = (float)count_aboveFC/(float)nuniv;
+
+            log<LOG_ERROR>(L"%1% || Finished throws. %2% %3%") % __func__ % indexFC % count_aboveFC;
+            log<LOG_ERROR>(L"%1% || FC Corrected pval after throwing %2% universes is %3%") % __func__ % nuniv % pvalFC ;
+        }
     }
 
     if(*unblind_command) {
