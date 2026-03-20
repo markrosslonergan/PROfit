@@ -96,114 +96,33 @@ public:
     }
 };
 
-class PROnumudis : public PROmodel {
+// Generic base for all 2-parameter SBL oscillation models (1 mass splitting + 1 mixing).
+// appearance=true  → P = mix · sin²(1.267·Δm²·L/E)
+// appearance=false → P = 1 − mix · sin²(1.267·Δm²·L/E)
+// mixing_lb_val: lower bound on the mixing parameter in log10 space (default -∞).
+class PROsimple2param : public PROmodel {
+    bool _appearance;
 public:
-    PROnumudis(const PROpeller &prop,const std::map<std::string,int> &parameter_map) {
+    PROsimple2param(const PROpeller &prop,
+                    const std::map<std::string,int> &parameter_map,
+                    const std::string &mixing_name,
+                    const std::string &mixing_pretty,
+                    bool appearance,
+                    float mixing_lb_val = -std::numeric_limits<float>::infinity())
+        : _appearance(appearance)
+    {
         prob_types = {0, 1};
+        model_functions.push_back([](const Eigen::VectorXf &, float){ return 1.0f; });
+        model_functions.push_back([this](const Eigen::VectorXf &v, float le) -> float {
+            float dmsq = maybe_convert_log("dmsq", v(0));
+            float mix  = maybe_convert_log(param_names[1], v(1));
+            if(mix > 1.0f) mix = 1.0f;
+            if(mix < 0.0f) mix = 0.0f;
+            float s = std::sin(1.266932679f * dmsq * le);
+            float p = mix * s * s;
+            return _appearance ? p : 1.0f - p;
+        });
 
-        // model_functions is the non-unified version, these are optional
-        // these get combined into one get_probs function in the constructor, but we can override this for faster computation
-        model_functions.push_back([this]([[maybe_unused]] const Eigen::VectorXf &v, float) {(void)this; return 1.0;});
-        model_functions.push_back([this](const Eigen::VectorXf &v, float le) {return this->Pmumu(v(0),v(1),le);});
-        prob_types = {0, 1};
-
-        if(parameter_map.find("L/E") == parameter_map.end()) {
-            log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'.Make sure its in your model section of XML. ") % __func__ % __LINE__;
-            throw std::runtime_error("Missing parameter: L/E");
-        }
-        ivar = parameter_map.at("L/E");
-
-        size_t nvar = prop.variable_mc_stat_err.size();
-        hists.resize(nvar);
-        for(size_t v = 0; v <nvar ;v++){
-            for(size_t m = 0; m < model_functions.size(); ++m) {
-                hists.at(v).emplace_back(Eigen::MatrixXf::Constant(prop.variable_hist_storage(ivar,v).rows(), prop.variable_hist_storage(ivar,v).cols(),0.0));
-                Eigen::MatrixXf &h = hists.at(v).back();
-                for(size_t i = 0; i < prop.NEvent(); ++i) {
-                    if(prop.model_rule[i] != (int)m) continue;
-                    int tbin = prop.VariableBinIndex(ivar, i), rbin = prop.VariableBinIndex(v, i);
-                    if(tbin<0 || rbin<0) continue;
-                    h(tbin, rbin) += prop.added_weights[i];
-                }
-            }
-        }
-        nparams = 2;
-        param_names = {"dmsq", "sinsq2thmm"}; 
-        pretty_param_names = {"#Deltam^{2}", "sin^{2}2#theta_{#mu#mu}"}; 
-        pretty_param_units = {"eV^{2}", ""}; 
-        is_log10 = {true, true};
-        build_param_index();
-        lb = Eigen::VectorXf(2);
-        ub = Eigen::VectorXf(2);
-        default_val = Eigen::VectorXf(2);
-        lb << -2, -std::numeric_limits<float>::infinity();
-        ub << 2, 0;
-        default_val << -10, -10;
-
-    };
-
-    /* Function: 3+1 numu->numue disapperance prob in SBL approx */
-    float Pmumu(float dmsq, float sinsq2thmumu, float le) const{
-        dmsq = maybe_convert_log("dmsq", dmsq);
-        sinsq2thmumu = maybe_convert_log("sinsq2thmm", sinsq2thmumu);
-
-        if(sinsq2thmumu > 1) {
-            //log<LOG_ERROR>(L"%1% || sinsq2thmumu is %2% which is greater than 1. Setting to 1.")     % __func__ % sinsq2thmumu;
-            sinsq2thmumu = 1;
-        }
-        if(sinsq2thmumu < 0) {
-            log<LOG_ERROR>(L"%1% || sinsq2thmumu is %2% which is less than 0. Setting to 0.")
-                % __func__ % sinsq2thmumu;
-            sinsq2thmumu = 0;
-        }
-
-        float sinterm = std::sin(1.266932679f*dmsq*(le));
-        float prob    = 1.0f - (sinsq2thmumu*sinterm*sinterm);
-
-        if(prob<0.0 || prob >1.0 ){;//|| std::isnan(prob)){
-            log<LOG_ERROR>(L"%1% || Your probability %2% is outside the bounds of math."
-                           L"dmsq = %3%, sinsq2thmumu = %4%, L/E = %5%")
-                % __func__ % prob % dmsq % sinsq2thmumu % le;
-            log<LOG_ERROR>(L"%1% || Terminating.") % __func__;
-            exit(EXIT_FAILURE);
-        }
-
-        return prob;
-    }
-
-    Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<float> &le_arr) const override {
-        //log<LOG_ERROR>(L"%1% || Using unified, optimized get_probs function for model") % __func__;
-        // Precompute physics parameters once
-        float dmsq = maybe_convert_log("dmsq", phys(0));
-        float sinsq2thmumu = maybe_convert_log("sinsq2thmm", phys(1));
-
-        float freq = 1.266932679f * dmsq;
-
-        if(sinsq2thmumu > 1) sinsq2thmumu = 1;
-        if(sinsq2thmumu < 0) sinsq2thmumu = 0;
-
-        Eigen::MatrixXf probs(le_arr.size(), model_functions.size());
-
-        for(size_t i = 0; i < le_arr.size(); ++i) {
-
-            // no oscillation
-            probs(i, 0) = 1.0f;
-
-            // P_mumu
-            float sinterm = std::sin(freq * le_arr[i]);
-            probs(i, 1) = 1.0f - (sinsq2thmumu * sinterm * sinterm);
-        }
-
-        return probs;
-    }
-};
-
-class PROnueapp : public PROmodel {
-public:
-    PROnueapp(const PROpeller &prop,const std::map<std::string,int> &parameter_map) {
-        model_functions.push_back([this]([[maybe_unused]] const Eigen::VectorXf &v, float) {(void)this; return 1.0;});
-        model_functions.push_back([this](const Eigen::VectorXf &v, float le) {return this->Pmue(v(0),v(1),le);});
-        prob_types = {0, 1};
         if(parameter_map.find("L/E") == parameter_map.end()) {
             log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'. Make sure its in your model section of XML.") % __func__ % __LINE__;
             throw std::runtime_error("Missing parameter: L/E");
@@ -212,194 +131,77 @@ public:
 
         size_t nvar = prop.variable_mc_stat_err.size();
         hists.resize(nvar);
-        for(size_t v = 0; v <nvar ;v++){
+        for(size_t v = 0; v < nvar; ++v) {
             for(size_t m = 0; m < model_functions.size(); ++m) {
-                hists.at(v).emplace_back(Eigen::MatrixXf::Constant(prop.variable_hist_storage(ivar,v).rows(), prop.variable_hist_storage(ivar,v).cols(),0.0));
+                hists.at(v).emplace_back(Eigen::MatrixXf::Constant(
+                    prop.variable_hist_storage(ivar, v).rows(),
+                    prop.variable_hist_storage(ivar, v).cols(), 0.0f));
                 Eigen::MatrixXf &h = hists.at(v).back();
                 for(size_t i = 0; i < prop.NEvent(); ++i) {
                     if(prop.model_rule[i] != (int)m) continue;
-                    int tbin = prop.VariableBinIndex(ivar, i), rbin = prop.VariableBinIndex(v, i);
-                    if(tbin<0 || rbin<0)continue;
+                    int tbin = prop.VariableBinIndex(ivar, i);
+                    int rbin = prop.VariableBinIndex(v, i);
+                    if(tbin < 0 || rbin < 0) continue;
                     h(tbin, rbin) += prop.added_weights[i];
                 }
             }
         }
-         nparams = 2;
-        param_names = {"dmsq", "sinsq2thme"}; 
-        pretty_param_names = {"#Deltam^{2}", "sin^{2}2#theta_{#mue}"}; 
-        pretty_param_units = {"eV^{2}", ""}; 
+
+        nparams = 2;
+        param_names        = {"dmsq", mixing_name};
+        pretty_param_names = {"#Deltam^{2}", mixing_pretty};
+        pretty_param_units = {"eV^{2}", ""};
         is_log10 = {true, true};
         build_param_index();
-        lb = Eigen::VectorXf(2);
-        ub = Eigen::VectorXf(2);
+
+        lb          = Eigen::VectorXf(2);
+        ub          = Eigen::VectorXf(2);
         default_val = Eigen::VectorXf(2);
-        lb << -2, -10; //-std::numeric_limits<float>::infinity();
-        ub << 2, 0;
-        //default_val << -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity();
-        default_val << -10, -10; //std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity();
-    
-        log<LOG_INFO>(L"%1% || setting up a model nueapp, with  %2% params.")     % __func__ % nparams;
-        for(size_t i=0; i< nparams;i++){
-            log<LOG_INFO>(L"%1% || Param %2% is %3% with lower bound/upper bound of %4%/%5% and default %6%")     % __func__ % i % param_names[i].c_str() % lb[i] % ub[i] % default_val[i];
-        }
-
-    };
-
-    float Pmue(float dmsq, float sinsq2thmue, float le) const{
-        dmsq = maybe_convert_log("dmsq", dmsq);
-        sinsq2thmue = maybe_convert_log("sinsq2thme", sinsq2thmue);
-
-        if(sinsq2thmue > 1) {
-            //log<LOG_ERROR>(L"%1% || sinsq2thmue is %2% which is greater than 1. Setting to 1.")  % __func__ % sinsq2thmue;
-            sinsq2thmue = 1;
-        }
-        if(sinsq2thmue < 0) {
-            log<LOG_ERROR>(L"%1% || sinsq2thmue is %2% which is less than 0. Setting to 0.")
-                % __func__ % sinsq2thmue;
-            sinsq2thmue = 0;
-        }
-
-        float sinterm = std::sin(1.266932679f*dmsq*(le));
-        float prob    = sinsq2thmue*sinterm*sinterm;
-
-        if(prob<0.0 || prob >1.0){
-            log<LOG_ERROR>(L"%1% || Your probability %2% is outside the bounds of math."
-                           L"dmsq = %3%, sinsq2thmue = %4%, L/E = %5%")
-                % __func__ % prob % dmsq % sinsq2thmue % le;
-            log<LOG_ERROR>(L"%1% || Terminating.") % __func__;
-            exit(EXIT_FAILURE);
-        }
-
-        return prob;
+        lb          << -2.0f, mixing_lb_val;
+        ub          << 2.0f, 0.0f;
+        default_val << -10.0f, -10.0f;
     }
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<float> &le_arr) const override {
-        //log<LOG_ERROR>(L"%1% || Using unified, optimized get_probs function for model") % __func__;
-        // Precompute physics parameters once
         float dmsq = maybe_convert_log("dmsq", phys(0));
-        float sinsq2thmue = maybe_convert_log("sinsq2thme", phys(1));
+        float mix  = maybe_convert_log(param_names[1], phys(1));
+        if(mix > 1.0f) mix = 1.0f;
+        if(mix < 0.0f) mix = 0.0f;
 
         float freq = 1.266932679f * dmsq;
-
-        if(sinsq2thmue > 1) sinsq2thmue = 1;
-        if(sinsq2thmue < 0) sinsq2thmue = 0;
-
-        Eigen::MatrixXf probs(le_arr.size(), model_functions.size());
-
+        Eigen::MatrixXf probs(le_arr.size(), 2);
         for(size_t i = 0; i < le_arr.size(); ++i) {
-
-            // no oscillation
             probs(i, 0) = 1.0f;
-
-            // P_mumu
-            float sinterm = std::sin(freq * le_arr[i]);
-            probs(i, 1) = (sinsq2thmue * sinterm * sinterm);
+            float s = std::sin(freq * le_arr[i]);
+            float p = mix * s * s;
+            probs(i, 1) = _appearance ? p : 1.0f - p;
         }
-
         return probs;
     }
-
-
 };
 
-class PROnuedis : public PROmodel {
+class PROnumudis : public PROsimple2param {
 public:
-    PROnuedis(const PROpeller &prop,const std::map<std::string,int> &parameter_map) {
-        model_functions.push_back([this]([[maybe_unused]] const Eigen::VectorXf &v, float) {(void)this; return 1.0;});
-        model_functions.push_back([this](const Eigen::VectorXf &v, float le) {return this->Pee(v(0),v(1),le);});
-        prob_types = {0, 1};
+    PROnumudis(const PROpeller &prop, const std::map<std::string,int> &pm)
+        : PROsimple2param(prop, pm, "sinsq2thmm", "sin^{2}2#theta_{#mu#mu}", false) {}
+};
 
-        if(parameter_map.find("L/E") == parameter_map.end()) {
-            log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'.Make sure its in your model section of XML. ") % __func__ % __LINE__;
-            throw std::runtime_error("Missing parameter: L/E");
-        }
-        ivar = parameter_map.at("L/E");
+class PROnueapp : public PROsimple2param {
+public:
+    PROnueapp(const PROpeller &prop, const std::map<std::string,int> &pm)
+        : PROsimple2param(prop, pm, "sinsq2thme", "sin^{2}2#theta_{#mue}", true, -10.0f) {}
+};
 
-        size_t nvar = prop.variable_mc_stat_err.size();
-        hists.resize(nvar);
-        for(size_t v = 0; v <nvar ;v++){
-            for(size_t m = 0; m < model_functions.size(); ++m) {
-                hists.at(v).emplace_back(Eigen::MatrixXf::Constant(prop.variable_hist_storage(ivar,v).rows(), prop.variable_hist_storage(ivar,v).cols(),0.0));
-                Eigen::MatrixXf &h = hists.at(v).back();
-                for(size_t i = 0; i < prop.NEvent(); ++i) {
-                    if(prop.model_rule[i] != (int)m) continue;
-                    int tbin = prop.VariableBinIndex(ivar, i), rbin = prop.VariableBinIndex(v, i);
-                    if(tbin<0 || rbin<0) continue;
-                    h(tbin, rbin) += prop.added_weights[i];
-                }
-            }
-        }
-        nparams = 2;
-        param_names = {"dmsq", "sinsq2thee"}; 
-        pretty_param_names = {"#Deltam^{2}", "sin^{2}2#theta_{ee}"}; 
-        pretty_param_units = {"eV^{2}", ""}; 
-        is_log10 = {true, true};
-        build_param_index();
-        lb = Eigen::VectorXf(2);
-        ub = Eigen::VectorXf(2);
-        default_val = Eigen::VectorXf(2);
-        lb << -2, -std::numeric_limits<float>::infinity();
-        ub << 2, 0;
-        default_val << -10, -10;
+class PROnuedis : public PROsimple2param {
+public:
+    PROnuedis(const PROpeller &prop, const std::map<std::string,int> &pm)
+        : PROsimple2param(prop, pm, "sinsq2thee", "sin^{2}2#theta_{ee}", false) {}
+};
 
-    };
-
-    /* Function: 3+1 nue->nue disapperance prob in SBL approx */
-    float Pee(float dmsq, float sinsq2thee, float le) const{
-        dmsq = maybe_convert_log("dmsq", dmsq);
-        sinsq2thee = maybe_convert_log("sinsq2thee", sinsq2thee);
-
-        if(sinsq2thee > 1) {
-            //log<LOG_ERROR>(L"%1% || sinsq2thee is %2% which is greater than 1. Setting to 1.")     % __func__ % sinsq2thee;
-            sinsq2thee = 1;
-        }
-        if(sinsq2thee < 0) {
-            log<LOG_ERROR>(L"%1% || sinsq2thee is %2% which is less than 0. Setting to 0.")
-                % __func__ % sinsq2thee;
-            sinsq2thee = 0;
-        }
-
-        float sinterm = std::sin(1.266932679f*dmsq*(le));
-        float prob    = 1.0f - (sinsq2thee*sinterm*sinterm);
-
-        if(prob<0.0 || prob >1.0 ){;//|| std::isnan(prob)){
-            log<LOG_ERROR>(L"%1% || Your probability %2% is outside the bounds of math."
-                           L"dmsq = %3%, sinsq2thee = %4%, L/E = %5%")
-                % __func__ % prob % dmsq % sinsq2thee % le;
-            log<LOG_ERROR>(L"%1% || Terminating.") % __func__;
-            exit(EXIT_FAILURE);
-        }
-
-        return prob;
-    }
-
-    Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<float> &le_arr) const override {
-        //log<LOG_ERROR>(L"%1% || Using unified, optimized get_probs function for model") % __func__;
-        // Precompute physics parameters once
-        float dmsq = maybe_convert_log("dmsq", phys(0));
-        float sinsq2thee = maybe_convert_log("sinsq2thee", phys(1));
-
-        float freq = 1.266932679f * dmsq;
-
-        if(sinsq2thee > 1) sinsq2thee = 1;
-        if(sinsq2thee < 0) sinsq2thee = 0;
-
-        Eigen::MatrixXf probs(le_arr.size(), model_functions.size());
-
-        for(size_t i = 0; i < le_arr.size(); ++i) {
-
-            // no oscillation
-            probs(i, 0) = 1.0f;
-
-            // P_mumu
-            float sinterm = std::sin(freq * le_arr[i]);
-            probs(i, 1) = 1.0f-(sinsq2thee * sinterm * sinterm);
-        }
-
-        return probs;
-    }
-
-
+class PRONCnumudisapp : public PROsimple2param {
+public:
+    PRONCnumudisapp(const PROpeller &prop, const std::map<std::string,int> &pm)
+        : PROsimple2param(prop, pm, "sinsq2thms", "sin^{2}2#theta_{#mus}", true, -10.0f) {}
 };
 
 
