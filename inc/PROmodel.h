@@ -124,14 +124,14 @@ public:
         });
 
         if(parameter_map.find("L/E") == parameter_map.end()) {
-            log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'. Make sure its in your model section of XML.") % __func__ % __LINE__;
+            log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'.Make sure its in your model section of XML. ") % __func__ % __LINE__;
             throw std::runtime_error("Missing parameter: L/E");
         }
         ivar = parameter_map.at("L/E");
 
         size_t nvar = prop.variable_mc_stat_err.size();
         hists.resize(nvar);
-        for(size_t v = 0; v < nvar; ++v) {
+        for(size_t v = 0; v <nvar ;v++){
             for(size_t m = 0; m < model_functions.size(); ++m) {
                 hists.at(v).emplace_back(Eigen::MatrixXf::Constant(
                     prop.variable_hist_storage(ivar, v).rows(),
