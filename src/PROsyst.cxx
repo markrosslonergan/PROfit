@@ -657,6 +657,9 @@ namespace PROfit {
 
         std::vector<float> knobvals;
         for (size_t i = 0; i < syst.p_multi_spec.size(); ++i) {
+            // Skip duplicate consecutive knob values (syst.knobval is sorted; the fill loop
+            // already populated the correct p_multi_spec slot via last-occurrence semantics)
+            if (i > 0 && syst.knobval[i] == syst.knobval[i-1]) continue;
             if (syst.knobval[i] > 0 && !found0) {
                 ratios.push_back(*syst.p_cv / *syst.p_cv);
                 knobvals.push_back(0);

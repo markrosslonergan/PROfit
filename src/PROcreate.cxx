@@ -490,6 +490,12 @@ namespace PROfit {
                     sv.back().knob_index = override_knobs ? inconfig.m_mcgen_variation_knobval_override.at(sys_name) : map_systematic_knob_vals[sys_name];
                     sv.back().knobval = sv.back().knob_index;
                     std::sort(sv.back().knobval.begin(), sv.back().knobval.end());
+                    // Detect duplicate knob values and warn; the fill loop will keep only the last
+                    // occurrence of each duplicated value, and FillSpline will skip the extra slots.
+                    auto dup_it = std::adjacent_find(sv.back().knobval.begin(), sv.back().knobval.end());
+                    if (dup_it != sv.back().knobval.end()) {
+                        log<LOG_WARNING>(L"%1% || Systematic %2% has duplicate knob value %3%. Earlier universe occurrences will be skipped; only the last occurrence of each knob value will contribute to the spline.") % __func__ % sys_name.c_str() % *dup_it;
+                    }
                     sv.back().binning = binningindex;
                     // Check if force_0_cv is set for this systematic
                     if(inconfig.m_mcgen_variation_force_0_cv.find(sys_name) != inconfig.m_mcgen_variation_force_0_cv.end()) {
@@ -1109,6 +1115,15 @@ namespace PROfit {
                     so->FillCV(spline_bin, mc_weight);
 
                 for(int is = 0; is < var_syst_objs.front()->GetNUniverse(); ++is){
+                    // If a later universe shares this knob value, skip this one (keep last occurrence only)
+                    {
+                        const auto& ki = var_syst_objs.front()->knob_index;
+                        bool is_last = true;
+                        for(int later = is + 1; later < (int)ki.size(); ++later) {
+                            if(ki[later] == ki[is]) { is_last = false; break; }
+                        }
+                        if(!is_last) continue;
+                    }
                     size_t u = 0;
                     for(; u < var_syst_objs.front()->knobval.size(); ++u)
                         if(var_syst_objs.front()->knobval[u] == var_syst_objs.front()->knob_index[is]) break;
