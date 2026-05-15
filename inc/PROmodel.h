@@ -201,7 +201,7 @@ public:
 class PRONCnumudisapp : public PROsimple2param {
 public:
     PRONCnumudisapp(const PROpeller &prop, const std::map<std::string,int> &pm)
-        : PROsimple2param(prop, pm, "sinsq2thms", "sin^{2}2#theta_{#mus}", true, -10.0f) {}
+        : PROsimple2param(prop, pm, "sinsq2thms", "sin^{2}2#theta_{#mus}", false) {}
 };
 
 
