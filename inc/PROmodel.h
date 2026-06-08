@@ -204,6 +204,128 @@ public:
         : PROsimple2param(prop, pm, "sinsq2thms", "sin^{2}2#theta_{#mus}", false) {}
 };
 
+class PRONCdisapp : public PROmodel {
+public:
+    PRONCdisapp(const PROpeller &prop, const std::map<std::string,int> &parameter_map) {
+
+        // ---- 1) Channel lambdas (3 channels) -----------------------------------------
+        model_functions.push_back([this]([[maybe_unused]] const Eigen::VectorXf &v, float) {
+            (void)this; return 1.0f;
+        });
+        model_functions.push_back([this](const Eigen::VectorXf &v, float le) {
+            return this->Pnc_mu(v(0), v(1), le);
+        });
+        model_functions.push_back([this](const Eigen::VectorXf &v, float le) {
+            return this->Pnc_e (v(0), v(2), le);
+        });
+        prob_types = {0, 1, 2};
+
+        // ---- 2) L/E variable index ---------------------------------------------------
+        if(parameter_map.find("L/E") == parameter_map.end()) {
+            log<LOG_ERROR>(L"%1%, %2% || Missing expected parameter: 'L/E'. "
+                           L"Make sure it's in your model section of XML.")
+                % __func__ % __LINE__;
+            throw std::runtime_error("Missing parameter: L/E");
+        }
+        ivar = parameter_map.at("L/E");
+
+        // ---- 3) Build histograms (one per channel, per variable) ---------------------
+        // model_rule[i] tags each MC event: 0 = unosc/null, 1 = νμ NC, 2 = νe NC.
+        size_t nvar = prop.variable_mc_stat_err.size();
+        hists.resize(nvar);
+        for(size_t v = 0; v < nvar; ++v) {
+            for(size_t m = 0; m < model_functions.size(); ++m) {
+                hists.at(v).emplace_back(Eigen::MatrixXf::Constant(
+                    prop.variable_hist_storage(ivar, v).rows(),
+                    prop.variable_hist_storage(ivar, v).cols(), 0.0f));
+                Eigen::MatrixXf &h = hists.at(v).back();
+                for(size_t i = 0; i < prop.NEvent(); ++i) {
+                    if(prop.model_rule[i] != (int)m) continue;
+                    int tbin = prop.VariableBinIndex(ivar, i);
+                    int rbin = prop.VariableBinIndex(v, i);
+                    if(tbin < 0 || rbin < 0) continue;
+                    h(tbin, rbin) += prop.added_weights[i];
+                }
+            }
+        }
+
+        // ---- 4) Parameters and bounds ------------------------------------------------
+        nparams = 3;
+        param_names        = {"dmsq", "sinsq2thms", "sinsq2thes"};
+        pretty_param_names = {"#Deltam^{2}", "sin^{2}2#theta_{#mus}", "sin^{2}2#theta_{e s}"};
+        pretty_param_units = {"eV^{2}", "", ""};
+        is_log10           = {true, true, true};
+        build_param_index();
+
+        lb          = Eigen::VectorXf(3);
+        ub          = Eigen::VectorXf(3);
+        default_val = Eigen::VectorXf(3);
+        lb          << -2.0f, -std::numeric_limits<float>::infinity(),
+                              -std::numeric_limits<float>::infinity();
+        ub          <<  2.0f,  0.0f, 0.0f;
+        default_val << -2.0f, -10.0f, -10.0f;
+    }
+
+    // ---- νμ beam NC survival ---------------------------------------------------------
+    float Pnc_mu(float dmsq, float sinsq2thms, float le) const {
+        dmsq       = maybe_convert_log("dmsq",       dmsq);
+        sinsq2thms = maybe_convert_log("sinsq2thms", sinsq2thms);
+        if(sinsq2thms > 1.0f) sinsq2thms = 1.0f;
+        if(sinsq2thms < 0.0f) sinsq2thms = 0.0f;
+
+        float sinterm = std::sin(1.266932679f * dmsq * le);
+        float prob    = 1.0f - sinsq2thms * sinterm * sinterm;
+
+        if(prob < 0.0f || prob > 1.0f) {
+            log<LOG_ERROR>(L"%1% || Pnc_mu %2% outside [0,1]. dmsq = %3%, sinsq2thms = %4%, L/E = %5%")
+                % __func__ % prob % dmsq % sinsq2thms % le;
+            log<LOG_ERROR>(L"%1% || Terminating.") % __func__;
+            exit(EXIT_FAILURE);
+        }
+        return prob;
+    }
+
+    // ---- νe beam NC survival ---------------------------------------------------------
+    float Pnc_e(float dmsq, float sinsq2thes, float le) const {
+        dmsq       = maybe_convert_log("dmsq",       dmsq);
+        sinsq2thes = maybe_convert_log("sinsq2thes", sinsq2thes);
+        if(sinsq2thes > 1.0f) sinsq2thes = 1.0f;
+        if(sinsq2thes < 0.0f) sinsq2thes = 0.0f;
+
+        float sinterm = std::sin(1.266932679f * dmsq * le);
+        float prob    = 1.0f - sinsq2thes * sinterm * sinterm;
+
+        if(prob < 0.0f || prob > 1.0f) {
+            log<LOG_ERROR>(L"%1% || Pnc_e %2% outside [0,1]. dmsq = %3%, sinsq2thes = %4%, L/E = %5%")
+                % __func__ % prob % dmsq % sinsq2thes % le;
+            log<LOG_ERROR>(L"%1% || Terminating.") % __func__;
+            exit(EXIT_FAILURE);
+        }
+        return prob;
+    }
+
+    // ---- Optimized batched path: convert params once, share sin² across channels ----
+    Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys,
+                              const std::vector<float> &le_arr) const override {
+        float dmsq = maybe_convert_log("dmsq",       phys(0));
+        float mums = maybe_convert_log("sinsq2thms", phys(1));
+        float ees  = maybe_convert_log("sinsq2thes", phys(2));
+        if(mums > 1.0f) mums = 1.0f;  if(mums < 0.0f) mums = 0.0f;
+        if(ees  > 1.0f) ees  = 1.0f;  if(ees  < 0.0f) ees  = 0.0f;
+
+        float freq = 1.266932679f * dmsq;
+        Eigen::MatrixXf probs(le_arr.size(), model_functions.size());
+        for(size_t i = 0; i < le_arr.size(); ++i) {
+            float s  = std::sin(freq * le_arr[i]);
+            float s2 = s * s;
+            probs(i, 0) = 1.0f;
+            probs(i, 1) = 1.0f - mums * s2;
+            probs(i, 2) = 1.0f - ees  * s2;
+        }
+        return probs;
+    }
+};
+
 
 class PRO3p1 : public PROmodel {
 public:
@@ -1551,7 +1673,7 @@ static inline
 std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const PROpeller &prop) {
      std::string name = config.m_model_tag;
 
-     if(name == "numudis") {
+    if(name == "numudis") {
         return std::unique_ptr<PROmodel>(new PROnumudis(prop,config.m_model_parameter_map));
     } else if(name == "nueapp") {
         return std::unique_ptr<PROmodel>(new PROnueapp(prop,config.m_model_parameter_map));
@@ -1559,6 +1681,8 @@ std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const P
         return std::unique_ptr<PROmodel>(new PROnuedis(prop,config.m_model_parameter_map));
     } else if(name == "NCnumudisapp") {
         return std::unique_ptr<PROmodel>(new PRONCnumudisapp(prop,config.m_model_parameter_map));
+    } else if(name == "NCdisapp") {
+    return std::unique_ptr<PROmodel>(new PRONCdisapp(prop, config.m_model_parameter_map));
     } else if(name == "3+1") {
         return std::unique_ptr<PROmodel>(new PRO3p1(prop,config.m_model_parameter_map));
     } else if(name == "3+1_angles") {
