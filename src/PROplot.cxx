@@ -7,6 +7,8 @@
 #include "TLegend.h"
 #include "TMarker.h"
 #include "TText.h"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <Eigen/SVD>
 
@@ -1457,17 +1459,44 @@ namespace PROfit{
         }
 
         //This is for prior everthing of course
+        // Case-insensitive fallback: internal systematics registered under a
+        // hardcoded lowercase covar_names key (e.g. "mcstat", set in
+        // PROsyst.cxx) don't case-match the XML-declared name used as the key
+        // in m_mcgen_variation_tags (e.g. "MCStat" from <systematic ...>MCStat
+        // </systematic>). A strict-case lookup silently drops these from the
+        // breakdown -- their covariance is present and correct, they just
+        // never get bucketed into a tag/panel. Fall back to a lowercase-
+        // normalized match so they're still included.
+        auto to_lower = [](std::string s){
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c){ return std::tolower(c); });
+            return s;
+        };
+        std::map<std::string, const std::vector<std::string>*> tags_ci;
+        for(const auto &[tname, tvec]: config.m_mcgen_variation_tags)
+            tags_ci[to_lower(tname)] = &tvec;
+
         std::map<std::string,std::vector<std::string>> used_tags;
         for(const auto &name: allsplinesyst.covar_names){
             log<LOG_INFO>(L"%1% || Systematic %2% ") % __func__ % name.c_str();
             auto it = config.m_mcgen_variation_tags.find(name);
-            if (it == config.m_mcgen_variation_tags.end()) {
+            const std::vector<std::string>* mtags = nullptr;
+            if (it != config.m_mcgen_variation_tags.end()) {
+                mtags = &it->second;
+            } else {
+                auto ci = tags_ci.find(to_lower(name));
+                if (ci != tags_ci.end()) {
+                    log<LOG_INFO>(L"%1% || Systematic %2% matched tags map case-insensitively")
+                        % __func__ % name.c_str();
+                    mtags = ci->second;
+                }
+            }
+            if (!mtags) {
                 log<LOG_WARNING>(L"%1% || Systematic %2% not in tags map") % __func__ % name.c_str();
                 continue;
             }
-            const vector<std::string>& mtags = it->second;
-            log<LOG_INFO>(L"%1% || -- has tags %2%") % __func__ %  mtags;
-            for(auto &t: mtags){
+            log<LOG_INFO>(L"%1% || -- has tags %2%") % __func__ % *mtags;
+            for(auto &t: *mtags){
                 used_tags[t].push_back(name);
             }
         }
@@ -1656,7 +1685,24 @@ namespace PROfit{
                                 hsum->SetBinContent(i+1, hsum->GetBinContent(i+1)+var_i);
                             }
 
-                            const std::string &plotname = config.m_mcgen_variation_plotname_map.at(systname);
+                            // Same case-insensitive issue as the tags-map lookup above: a
+                            // hardcoded lowercase covar_names key (e.g. "mcstat") won't
+                            // case-match the XML-declared name used as the key here (e.g.
+                            // "MCStat"). .at() would throw std::out_of_range and abort the
+                            // whole plot; look up case-insensitively and fall back to the
+                            // raw systematic name (never throw) if truly not found.
+                            std::string plotname = systname;
+                            {
+                                auto pit = config.m_mcgen_variation_plotname_map.find(systname);
+                                if (pit != config.m_mcgen_variation_plotname_map.end()) {
+                                    plotname = pit->second;
+                                } else {
+                                    std::string lname = to_lower(systname);
+                                    for (const auto &[pname, plabel] : config.m_mcgen_variation_plotname_map) {
+                                        if (to_lower(pname) == lname) { plotname = plabel; break; }
+                                    }
+                                }
+                            }
                             leg->AddEntry(h, plotname.c_str(), "l");
                             h->SetLineColor(colors[color_idx]);
                             h->SetLineStyle(line_styles[style_idx]);
@@ -1797,17 +1843,44 @@ namespace PROfit{
         };
 
         //This is for prior everthing of course
+        // Case-insensitive fallback: internal systematics registered under a
+        // hardcoded lowercase covar_names key (e.g. "mcstat", set in
+        // PROsyst.cxx) don't case-match the XML-declared name used as the key
+        // in m_mcgen_variation_tags (e.g. "MCStat" from <systematic ...>MCStat
+        // </systematic>). A strict-case lookup silently drops these from the
+        // breakdown -- their covariance is present and correct, they just
+        // never get bucketed into a tag/panel. Fall back to a lowercase-
+        // normalized match so they're still included.
+        auto to_lower = [](std::string s){
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c){ return std::tolower(c); });
+            return s;
+        };
+        std::map<std::string, const std::vector<std::string>*> tags_ci;
+        for(const auto &[tname, tvec]: config.m_mcgen_variation_tags)
+            tags_ci[to_lower(tname)] = &tvec;
+
         std::map<std::string,std::vector<std::string>> used_tags;
         for(const auto &name: allsplinesyst.covar_names){
             log<LOG_INFO>(L"%1% || Systematic %2% ") % __func__ % name.c_str();
             auto it = config.m_mcgen_variation_tags.find(name);
-            if (it == config.m_mcgen_variation_tags.end()) {
+            const std::vector<std::string>* mtags = nullptr;
+            if (it != config.m_mcgen_variation_tags.end()) {
+                mtags = &it->second;
+            } else {
+                auto ci = tags_ci.find(to_lower(name));
+                if (ci != tags_ci.end()) {
+                    log<LOG_INFO>(L"%1% || Systematic %2% matched tags map case-insensitively")
+                        % __func__ % name.c_str();
+                    mtags = ci->second;
+                }
+            }
+            if (!mtags) {
                 log<LOG_WARNING>(L"%1% || Systematic %2% not in tags map") % __func__ % name.c_str();
                 continue;
             }
-            const vector<std::string>& mtags = it->second;
-            log<LOG_INFO>(L"%1% || -- has tags %2%") % __func__ %  mtags;
-            for(auto &t: mtags){
+            log<LOG_INFO>(L"%1% || -- has tags %2%") % __func__ % *mtags;
+            for(auto &t: *mtags){
                 used_tags[t].push_back(name);
             }
         }
@@ -2007,7 +2080,24 @@ namespace PROfit{
                                     }
                                 }
 
-                                const std::string &plotname = config.m_mcgen_variation_plotname_map.at(systname);
+                                // Same case-insensitive issue as the tags-map lookup above: a
+                                // hardcoded lowercase covar_names key (e.g. "mcstat") won't
+                                // case-match the XML-declared name used as the key here (e.g.
+                                // "MCStat"). .at() would throw std::out_of_range and abort the
+                                // whole plot; look up case-insensitively and fall back to the
+                                // raw systematic name (never throw) if truly not found.
+                                std::string plotname = systname;
+                                {
+                                    auto pit = config.m_mcgen_variation_plotname_map.find(systname);
+                                    if (pit != config.m_mcgen_variation_plotname_map.end()) {
+                                        plotname = pit->second;
+                                    } else {
+                                        std::string lname = to_lower(systname);
+                                        for (const auto &[pname, plabel] : config.m_mcgen_variation_plotname_map) {
+                                            if (to_lower(pname) == lname) { plotname = plabel; break; }
+                                        }
+                                    }
+                                }
                                 leg->AddEntry(h, plotname.c_str(), "l");
                                 h->SetLineColor(colors[color_idx]);
                                 h->SetLineStyle(line_styles[style_idx]);
