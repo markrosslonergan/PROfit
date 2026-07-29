@@ -407,6 +407,7 @@ namespace PROfit{
             int m_num_variation_type_norm_to_covariance = 0;
             int m_num_variation_type_hist1d = 0;
             int m_num_variation_type_hist2d = 0;
+            int m_num_variation_type_explicit = 0;
 
             int m_num_mcgen_files;
             std::vector<std::string> m_mcgen_tree_name;	
@@ -436,6 +437,7 @@ namespace PROfit{
             std::vector<std::string> m_mcgen_variation_denylist;
             std::vector<std::string> m_mcgen_variation_type;
             std::set<std::string> m_mcgen_variation_unmirrored;
+            std::map<std::string, std::vector<double>> m_mcgen_explicit_weights;
             std::map<std::string, std::string> m_mcgen_variation_external_filename_map;
             std::map<std::string, std::array<int, 2>> m_mcgen_variation_histaxisvars_map;
             std::map<std::string, TH1*> m_mcgen_variation_hist1d_map;

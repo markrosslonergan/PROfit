@@ -453,6 +453,16 @@ namespace PROfit {
                 }
             }
         }
+        
+        //Do we have any external systeatics?
+        if(inconfig.m_num_variation_type_explicit>0){
+            for(auto& allow_sys : inconfig.m_mcgen_variation_type_map){
+                if(allow_sys.second=="explicit_spline"){
+                    bool override_knobs = inconfig.m_mcgen_variation_knobval_override.find(allow_sys.first) != inconfig.m_mcgen_variation_knobval_override.end();
+                    map_systematic_num_universe[allow_sys.first] = override_knobs ? inconfig.m_mcgen_variation_knobval_override.at(allow_sys.first).size() : 7;
+                }
+            }
+        }
 
         size_t total_num_systematics = map_systematic_num_universe.size();
         log<LOG_INFO>(L"%1% || Found %2% unique variations") % __func__ % total_num_systematics;
@@ -492,11 +502,15 @@ namespace PROfit {
                     sv.back().inflate = inconfig.m_mcgen_variation_inflate.at(sys_name);
                     log<LOG_INFO>(L"%1% || Setting inflate=%2% for systematic %3%") % __func__ % sv.back().inflate % sys_name.c_str();
                 }
-                if(sys_mode == "spline" || sys_mode == "spline_to_covariance") {
+                if(sys_mode == "spline" || sys_mode == "spline_to_covariance" || sys_mode == "explicit_spline") {
                     bool override_knobs = inconfig.m_mcgen_variation_knobval_override.find(sys_name) != inconfig.m_mcgen_variation_knobval_override.end();
                     if(!override_knobs && map_systematic_knob_vals.find(sys_name) == map_systematic_knob_vals.end()) {
                         log<LOG_WARNING>(L"%1% || Expected %2% to have knob vals associated with it, but couldn't find any. Will use -3 to +3 as default.") % __func__ % sys_name.c_str();
                         map_systematic_knob_vals[sys_name] = {-3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+                        if(sys_mode == "explicit_spline" && inconfig.m_mcgen_explicit_weights.at(sys_name).size() != 7) {
+                            log<LOG_ERROR>(L"%1% || Expected exactly 7 weights if no knob values are given for explicit_spline type systematic. Found %2%. Aborting.")
+                                % __func__ % inconfig.m_mcgen_explicit_weights.at(sys_name).size();
+                        }
                     }
                     sv.back().knob_index = override_knobs ? inconfig.m_mcgen_variation_knobval_override.at(sys_name) : map_systematic_knob_vals[sys_name];
                     sv.back().knobval = sv.back().knob_index;
@@ -1389,6 +1403,42 @@ namespace PROfit {
                 for(auto so: var_syst_objs) {
                     so->FillCV(spline_bin, mc_weight);
                     so->FillUniverse(0, spline_bin, wgt*mc_weight);
+                }
+            } else if(var_syst_objs.front()->mode == "explicit_spline") {
+                if(spline_bin < 0) continue;
+                for(auto so: var_syst_objs)
+                    so->FillCV(spline_bin, mc_weight);
+
+                for(int is = 0; is < var_syst_objs.front()->GetNUniverse(); ++is){
+                    size_t u = 0;
+                    for(; u < var_syst_objs.front()->knobval.size(); ++u)
+                        if(var_syst_objs.front()->knobval[u] == var_syst_objs.front()->knob_index[is]) break;
+                    
+                    float w = inconfig.m_mcgen_explicit_weights.at(var_syst_objs.front()->systname)[is];
+                    if(std::isnan(w) || std::isinf(w)) {
+                        log<LOG_WARNING>(L"%1% || Encountered a bad weight (%2%) for syst %3%. Setting to 1 instead.")
+                            % __func__ % w % map_iter->first.c_str();
+                        w = 1;
+                    } else if(w > 30) {
+                        log<LOG_WARNING>(L"%1% || Encountered a very large weight (%2%) for syst %3%. Setting to 1 instead.")
+                            % __func__ % w % map_iter->first.c_str();
+                        w = 1;
+                    }
+                    for(auto so: var_syst_objs){
+                        if (!so->include_only_weights.empty()) {
+                            // Compute weight using only the included weights (avoids divide-by-zero)
+                            float included_weight = 1.0;
+                            for(int idx : so->include_only_weights) {
+                                int wi = idx - 1; // convert 1-based to 0-based
+                                if(wi >= 0 && wi < num_weights) {
+                                    included_weight *= weight_vals[wi];
+                                }
+                            }
+                            so->FillUniverse(u, spline_bin, included_weight * pot_scale * additional_weight * w);
+                        } else {
+                            so->FillUniverse(u, spline_bin, mc_weight * additional_weight * w);
+                        }
+                    }
                 }
             }
         }
