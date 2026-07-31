@@ -1367,7 +1367,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
                 if(weights) {
                     std::vector<double> weights_vec;
-                    const char *c = knobs, *begin = NULL;
+                    const char *c = weights, *begin = NULL;
                     while(*c) {
                         if(begin && isspace(*c)) {
                             weights_vec.push_back(strtod(begin, NULL));
@@ -1771,6 +1771,8 @@ int PROconfig::LoadFromXML(const std::string &filename){
             m_num_variation_type_hist2d+=1;
         } else if(m_mcgen_variation_type[i] == "explicit_spline"){
             m_num_variation_type_explicit+=1;
+        } else {
+            log<LOG_ERROR>(L"%1% || Unrecognized variation type %2%") % __func__ % m_mcgen_variation_type[i].c_str();
         }
 
     }
@@ -1784,6 +1786,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     log<LOG_INFO>(L"%1% || num_variation_type_norm_to_covariance: %2% ") % __func__ % m_num_variation_type_norm_to_covariance;
     log<LOG_INFO>(L"%1% || num_variation_type_spline: %2% ") % __func__ % m_num_variation_type_spline;
     log<LOG_INFO>(L"%1% || num_variation_type_spline_to_covariance: %2% ") % __func__ % m_num_variation_type_spline_to_covariance;
+    log<LOG_INFO>(L"%1% || num_variation_type_explicit_spline: %2% ") % __func__ % m_num_variation_type_explicit;
     if(m_use_mcstats){
         log<LOG_INFO>(L"%1% || Using MC intrinsic stat uncertainty. ") % __func__  ;
     }else{

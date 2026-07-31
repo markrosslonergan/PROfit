@@ -17,7 +17,7 @@ namespace PROfit {
         shape_only = shapeonly;
         for(const auto& syst: systs) {
             log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
-            if(syst.mode == "spline" || syst.mode == "norm" || syst.mode == "hist1d" || syst.mode == "hist2d") {
+            if(syst.mode == "spline" || syst.mode == "norm" || syst.mode == "hist1d" || syst.mode == "hist2d" || syst.mode == "explicit_spline") {
                 bool unmirrored = config.m_mcgen_variation_unmirrored.find(syst.systname) != config.m_mcgen_variation_unmirrored.end();
                 FillSpline(syst, unmirrored);
                 ++n_splines;
