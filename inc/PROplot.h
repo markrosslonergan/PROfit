@@ -395,15 +395,44 @@ namespace PROfit{
      * @return PROerrorbar with per-bin asymmetric uncertainties and the histogram covariance.
      */
     template<class T, class P>
-        PROerrorbar getMCMCErrorBand(Metropolis<T, P> met, size_t burnin, size_t iterations, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, bool scale = false, int var_index=0, PROgressBar *pbar = nullptr) {
+        PROerrorbar getMCMCErrorBand(Metropolis<T, P> met, size_t burnin, size_t iterations, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, bool scale = false, int var_index=0, PROgressBar *pbar = nullptr, const Eigen::VectorXf &data_spec = Eigen::VectorXf()) {
             for(size_t i = 0; i < metric.GetSysts().GetNSplines(); ++i)
                 posteriors.emplace_back("", (";"+config.m_mcgen_variation_plotname_map.at(metric.GetSysts().spline_names[i])).c_str(), 60, -3, 3);
 
             Eigen::VectorXf cv = FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), best_fit, true, var_index).Spec();
+
+            for (int i = 0; i < cv.size(); ++i) {
+                if (cv(i) <= 0.0f) {
+                    cv(i) = 1e-6f; // Floor zero-count / inactive subchannels
+                }
+            }
+
+            /*log<LOG_INFO>(L"%1% || very first cv %2%") % __func__ % cv;
+            bool has_zero = (cv.array() <= 0.0f).any();
+            bool has_floor = (cv.array() == 1e-06f).any(); // Change 1e-06f to match your exact floor value if different
+            bool is_finite = cv.allFinite();
+            
+            if (!is_finite || has_zero || has_floor) {
+                log<LOG_INFO>(L"%1% || Input spectrum flooring warning! "
+                              L"allFinite: %2%, has_zero/neg: %3%, contains_exact_floor: %4%")
+                    % __func__ 
+                    % is_finite 
+                    % has_zero 
+                    % has_floor;
+            
+                // Optional: Print the exact indices causing the issue
+                for (int i = 0; i < cv.size(); ++i) {
+                    if (std::isnan(cv(i)) || std::isinf(cv(i)) || cv(i) <= 0.0f || cv(i) == 1e-06f) {
+                        std::cout << "[DEBUG] cv bin " << i << " has problematic value: " << cv(i) << std::endl;
+                    }
+                }
+            }*/
             Eigen::VectorXf cv_coll = CollapseMatrix(config, cv);
+            //log<LOG_INFO>(L"%1% || very first cv_coll %2%") % __func__ % cv_coll;
             Eigen::MatrixXf L;
             if(metric.GetSysts().GetNCovar() > 0) L = metric.GetSysts().DecomposeFractionalCovariance(config, cv);
             else L = Eigen::MatrixXf::Zero(config.m_num_variable_bins_total_collapsed[var_index], config.m_num_variable_bins_total_collapsed[var_index]);
+            //log<LOG_INFO>(L"%1% || very first L %2%") % __func__ % L;
             std::normal_distribution<float> nd;
             Eigen::VectorXf throws = Eigen::VectorXf::Constant(config.m_num_variable_bins_total_collapsed[var_index], 0);
 
@@ -415,25 +444,108 @@ namespace PROfit{
             size_t nsteps = 0;
             std::vector<Eigen::VectorXf> specs;
             std::vector<std::vector<float>> param_samples(nspline);
-            const auto action = [&](const Eigen::VectorXf &value) {
+
+            //log<LOG_INFO>(L"%1% || nsteps %2%") % __func__ % nsteps;
+	    std::function<void(const Eigen::VectorXf&)> action;
+	    
+            if (data_spec.rows() == 0){
+	        action = [&](const Eigen::VectorXf &value) {
                 nsteps += 1;
-                for(size_t i = 0; i < config.m_num_variable_bins_total_collapsed[var_index]; ++i)
-                    throws(i) = nd(PROseed::global_rng);
+		for(size_t i = 0; i < config.m_num_variable_bins_total_collapsed[var_index]; ++i)
+                        throws(i) = nd(PROseed::global_rng);
                 specs.push_back(CollapseMatrix(config, FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), value, true,var_index).Spec())+L*throws);
+                //log<LOG_INFO>(L"%1% || first specs.back %2%") % __func__ % specs.back();
                 for(int i = 0; i < nspline; ++i) {
                     posteriors[i].Fill(value(i+nphys));
                     param_samples[i].push_back(value(i+nphys));
                 }
                 Eigen::VectorXf splines = value.segment(nphys, nspline);
                 Eigen::VectorXf diff = splines-splines_bf;
-                Eigen::VectorXf diff_hist = specs.back() - cv_coll;
                 post_covar += diff * diff.transpose();
+		Eigen::VectorXf diff_hist = specs.back() - cv_coll;
                 post_hist_covar += diff_hist * diff_hist.transpose();
-            };
+                };
+            }
+	    else{
+                action = [&](const Eigen::VectorXf &value) {
+                    nsteps += 1;
+                    specs.push_back(CollapseMatrix(config, FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), value, true,var_index).Spec()));
+                    //log<LOG_INFO>(L"%1% || second specs.back %2%") % __func__ % specs.back();
+                    for(int i = 0; i < nspline; ++i) {
+                        posteriors[i].Fill(value(i+nphys));
+                        param_samples[i].push_back(value(i+nphys));
+                    }
+		    Eigen::VectorXf splines = value.segment(nphys, nspline);
+                    Eigen::VectorXf diff = splines-splines_bf;
+                    post_covar += diff * diff.transpose();
+                };
+	    }
             met.run(burnin, iterations, action, pbar);
-            post_hist_covar /= nsteps;
-            post_covar /= nsteps;
 
+            post_covar /= nsteps;
+            log<LOG_INFO>(L"%1% || nsteps again %2%") % __func__ % nsteps;
+            if (data_spec.size() != 0) {
+                // 1. Pre-compute static matrices ONCE outside the loop
+                Eigen::MatrixXf C_stat = cv_coll.asDiagonal();
+                log<LOG_INFO>(L"%1% || C_stat %2%") % __func__ % C_stat;
+                Eigen::MatrixXf M = C_stat + L.transpose() * L;
+                log<LOG_INFO>(L"%1% || M %2%") % __func__ % M;
+                auto M_solver = M.ldlt(); // Pre-factorize M once
+            
+                size_t k = L.cols();
+                Eigen::VectorXf C_inv_diag = cv_coll.cwiseInverse();
+                log<LOG_INFO>(L"%1% || C_inv_diag %2%") % __func__ % C_inv_diag;
+                Eigen::MatrixXf inner_matrix = Eigen::MatrixXf::Identity(k, k) 
+                                             + L.transpose() * C_inv_diag.asDiagonal() * L;
+                log<LOG_INFO>(L"%1% || inner_matrix %2%") % __func__ % inner_matrix;
+                Eigen::MatrixXf inner_inv = inner_matrix.ldlt().solve(Eigen::MatrixXf::Identity(k, k));
+		if (inner_matrix.ldlt().info() != Eigen::Success) {
+		    log<LOG_ERROR>(L"inner_matrix LDLT factorization failed!");
+		}
+                log<LOG_INFO>(L"%1% || inner_inv %2%") % __func__ % inner_inv;
+                Eigen::LLT<Eigen::MatrixXf> llt(inner_inv);
+                Eigen::MatrixXf C_chol = llt.matrixL();
+                log<LOG_INFO>(L"%1% || C_chol %2%") % __func__ % C_chol;
+            
+                // 2. Fast loop over steps
+                for(int ai = 0; ai < nsteps; ai++) {
+                    log<LOG_INFO>(L"%1% || ai %2%") % __func__ % ai;
+                    for(size_t i = 0; i < throws.size(); ++i) {
+                        throws(i) = nd(PROseed::global_rng);
+                    }
+            
+                    // Uses pre-factorized solver: fast O(k^2) instead of O(k^3)
+                    Eigen::VectorXf residual = data_spec - specs.at(ai);
+                    log<LOG_INFO>(L"%1% || initial specs %2%") % __func__ % specs.at(ai);
+                    log<LOG_INFO>(L"%1% || data_spec %2%") % __func__ % data_spec;
+                    log<LOG_INFO>(L"%1% || residual %2%") % __func__ % residual;
+                    log<LOG_INFO>(L"%1% || L %2%") % __func__ % L;
+                    Eigen::VectorXf alpha_min = L * M_solver.solve(residual);
+            
+                    log<LOG_INFO>(L"%1% || alpha_min %2%") % __func__ % alpha_min;
+                    log<LOG_INFO>(L"%1% || C_chol %2%") % __func__ % C_chol;
+                    log<LOG_INFO>(L"%1% || throws %2%") % __func__ % throws;
+                    Eigen::VectorXf alpha_hat = alpha_min + C_chol * throws;
+                    log<LOG_INFO>(L"%1% || alpha_hat %2%") % __func__ % alpha_hat;
+                    specs.at(ai) += L * alpha_hat;
+                    
+                    Eigen::VectorXf diff_hist = specs.at(ai) - cv_coll;
+		    if (!cv_coll.allFinite()){
+                        log<LOG_INFO>(L"%1% || really bad cv_coll %2%") % __func__ % cv_coll;
+		    }
+		    if (!diff_hist.allFinite()){
+                        log<LOG_INFO>(L"%1% || really bad diff_hist %2%") % __func__ % diff_hist;
+		    }
+
+                    post_hist_covar += diff_hist * diff_hist.transpose();
+		    if (!specs.at(ai).allFinite()){
+                        log<LOG_INFO>(L"%1% || really bad specs.at(ai) %2%") % __func__ % specs.at(ai);
+		    }
+                }
+            }
+
+            log<LOG_INFO>(L"%1% || nsteps again again %2%") % __func__ % nsteps;
+            post_hist_covar /= nsteps;
             param_err_lo = Eigen::VectorXf::Zero(nspline);
             param_err_hi = Eigen::VectorXf::Zero(nspline);
             for(int i = 0; i < nspline; ++i) {
@@ -447,40 +559,97 @@ namespace PROfit{
 
             cv = CollapseMatrix(config, cv);
 
-            std::vector<float> centers;
-            size_t global_channel_index = 0;
-            for(size_t mode = 0; mode < config.m_num_modes; ++mode) {
-                for(size_t det = 0; det < config.m_num_detectors; ++det) {
-                    for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
-                        std::vector<float> tedges =  config.GetChannelVariableBins(global_channel_index, var_index).Edges();
-                        global_channel_index++;
-                        for(size_t p=0; p<tedges.size(); p++){
-                            if(p<tedges.size()-1){
-                                centers.push_back((tedges[p+1]+tedges[p])/2.0);
-                            }
-                        }
+            log<LOG_INFO>(L"%1% || cv %2% ") % __func__ % cv;
+            //std::vector<float> centers;
+            //size_t global_channel_index = 0;
+            //for(size_t mode = 0; mode < config.m_num_modes; ++mode) {
+            //    for(size_t det = 0; det < config.m_num_detectors; ++det) {
+            //        for(size_t channel = 0; channel < config.m_num_channels; ++channel) {
+            //            std::vector<float> tedges =  config.GetChannelVariableBins(global_channel_index, var_index).Edges();
+            //            global_channel_index++;
+            //            for(size_t p=0; p<tedges.size(); p++){
+            //                if(p<tedges.size()-1){
+            //                    centers.push_back((tedges[p+1]+tedges[p])/2.0);
+            //                }
+            //            }
 
-                    }
-                }
-            }
+            //        }
+            //    }
+            //}
 
             PROerrorbar ebar(cv.size());
             for(int i = 0; i < cv.size(); ++i) {
                 std::vector<float> binconts(specs.size());
                 for(size_t j = 0; j < specs.size(); ++j) {
+                log<LOG_INFO>(L"%1% || inside binconts") % __func__;
                     binconts[j] = specs[j](i);
                 }
                 float scale_factor = scale ? 1.0/config.collapsed_bin_widths.at(var_index)(i) :  1.0;
                 if(std::isnan(scale_factor)) scale_factor = 1;
                 std::sort(binconts.begin(), binconts.end());
+                log<LOG_INFO>(L"%1% || specs.size() %2% ") % __func__ % specs.size();
+		int testint = int(0.840*specs.size());
+                log<LOG_INFO>(L"%1% || testin %2% ") % __func__ % testint;
+                log<LOG_INFO>(L"%1% || cvi %2% ") % __func__ % cv(i);
+                float inside = (binconts[int(0.840*specs.size())] - cv(i));
+                log<LOG_INFO>(L"%1% || inside %2% ") % __func__ % inside;
                 float ehi = std::abs((binconts[int(0.840*specs.size())] - cv(i))*scale_factor);
                 float elo = std::abs((cv(i) - binconts[int(0.160*specs.size())])*scale_factor);
+                log<LOG_INFO>(L"%1% || ehi %2% ") % __func__ % ehi;
+                log<LOG_INFO>(L"%1% || elo %2% ") % __func__ % elo;
                 ebar.error_up(i) =  ehi;
                 ebar.error_down(i) =  elo;
                 ebar.error_point(i) = cv(i)*scale_factor;
-                log<LOG_DEBUG>(L"%1% || ErrorBand bin %2% %3% %4% %5% %6% ") % __func__ % i % cv(i) % ehi % elo % scale_factor ;
+                log<LOG_INFO>(L"%1% || ErrorBand bin %2% %3% %4% %5% %6% ") % __func__ % i % cv(i) % ehi % elo % scale_factor ;
             }
             ebar.covariance = post_hist_covar;
+
+            // =========================================================================
+            //  DIAGNOSTIC SANITY CHECK LOOP
+            // =========================================================================
+            log<LOG_INFO>(L"%1% || Running pre-return sanity checks on PROerrorbar...") % __func__;
+
+            for (int i = 0; i < ebar.error_point.size(); ++i) {
+                float pt  = ebar.error_point(i);
+                float eup = ebar.error_up(i);
+                float elo = ebar.error_down(i);
+
+                if (std::isnan(pt) || std::isinf(pt)) {
+                    log<LOG_ERROR>(L"%1% || CRITICAL ERROR: error_point bin %2% is invalid (value: %3%)") % __func__ % i % pt;
+                    throw std::runtime_error("PROerrorbar error_point contains NaN or Inf at bin " + std::to_string(i));
+                }
+                if (std::isnan(eup) || std::isinf(eup)) {
+                    log<LOG_ERROR>(L"%1% || CRITICAL ERROR: error_up bin %2% is invalid (value: %3%)") % __func__ % i % eup;
+                    throw std::runtime_error("PROerrorbar error_up contains NaN or Inf at bin " + std::to_string(i));
+                }
+                if (std::isnan(elo) || std::isinf(elo)) {
+                    log<LOG_ERROR>(L"%1% || CRITICAL ERROR: error_down bin %2% is invalid (value: %3%)") % __func__ % i % elo;
+                    throw std::runtime_error("PROerrorbar error_down contains NaN or Inf at bin " + std::to_string(i));
+                }
+            }
+
+            // Check covariance matrix dimensions and values
+            if (ebar.covariance.rows() != cv.size() || ebar.covariance.cols() != cv.size()) {
+                log<LOG_ERROR>(L"%1% || CRITICAL ERROR: Covariance matrix dimension mismatch! Expected (%2%x%3%), got (%4%x%5%)") 
+                    % __func__ % cv.size() % cv.size() % ebar.covariance.rows() % ebar.covariance.cols();
+                throw std::runtime_error("PROerrorbar covariance matrix dimension mismatch!");
+            }
+
+            for (int r = 0; r < ebar.covariance.rows(); ++r) {
+                for (int c = 0; c < ebar.covariance.cols(); ++c) {
+                    float val = ebar.covariance(r, c);
+                    if (std::isnan(val) || std::isinf(val)) {
+                        log<LOG_ERROR>(L"%1% || CRITICAL ERROR: Covariance matrix element (%2%, %3%) is invalid (value: %4%)") 
+                            % __func__ % r % c % val;
+                        throw std::runtime_error("PROerrorbar covariance contains NaN or Inf at (" + std::to_string(r) + ", " + std::to_string(c) + ")");
+                    }
+                }
+            }
+
+            log<LOG_INFO>(L"%1% || Sanity check passed successfully!") % __func__;
+            // =========================================================================
+
+
             return ebar;
         }
 
