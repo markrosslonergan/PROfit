@@ -13,6 +13,7 @@
 
 #include "PROlog.h"
 #include "PROmetrics/PROchi.h"
+#include "PROmetrics/PROpearson.h"
 #include "PROmetrics/PROCNP.h"
 #include "PROmetrics/PROpoisson.h"
 #include "PROmetric.h"
@@ -398,6 +399,8 @@ static PEBankRecord run_one_pe(const AdaptivePEArgs &args)
     std::unique_ptr<PROmetric> metric;
     if (args.chi2_kind == "PROchi") {
         metric.reset(new PROchi("", config, prop, &systs, model, data, mstrat));
+    } else if (args.chi2_kind == "PROpearson") {
+        metric.reset(new PROpearson("", config, prop, &systs, model, data, mstrat));
     } else if (args.chi2_kind == "PROCNP") {
         metric.reset(new PROCNP("", config, prop, &systs, model, data, mstrat));
     } else if (args.chi2_kind == "Poisson") {
@@ -628,6 +631,7 @@ AsimovObs compute_asimov_obs(
     auto make_metric = [&](const PROdata &d) -> std::unique_ptr<PROmetric> {
         PROmetric::EvalStrategy mstrat = binned ? PROmetric::BinnedChi2 : PROmetric::EventByEvent;
         if (chi2_kind == "PROchi")    return std::unique_ptr<PROmetric>(new PROchi   ("", config, prop, &systs, model, d, mstrat));
+        if (chi2_kind == "PROpearson") return std::unique_ptr<PROmetric>(new PROpearson("", config, prop, &systs, model, d, mstrat));
         if (chi2_kind == "PROCNP")    return std::unique_ptr<PROmetric>(new PROCNP   ("", config, prop, &systs, model, d, mstrat));
         if (chi2_kind == "Poisson")   return std::unique_ptr<PROmetric>(new PROpoisson("", config, prop, &systs, model, d, mstrat));
         log<LOG_ERROR>(L"%1% || compute_asimov_obs: unknown chi2 kind '%2%'.") % __func__ % chi2_kind.c_str();

@@ -13,6 +13,9 @@
 
 #include "PROsyst.h"
 #include "PROmodel.h"
+#include "PROconfig.h"
+#include "PROdata.h"
+#include "PROcess.h"
 
 #include <Eigen/Eigen>
 #include <atomic>
@@ -93,7 +96,9 @@ namespace PROfit {
              * @param gradient  Output gradient vector (same size as @p param); filled on return.
              * @return Chi-squared value.
              */
-            virtual float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient) = 0;
+            float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient) {
+                return (*this)(param, gradient, true);
+            }
             /**
              * @brief Evaluate the chi-squared, optionally skipping gradient computation.
              * @param param       Current parameter vector.
@@ -107,9 +112,9 @@ namespace PROfit {
             /** @brief Return a heap-allocated deep copy of this PROmetric. */
             virtual PROmetric *Clone() const = 0;
             /** @brief Return a const reference to the physics model used by this metric. */
-            virtual const PROmodel &GetModel() const = 0;
+            const PROmodel &GetModel() const { return model; }
             /** @brief Return a const reference to the systematic object used by this metric. */
-            virtual const PROsyst  &GetSysts() const = 0;
+            const PROsyst &GetSysts() const { return *syst; }
             /**
              * @brief Compute the chi-squared contribution from a single channel.
              * @param channel_index  Global channel index.
@@ -118,20 +123,31 @@ namespace PROfit {
              * @return Chi-squared for that channel.
              */
             virtual float getSingleChannelChi(size_t channel_index, const PROspec& cv, size_t var_index, const Eigen::MatrixXf &projection = Eigen::MatrixXf()) = 0;
-            PROmetric() = default;
             virtual ~PROmetric() {}
             /**
              * @brief Fix a spline nuisance parameter at a specific value.
              * @param idx   0-based spline index.
              * @param val   Value to fix the spline at.
              */
-            virtual void fixSpline(int,float)  = 0;
+            void fixSpline(int idx, float val) {
+                fixed_index = idx;
+                fixed_val = val;
+            }
             /**
              * @brief Compute the Gaussian pull penalty for the given nuisance parameter vector.
              * @param systs  Spline nuisance parameter values.
              * @return Scalar pull penalty (chi2 contribution from priors).
              */
-            virtual float Pull(const Eigen::VectorXf &systs) = 0;
+            virtual float Pull(const Eigen::VectorXf &systs) {
+                Eigen::VectorXf centered = systs - syst->spline_centers;
+                for(size_t i = 0; i < syst->spline_prior_types.size(); ++i) {
+                    if(syst->spline_prior_types[i] == SplinePriorType::Uniform) centered(i) = 0.0f;
+                }
+                if(!correlated_systematics) {
+                    return (centered.array().square() / syst->spline_priors.array().square()).sum();
+                }
+                return centered.dot(prior_covariance_inv * centered);
+            }
             /**
              * @brief Print a human-readable summary of the metric evaluation at @p param.
              * @param param  Parameter vector to evaluate at.
@@ -143,7 +159,16 @@ namespace PROfit {
              */
             size_t nParams() const {return GetModel().nparams + GetSysts().GetNSplines();}
 
-            PROmetric(const PROmetric&) {}
+            PROmetric(const PROmetric &other)
+                : model_tag(other.model_tag), syst(other.syst), model(other.model), data(other.data),
+                  strat(other.strat), shape_only(other.shape_only),
+                  physics_param_fixed(other.physics_param_fixed), fixed_index(other.fixed_index),
+                  fixed_val(other.fixed_val), last_param(other.last_param), last_value(other.last_value),
+                  correlated_systematics(other.correlated_systematics),
+                  prior_covariance(other.prior_covariance),
+                  prior_covariance_inv(other.prior_covariance_inv), fs_cache(other.fs_cache),
+                  call_count(other.call_count.load()), gradient_mode(other.gradient_mode),
+                  active_bins(other.active_bins) {}
             PROmetric& operator=(const PROmetric&) { return *this; }
 
 
@@ -248,6 +273,36 @@ namespace PROfit {
             }
 
         protected:
+            PROmetric(const std::string &tag, const PROconfig &config, const PROsyst *systin,
+                      const PROmodel &modelin, const PROdata &datain, EvalStrategy strategy,
+                      bool shape_only_in, const std::vector<float> &fixed_physics)
+                : model_tag(tag), syst(systin), model(modelin), data(datain), strat(strategy),
+                  shape_only(shape_only_in), physics_param_fixed(fixed_physics), fixed_index(-999),
+                  fixed_val(0.0f),
+                  last_param(Eigen::VectorXf::Zero(modelin.nparams + systin->GetNSplines())),
+                  last_value(0.0f), correlated_systematics(false) {
+                snapshotActiveBins(config);
+            }
+
+            std::string model_tag; ///< String tag identifying the physics model in use.
+            const PROsyst *syst;   ///< Systematic object (non-owning pointer).
+            const PROmodel &model; ///< Physics model (non-owning reference).
+            const PROdata data;    ///< Observed data spectrum (owned copy).
+            EvalStrategy strat;    ///< Evaluation strategy.
+            bool shape_only;       ///< If true, evaluate area-normalised spectra.
+            std::vector<float> physics_param_fixed; ///< Fixed physics-parameter values (empty = none fixed).
+            int fixed_index;       ///< Index fixed during a scan (-1-like sentinel = none).
+            float fixed_val;       ///< Value at which the scanned parameter is fixed.
+
+            Eigen::VectorXf last_param; ///< Parameter vector from the most recent evaluation.
+            float last_value;           ///< Metric value from the most recent evaluation.
+
+            bool correlated_systematics;          ///< Whether correlated nuisance priors are enabled.
+            Eigen::MatrixXf prior_covariance;     ///< Prior covariance for nuisance parameters.
+            Eigen::MatrixXf prior_covariance_inv; ///< Cached inverse prior covariance.
+
+            FillSpectraCache fs_cache; ///< Per-metric cache for FillSpectra.
+
             mutable std::atomic<size_t> call_count{0}; ///< Thread-safe counter of operator() invocations.
             GradientMode gradient_mode = GradientCentralLin; ///< Default: Gauss-Newton linearised gradient (M frozen at base). Use --grad-mode central-full for the legacy full-FD behaviour.
 

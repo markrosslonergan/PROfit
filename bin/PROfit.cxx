@@ -7,6 +7,7 @@
 #include "PROcreate.h"
 #include "PROpeller.h"
 #include "PROmetrics/PROchi.h"
+#include "PROmetrics/PROpearson.h"
 #include "PROmetrics/PROCNP.h"
 #include "PROmetrics/PROpoisson.h"
 #include "PROcess.h"
@@ -389,7 +390,7 @@ int main(int argc, char* argv[])
     app.add_option("-o,--output",output_tag,"Additional output filename quantifier")->default_str("v1");
     app.add_option("-n, --nthread",   nthread, "Number of threads to parallelize over.")->default_val(1);
     app.add_option("-m,--max", maxevents, "Max number of events to run over.");
-    app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options are PROchi or PROCNP")->default_str("PROchi");
+    app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options are PROchi, PROpearson, PROCNP, or Poisson")->default_str("PROchi");
     app.add_option("-d, --data", data_xml, "Load from a seperate data xml/data file instead of signal injection. Only used with plot subcommand.")->default_str("");
     app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
     app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
@@ -1470,6 +1471,8 @@ int main(int argc, char* argv[])
     PROmetric *metric;
     if(chi2 == "PROchi") {
         metric = new PROchi("", config, prop, &(variable_systs[config.i_prime]), *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,shapeonly);
+    } else if(chi2 == "PROpearson") {
+        metric = new PROpearson("", config, prop, &(variable_systs[config.i_prime]), *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,shapeonly);
     } else if(chi2 == "PROCNP") {
         metric = new PROCNP("", config, prop, &(variable_systs[config.i_prime]), *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,shapeonly);
     } else if(chi2 == "Poisson") {
@@ -1806,6 +1809,8 @@ int main(int argc, char* argv[])
                 PROmetric *metric;
                 if(chi2 == "PROchi") {
                     metric = new PROchi("", config, prop, &variable_systs[config.i_prime], *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
+                } else if(chi2 == "PROpearson") {
+                    metric = new PROpearson("", config, prop, &variable_systs[config.i_prime], *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
                 } else if(chi2 == "PROCNP") {
                     metric = new PROCNP("", config, prop, &variable_systs[config.i_prime], *model, data, eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
                 } else if(chi2 == "Poisson") {

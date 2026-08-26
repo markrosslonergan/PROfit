@@ -34,13 +34,10 @@ namespace {
 }
 
 
-PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat, bool shape_only, std::vector<float> physics_param_fixed) : PROmetric(), model_tag(tag), config(conin), peller(pin), syst(systin), model(modelin), data(datain), strat(strat), shape_only(shape_only), physics_param_fixed(physics_param_fixed), correlated_systematics(false) {
-    last_value = 0.0; last_param = Eigen::VectorXf::Zero(model.nparams+syst->GetNSplines());
-    fixed_index = -999;
+PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat, bool shape_only, std::vector<float> physics_param_fixed) : PROmetric(tag, conin, systin, modelin, datain, strat, shape_only, physics_param_fixed), config(conin), peller(pin) {
 
     // Snapshot the config's fit-region mask (if any); masked bins are skipped in
     // the Baker-Cousins sum and contribute zero gradient.
-    snapshotActiveBins(conin);
 
     if(syst->GetNCovar()) {
         log<LOG_WARNING>(L"%1% || Warning: Using a systematics object with covariance systematics with"
@@ -83,29 +80,6 @@ PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROp
         prior_covariance_inv = prior_covariance.inverse();
     }
 }
-
-float PROpoisson::Pull(const Eigen::VectorXf &systs) {
-    // No correlations: sum of squares
-    Eigen::VectorXf centered = systs - syst->spline_centers;
-    for(size_t i = 0; i < syst->spline_prior_types.size(); ++i) {
-        if(syst->spline_prior_types[i] == SplinePriorType::Uniform) centered(i) = 0.0f;
-    }
-    if (!correlated_systematics) {
-        return (centered.array().square() / syst->spline_priors.array().square()).sum();
-    }
-
-    return centered.dot(prior_covariance_inv * centered);
-}
-
-void PROpoisson::fixSpline(int fix, float valin){
-    fixed_index=fix;
-    fixed_val=valin;
-    return;
-}
-float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient){
-    return PROpoisson::operator()(param, gradient, true);
-}
-
 
 float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
     call_count++;

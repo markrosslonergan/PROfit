@@ -60,6 +60,8 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         PROmetric *metric;
         if(args.chi2 == "PROchi") {
             metric = new PROchi("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
+        } else if(args.chi2 == "PROpearson") {
+            metric = new PROpearson("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
         } else if(args.chi2 == "PROCNP") {
             metric = new PROCNP("", args.config, args.prop, &args.systs, *model, data, !args.binned ? PROmetric::EventByEvent : PROmetric::BinnedChi2);
         } else if(args.chi2 == "Poisson") {

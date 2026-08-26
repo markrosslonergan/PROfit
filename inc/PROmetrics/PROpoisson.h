@@ -44,35 +44,14 @@ namespace PROfit{
         private:
 
         public:
-            std::string model_tag; ///< String tag identifying the oscillation model in use.
-
             const PROconfig &config; ///< Analysis configuration (non-owning reference).
             const PROpeller &peller; ///< MC event store (non-owning reference).
-            const PROsyst *syst;     ///< Systematic object (non-owning pointer).
-            const PROmodel &model;   ///< Physics oscillation model (non-owning reference).
-            const PROdata data;      ///< Observed data spectrum (owned copy, collapsed).
-            EvalStrategy strat;      ///< Evaluation strategy.
-            bool shape_only;         ///< If true, compute chi-squared on area-normalised spectra.
-            std::vector<float> physics_param_fixed; ///< Fixed-physics-parameter values (empty = none fixed).
-            int fixed_index; ///< Index of the parameter fixed during a profile scan (-1 = none).
-            float fixed_val; ///< Value at which the fixed parameter is held.
-
-            Eigen::VectorXf last_param; ///< Parameter vector from the most recent evaluation.
-            float last_value;           ///< Chi-squared from the most recent evaluation.
-
-            bool correlated_systematics;      ///< If true, use correlated pull covariance.
-            Eigen::MatrixXf prior_covariance; ///< Prior covariance matrix for nuisance parameters.
-            Eigen::MatrixXf prior_covariance_inv; ///< Inverse of prior_covariance, computed once in the ctor.
-
-            FillSpectraCache fs_cache;        ///< Per-thread split-half cache for FillSpectra.
-
-
             /*Function: Constructor bringing all objects together*/
             PROpoisson(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat = EventByEvent, bool shape_only = false, std::vector<float> physics_param_fixed = std::vector<float>());
 
 
             /*Function: operator() is what is passed to minimizer.*/
-            virtual float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient);
+            using PROmetric::operator();
             virtual float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient);
 
             /** @brief Reset cached state and clear any fixed-parameter list. */
@@ -88,35 +67,11 @@ namespace PROfit{
                  return new PROpoisson(model_tag, config, peller, syst, model, data, strat, shape_only, physics_param_fixed);
             }
 
-            /** @brief Return a const reference to the oscillation model. */
-            virtual const PROmodel &GetModel() const {
-                return model;
-            }
-
-            /** @brief Return a const reference to the systematic object. */
-            virtual const PROsyst &GetSysts() const {
-                return *syst;
-            }
-
             /** @brief Replace the internal systematic pointer with @p new_syst. */
             virtual void override_systs(const PROsyst &new_syst) {
                 syst = &new_syst;
                 fs_cache.invalidate();
             }
-
-            /**
-             * @brief Compute the Gaussian pull penalty for the spline nuisance parameters.
-             * @param systs  Spline nuisance parameter values.
-             * @return Scalar chi-squared penalty from Gaussian priors.
-             */
-            virtual float Pull(const Eigen::VectorXf &systs);
-
-            /**
-             * @brief Fix a spline nuisance parameter at a given value.
-             * @param fix    0-based spline index.
-             * @param valin  Value to fix the spline at.
-             */
-            void fixSpline(int fix, float valin);
 
             /**
              * @brief Compute the Poisson log-likelihood ratio for a single analysis channel.

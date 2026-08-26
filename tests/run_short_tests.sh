@@ -112,6 +112,7 @@ run_test t00process process
 
 # --- 1. Global fits across metrics and data options --------------------------
 run_test t01global        --use-fake-data global
+run_test t01globalpearson --use-fake-data -c PROpearson global
 run_test t02globalcnp     --use-fake-data -c PROCNP global
 run_test t03globalpoisson --use-fake-data -c Poisson global
 run_test t04statonly      --use-fake-data --statonly global

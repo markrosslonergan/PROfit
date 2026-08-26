@@ -14,6 +14,7 @@
 #include "PROlog.h"
 #include "PROmeshEval.h"
 #include "PROmetrics/PROchi.h"
+#include "PROmetrics/PROpearson.h"
 #include "PROmetrics/PROCNP.h"
 #include "PROmetrics/PROpoisson.h"
 #include "PROmetric.h"
@@ -84,6 +85,7 @@ static ThrowGlobalFit run_throw_global_fit(
     PROmetric::EvalStrategy strat = binned ? PROmetric::BinnedChi2 : PROmetric::EventByEvent;
     std::unique_ptr<PROmetric> metric;
     if      (chi2_kind == "PROchi")    metric.reset(new PROchi   ("", config, prop, &systs, model, data, strat));
+    else if (chi2_kind == "PROpearson") metric.reset(new PROpearson("", config, prop, &systs, model, data, strat));
     else if (chi2_kind == "PROCNP")    metric.reset(new PROCNP   ("", config, prop, &systs, model, data, strat));
     else if (chi2_kind == "Poisson")   metric.reset(new PROpoisson("", config, prop, &systs, model, data, strat));
     else {
@@ -183,6 +185,8 @@ static PROmesh::AMRResult run_wilks_prepass(
                 ? PROmetric::EventByEvent : PROmetric::BinnedChi2;
             if (chi2_kind == "PROchi") {
                 tls_metric.reset(new PROchi("", config, prop, &systs, model, data, strat));
+            } else if (chi2_kind == "PROpearson") {
+                tls_metric.reset(new PROpearson("", config, prop, &systs, model, data, strat));
             } else if (chi2_kind == "PROCNP") {
                 tls_metric.reset(new PROCNP("", config, prop, &systs, model, data, strat));
             } else if (chi2_kind == "Poisson") {
