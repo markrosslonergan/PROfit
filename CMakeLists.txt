@@ -46,10 +46,8 @@ endif()
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.25")
     FetchContent_Declare(
         eigen
-        SYSTEM
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git 
-        GIT_TAG        3.4.0
-        )
+        URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+    )
     FetchContent_Declare(
         lbfgspp
         SYSTEM
@@ -59,9 +57,8 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.25")
 else()
     FetchContent_Declare(
         eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git 
-        GIT_TAG        3.4.0
-        )
+        URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+    )
     FetchContent_Declare(
         lbfgspp
         GIT_REPOSITORY https://github.com/markrosslonergan/LBFGSpp

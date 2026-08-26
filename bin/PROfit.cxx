@@ -290,6 +290,7 @@ int main(int argc, char* argv[])
     bool eventbyevent=false;
     bool shapeonly = false;
     bool rateonly = false;
+    int fit_variable = -1; // -1 => take the fitting variable from the XML (fit="true", else var0)
     bool force = false;
     bool noxrootd = false;
     bool poisson_throw = false;
@@ -468,6 +469,8 @@ int main(int argc, char* argv[])
 
     auto* shape_flag = app.add_flag("--shapeonly", shapeonly, "Run a shape only analysis");
     auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
+    app.add_option("--fit-variable", fit_variable,
+            "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");
     shape_flag->excludes(rate_flag);   
 
     //PROcess, into binary data [Do this once first!]
@@ -723,7 +726,8 @@ int main(int argc, char* argv[])
     log<LOG_WARNING>(L"%1% || PROfit commandline input arguments. xml: %2%, tag: %3%, output %4%, nthread: %5% ") % __func__ % xmlname.c_str() % analysis_tag.c_str() % output_tag.c_str() % nthread ;
 
     //Initilize configuration from the XML;
-    PROconfig config(xmlname, rateonly);
+    // fit_variable (-1 unless --fit-variable was given) overrides the XML's fit="true" binning.
+    PROconfig config(xmlname, rateonly, fit_variable);
 
     //Inititilize PROpeller to keep MC
     PROpeller prop;
@@ -1072,8 +1076,10 @@ int main(int argc, char* argv[])
     if(use_real_data){
         PROconfig dataconfig;
         if(!data_xml.empty()){
-            // Explicit --data flag takes precedence
-            dataconfig = PROconfig(data_xml);
+            // Explicit --data flag takes precedence. Force the data config onto the same
+            // fitting variable as the MC config — the two must agree bin-for-bin, and a
+            // hand-written data XML will not carry a fit="true" of its own.
+            dataconfig = PROconfig(data_xml, rateonly, (int)config.i_prime);
         } else {
             // Use embedded <data> section from the unified XML
             log<LOG_INFO>(L"%1% || Using embedded <data> section from XML for data config") % __func__;
@@ -1149,7 +1155,10 @@ int main(int argc, char* argv[])
     else{
         log<LOG_INFO>(L"%1% || Going to get fake data set up for each variable.") % __func__ ;
         for(size_t io = 0; io < config.m_num_variables; ++io) {
-            if (pseudo_experiment && io == config.i_prime && config.m_channel_variable_plot_bool.at(io)) {
+            // plot="false" only suppresses drawing; the fitting variable always needs real
+            // fake-data, so i_prime bypasses the flag here and in the Asimov branch below
+            // (matching the variable_systs build, which also special-cases i_prime).
+            if (pseudo_experiment && io == config.i_prime) {
                 // True FC-style pseudo-experiment for the i_prime variable.
                 // Pattern lifted verbatim from src/PROfc.cxx::fc_worker's per-PE body:
                 //   1. CV spectrum + Cholesky of the bin-bin covariance once.
@@ -1203,7 +1212,8 @@ int main(int argc, char* argv[])
                 continue;
             }
 
-            PROspec data_spec = config.m_channel_variable_plot_bool.at(io) ?  FillSpectra(config, prop, variable_systs[io], *model, fakedataparams, !eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
+            const bool fill_this_variable = config.m_channel_variable_plot_bool.at(io) || io == config.i_prime;
+            PROspec data_spec = fill_this_variable ?  FillSpectra(config, prop, variable_systs[io], *model, fakedataparams, !eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
             if(poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(myseed.global_rng));
             Eigen::VectorXf data_vec = CollapseMatrix(config, data_spec.Spec(), io);
             variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
@@ -1802,7 +1812,10 @@ int main(int argc, char* argv[])
                 for(size_t i = 0; i < config.m_num_variable_bins_total_collapsed[config.i_prime]; i++)
                     throwC(i) = d(PROseed::global_rng);
                 bool binned = (eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2) != 0;
-                PROspec shifted = FillSpectra(config, prop, metric->GetSysts(), metric->GetModel(), throwp, binned);
+                // Fill the fitting variable explicitly: the CollapseMatrix below uses the
+                // i_prime collapsing matrix, so letting var_index default to 0 would mix
+                // variables whenever i_prime != 0 (same fix as src/PROfc.cxx).
+                PROspec shifted = FillSpectra(config, prop, metric->GetSysts(), metric->GetModel(), throwp, binned, config.i_prime);
                 PROspec newSpec = statonly_brazil ? PROspec::PoissonVariation(collapsed_cv, dseed(myseed.global_rng)) :
                     PROspec::PoissonVariation(PROspec(CollapseMatrix(config, shifted.Spec()) + L * throwC, CollapseMatrix(config, shifted.Error())), dseed(myseed.global_rng));
                 PROdata data(newSpec.Spec(), newSpec.Error());

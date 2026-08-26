@@ -163,6 +163,40 @@ fi
 expect_fail t20pjpartial  --use-fake-data --projector-prefit "fullosc" global
 expect_fail t21pjall      --use-fake-data --projector-prefit "nu_" global
 
+# --- 9. apply_to_subchannel (per-subchannel systematic scoping) ---------------
+# DetSys1 (spline) restricted to ND, RPA_CCQE (covariance) restricted to FD.
+# process must not require (or read) their weight branches in non-matching
+# files; outside the match splines are flat at 1 and covariance blocks exactly
+# zero — asserted numerically by check_applyto.C on the t23 plot output.
+sed -e 's|plotname="DetSys1" tag="det"|plotname="DetSys1" tag="det" apply_to_subchannel="_ND_"|' \
+    -e 's|plotname="RPA_CCQE" tag="QE-MEC"|plotname="RPA_CCQE" tag="QE-MEC" apply_to_subchannel="_FD_"|' \
+    local_test.xml > local_applyto.xml
+SAVED_COMMON=("${COMMON[@]}")
+COMMON=(-x local_applyto.xml -t "${TAG}apt" -n 1 -v 2 --seed 405 --preset fast)
+run_test t22aptprocess process
+run_test t23aptplot   --use-fake-data plot --with-splines
+run_test t24aptglobal --use-fake-data global
+# A wildcard matching no subchannel fullname must be refused loudly.
+sed 's|apply_to_subchannel="_ND_"|apply_to_subchannel="_TYPO_"|' local_applyto.xml > local_applyto_typo.xml
+COMMON=(-x local_applyto_typo.xml -t "${TAG}apttypo" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail t25apttypo    process
+COMMON=("${SAVED_COMMON[@]}")
+# Numeric assertion: non-matching covariance blocks exactly zero, non-matching
+# splines exactly flat (needs root; skipped silently if unavailable).
+ROOTEXE="${ROOTEXE:-$(command -v root || true)}"
+[ -z "$ROOTEXE" ] && [ -x /usr/local/root/root/bin/root ] && ROOTEXE=/usr/local/root/root/bin/root
+if [ -n "$ROOTEXE" ]; then
+    if "$ROOTEXE" -l -b -q "$REPO/tests/check_applyto.C(\"${TAG}apt_t23aptplot_PROplot.root\")" > logs/t26aptzero.log 2>&1; then
+        note "PASS  t26aptzero  (non-matching cov blocks zero, splines flat)"
+        PASS=$((PASS+1))
+    else
+        note "FAIL  t26aptzero -- see logs/t26aptzero.log"
+        FAIL=$((FAIL+1))
+    fi
+else
+    note "SKIP  t26aptzero  (no root executable for the numeric assertion)"
+fi
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

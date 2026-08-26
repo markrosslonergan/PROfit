@@ -102,8 +102,8 @@ namespace {
 }
 
 
-PROconfig::PROconfig(const std::string &xml, bool rate_only):
-    m_xmlname(xml), 
+PROconfig::PROconfig(const std::string &xml, bool rate_only, int fit_variable):
+    m_xmlname(xml),
     m_det_pot(),
     m_num_detectors(0),
     m_num_channels(0),
@@ -121,6 +121,8 @@ PROconfig::PROconfig(const std::string &xml, bool rate_only):
     m_num_mcgen_files(0),
     m_bool_rate_only(rate_only)
 {
+    // Must be set before LoadFromXML: it resolves i_prime as its very first action.
+    m_requested_fit_variable = fit_variable;
 
     LoadFromXML(m_xmlname);
 
@@ -197,6 +199,96 @@ bool PROconfig::SameChannels(const PROconfig &one, const PROconfig &two) {
 }
 
 
+int PROconfig::ResolveFitVariableFromXML(tinyxml2::XMLDocument &doc) const {
+
+    int resolved = -1;            //index marked fit="true", -1 until one is seen
+    std::string resolved_channel; //channel that set it, for a useful error message
+    size_t ichan = 0;
+    //__func__ inside the scan lambda below is "operator()", so name the function once here.
+    const char *fname = __func__;
+
+    for(tinyxml2::XMLElement *pChanF = doc.FirstChildElement("channel"); pChanF;
+            pChanF = pChanF->NextSiblingElement("channel"), ++ichan) {
+
+        const char *cname = pChanF->Attribute("name");
+        const std::string channel_name = cname ? cname : ("channel#" + std::to_string(ichan));
+
+        // Walk this channel's binnings in the same order LoadFromXML numbers them:
+        // every <bins2D> first, then every <bins>. `ivar` is shared across both passes.
+        int ivar = 0, marked = -1;
+        auto scan_bins = [&](const char *tag) {
+            for(tinyxml2::XMLElement *pB = pChanF->FirstChildElement(tag); pB;
+                    pB = pB->NextSiblingElement(tag), ++ivar) {
+                const char *fit = pB->Attribute("fit");
+                if(!fit) continue;
+                const std::string fitstr(fit);
+                if(fitstr == "false") continue;
+                if(fitstr != "true") {
+                    log<LOG_ERROR>(L"%1% || ERROR: <%2% fit=\"%3%\"> in channel %4% is not valid; fit must be \"true\" or \"false\".")
+                        % fname % tag % fitstr.c_str() % channel_name.c_str();
+                    throw std::invalid_argument(std::string("<") + tag + "> fit attribute must be true or false, got: " + fitstr);
+                }
+                if(marked >= 0) {
+                    log<LOG_ERROR>(L"%1% || ERROR: channel %2% marks both var%3% and var%4% with fit=\"true\". Exactly one variable is fitted.")
+                        % fname % channel_name.c_str() % marked % ivar;
+                    throw std::invalid_argument("More than one binning marked fit=\"true\" in channel " + channel_name);
+                }
+                marked = ivar;
+            }
+        };
+        scan_bins("bins2D");
+        scan_bins("bins");
+
+        if(marked < 0) continue;
+
+        if(resolved >= 0 && resolved != marked) {
+            log<LOG_ERROR>(L"%1% || ERROR: channel %2% marks var%3% as the fitting variable but channel %4% marks var%5%.")
+                % __func__ % channel_name.c_str() % marked % resolved_channel.c_str() % resolved;
+            log<LOG_ERROR>(L"%1% || -- Variables are numbered globally, so every channel must agree on which one is fitted.") % __func__;
+            throw std::invalid_argument("Channels disagree on which variable has fit=\"true\"");
+        }
+        resolved = marked;
+        resolved_channel = channel_name;
+    }
+
+    if(resolved < 0) {
+        log<LOG_DEBUG>(L"%1% || No binning marked fit=\"true\"; defaulting to the first variable (var0).") % __func__;
+        return 0;
+    }
+
+    log<LOG_DEBUG>(L"%1% || Channel %2% marks var%3% as the fitting variable.")
+        % __func__ % resolved_channel.c_str() % resolved;
+    return resolved;
+}
+
+void PROconfig::ValidateFitVariable() const {
+
+    if(i_prime >= m_num_variables) {
+        log<LOG_ERROR>(L"%1% || ERROR: fitting variable var%2% does not exist; this XML defines %3% variable(s) (var0..var%4%).")
+            % __func__ % i_prime % m_num_variables % (m_num_variables ? m_num_variables - 1 : 0);
+        throw std::invalid_argument("Fitting variable index out of range: " + std::to_string(i_prime));
+    }
+
+    // A model's kinematic variable (e.g. the truth L/E binning behind <parameter name="L/E"
+    // variable_index="N">) is a physics grid, not a reco observable. Fitting it is never
+    // intended and would silently produce nonsense, so reject it outright.
+    for(const auto &[pname, pindex] : m_model_parameter_map) {
+        if(pindex >= 0 && static_cast<size_t>(pindex) == i_prime) {
+            log<LOG_ERROR>(L"%1% || ERROR: var%2% is the kinematic variable of model parameter \"%3%\", it cannot also be the fitting variable.")
+                % __func__ % i_prime % pname.c_str();
+            log<LOG_ERROR>(L"%1% || -- Mark a reconstructed observable with fit=\"true\" instead.") % __func__;
+            throw std::invalid_argument("Fitting variable var" + std::to_string(i_prime) +
+                                        " is model parameter \"" + pname + "\"'s kinematic variable");
+        }
+    }
+
+    // Not fatal: PROfit builds the PROsyst and the data spectrum for i_prime regardless of
+    // plot=, but nothing will be drawn for it.
+    if(i_prime < m_channel_variable_plot_bool.size() && !m_channel_variable_plot_bool[i_prime])
+        log<LOG_WARNING>(L"%1% || Fitting variable var%2% has plot=\"false\"; it will be fitted but not plotted.")
+            % __func__ % i_prime;
+}
+
 int PROconfig::LoadFromXML(const std::string &filename){
 
 
@@ -227,9 +319,25 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
     tinyxml2::XMLElement *pMode, *pDet, *pChan;
 
-    //Temp usage
-    i_prime=0;
-    std::vector<std::string> allowed_elements = {"mode", "detector", "channel", "MCFile","WeightMaps","model","variation_list","systematics","correlation","varied_spectrum", "ShapeOnlyUncertainty", "data", "plotpot", "DetVarFiles"   };
+    //**** Fitting variable (i_prime) ****
+    // Resolved before ANYTHING else is parsed, because two later parse steps read it:
+    // the --rateonly rebinning of the fitting variable, and the default binning of a
+    // <systematic> (binning="reco" means "the fitting variable's binning").
+    {
+        const int xml_fit_variable = ResolveFitVariableFromXML(doc);
+        if(m_requested_fit_variable >= 0) {
+            if(m_requested_fit_variable != xml_fit_variable)
+                log<LOG_WARNING>(L"%1% || Fitting variable overridden to var%2%; the XML asks for var%3%.")
+                    % __func__ % m_requested_fit_variable % xml_fit_variable;
+            i_prime = static_cast<size_t>(m_requested_fit_variable);
+        } else {
+            i_prime = static_cast<size_t>(xml_fit_variable);
+        }
+        log<LOG_INFO>(L"%1% || Fitting variable is var%2% (i_prime=%2%). All other variables are carried along but not fitted.")
+            % __func__ % i_prime;
+    }
+
+    std::vector<std::string> allowed_elements ={"mode", "detector", "channel", "MCFile","WeightMaps","model","variation_list","systematics","correlation","varied_spectrum", "ShapeOnlyUncertainty", "data", "plotpot", "DetVarFiles"   };
     for (tinyxml2::XMLElement* elem = doc.FirstChildElement(); elem; elem = elem->NextSiblingElement()) {
         std::string name = elem->Name();
         if (std::find(allowed_elements.begin(), allowed_elements.end(), name) == allowed_elements.end()) {
@@ -483,7 +591,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
             tinyxml2::XMLElement *pBinO = pChan->FirstChildElement("bins"); // 1D Bins
             while(pBinO){
-                expected_attrs = {"min","max","nbins","edges","unit","xaxislabel","plot"};
+                expected_attrs = {"min","max","nbins","edges","unit","xaxislabel","plot","fit"};
                 for (const tinyxml2::XMLAttribute* attr = pBinO->FirstAttribute(); attr; attr = attr->Next()) {
                     std::string name = attr->Name();
                     if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -602,27 +710,24 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 pSubChan = pSubChan->NextSiblingElement("subchannel");
             }
 
-            // Serialize bins XML for this channel (used to build data config if <data> section exists)
+            // Serialize bins XML for this channel (used to build the data and DetVar configs).
+            // Emit <bins2D> before <bins>, matching the order the parser above numbers variables
+            // in, so a child config built from this string gives every variable the same index
+            // as its parent. Attributes (including fit=) are copied verbatim.
             {
                 std::string channelBinsXml;
-                tinyxml2::XMLElement* pBinSer = pChan->FirstChildElement("bins");
-                while(pBinSer) {
-                    tinyxml2::XMLPrinter printer;
-                    pBinSer->Accept(&printer);
-                    channelBinsXml += "\t";
-                    channelBinsXml += printer.CStr();
-                    channelBinsXml += "\n";
-                    pBinSer = pBinSer->NextSiblingElement("bins");
-                }
-                pBinSer = pChan->FirstChildElement("bins2D");
-                while(pBinSer) {
-                    tinyxml2::XMLPrinter printer;
-                    pBinSer->Accept(&printer);
-                    channelBinsXml += "\t";
-                    channelBinsXml += printer.CStr();
-                    channelBinsXml += "\n";
-                    pBinSer = pBinSer->NextSiblingElement("bins2D");
-                }
+                auto serialize_bins = [&channelBinsXml, pChan](const char *tag) {
+                    for(tinyxml2::XMLElement* pBinSer = pChan->FirstChildElement(tag); pBinSer;
+                            pBinSer = pBinSer->NextSiblingElement(tag)) {
+                        tinyxml2::XMLPrinter printer;
+                        pBinSer->Accept(&printer);
+                        channelBinsXml += "\t";
+                        channelBinsXml += printer.CStr();
+                        channelBinsXml += "\n";
+                    }
+                };
+                serialize_bins("bins2D");
+                serialize_bins("bins");
                 m_channel_bins_xml_strings.push_back(channelBinsXml);
             }
 
@@ -1252,7 +1357,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
 
                 //check for known attributes
-                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights"};
+                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel"};
                 for (const tinyxml2::XMLAttribute* attr = pAllowList->FirstAttribute(); attr; attr = attr->Next()) {
                     std::string name = attr->Name();
                     if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -1282,6 +1387,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 const char *num_decomp_knobs = pAllowList->Attribute("num_decomp_knobs");
                 const char *include_resid_cov = pAllowList->Attribute("include_resid_cov");
                 const char *weights = pAllowList->Attribute("weights");
+                const char *apply_to_subchannel = pAllowList->Attribute("apply_to_subchannel");
 
 
                 m_mcgen_variation_type.push_back(variation_type);
@@ -1493,6 +1599,19 @@ int PROconfig::LoadFromXML(const std::string &filename){
                     bool keep_resid = !(strcmp(include_resid_cov, "false") == 0 || strcmp(include_resid_cov, "no") == 0 || strcmp(include_resid_cov, "0") == 0);
                     m_mcgen_variation_include_resid_cov[wt] = keep_resid;
                     log<LOG_INFO>(L"%1% || Parsed include_resid_cov=%2% for systematic %3%") % __func__ % keep_resid % wt.c_str();
+                }
+                if(apply_to_subchannel) {
+                    std::string pattern = apply_to_subchannel;
+                    // trim leading/trailing whitespace so apply_to_subchannel="nu_SBND " behaves
+                    size_t b = pattern.find_first_not_of(" \t");
+                    size_t e = pattern.find_last_not_of(" \t");
+                    pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
+                    if(pattern.empty()) {
+                        log<LOG_ERROR>(L"%1% || ERROR! apply_to_subchannel attribute for systematic %2% is empty.") % __func__ % wt.c_str();
+                        throw std::invalid_argument(std::string("apply_to_subchannel attribute for systematic '") + wt + "' is empty");
+                    }
+                    m_mcgen_variation_apply_to_subchannel[wt] = pattern;
+                    log<LOG_INFO>(L"%1% || Parsed apply_to_subchannel='%2%' for systematic %3% (substring match against subchannel fullnames)") % __func__ % pattern.c_str() % wt.c_str();
                 }
                 log<LOG_DEBUG>(L"%1% || Allowlisting variations: %2%") % __func__ % wt.c_str() ;
                 tinyxml2::XMLElement *pNext = pAllowList->NextSiblingElement("allowlist");
@@ -1840,6 +1959,10 @@ int PROconfig::LoadFromXML(const std::string &filename){
     }
 
 
+
+    // i_prime was resolved at the top of this function; only now are m_num_variables and the
+    // model parameter map filled in, so this is the first point it can be checked.
+    this->ValidateFitVariable();
 
     this->CalcTotalBins();
 
@@ -2517,6 +2640,11 @@ uint32_t PROconfig::CalcHash() const{
 
     unique_string << vecToString(m_mcgen_variation_allowlist);
 
+    // apply_to_subchannel wildcards change which bins a systematic populates in the
+    // cached SystStructs; empty map appends nothing so pre-existing hashes are unchanged.
+    for (const auto& [sysname, pattern] : m_mcgen_variation_apply_to_subchannel)
+        unique_string << sysname << "->" << pattern;
+
     for(const auto& vec: m_branch_variables){
         for(const auto& br: vec){
             unique_string << br->associated_hist << br->associated_systematic << br->model_rule;
@@ -2594,7 +2722,9 @@ PROconfig PROconfig::BuildDataConfig() const {
     }
 
     log<LOG_INFO>(L"%1% || Loading data config from temporary XML: %2%") % __func__ % tmpfile.c_str();
-    PROconfig dataconfig(tmpfile);
+    // Pass i_prime explicitly: the child must fit the same variable as this config even when
+    // that came from --fit-variable rather than from a fit="true" in the serialized bins.
+    PROconfig dataconfig(tmpfile, m_bool_rate_only, static_cast<int>(i_prime));
     std::filesystem::remove(tmpfile);
 
     return dataconfig;
@@ -2652,7 +2782,9 @@ PROconfig PROconfig::BuildDetVarConfig(size_t file_index) const {
     }
 
     log<LOG_INFO>(L"%1% || Loading DetVar config for '%2%' from temporary XML: %3%") % __func__ % dvfile.name.c_str() % tmpfile.c_str();
-    PROconfig dvconfig(tmpfile);
+    // Inherit the parent's fitting variable (see BuildDataConfig) — PROfit.cxx falls back to
+    // the parent's i_prime when the DetVar config's is out of range, so keep them identical.
+    PROconfig dvconfig(tmpfile, m_bool_rate_only, static_cast<int>(i_prime));
     std::filesystem::remove(tmpfile);
 
     // Propagate matching var branch names directly onto the mini-config so PROcess_CAFAna can read them.

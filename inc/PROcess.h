@@ -89,7 +89,7 @@ namespace PROfit{
      * @param cache  Single-slot cache; reuses physics or systematic half whose subvector matches.
      * @return Same value as the non-cached FillSpectra; cache is updated as a side effect.
      */
-    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, bool binned = true, size_t var_index = 0);
+    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, bool binned, size_t var_index);
 
     /**
      * @brief Master spectrum-filling function combining oscillation weights and systematic spline weights.
@@ -105,7 +105,7 @@ namespace PROfit{
      * @param var_index  Index of the analysis variable to fill (default 0, i.e. the primary reco variable).
      * @return A PROspec containing the predicted event spectrum.
      */
-    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, bool binned = true, size_t var_index =0);
+    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, bool binned, size_t var_index);
 
     /**
      * @brief Overload of FillSpectra accepting systematic pulls as a name-to-value map.
@@ -120,7 +120,7 @@ namespace PROfit{
      * @param var_index  Index of the analysis variable to fill (default 0).
      * @return A PROspec containing the predicted event spectrum.
      */
-    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const std::map<std::string, float> &pulls, bool binned =true, size_t var_index=0);
+    PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const std::map<std::string, float> &pulls, bool binned, size_t var_index);
 
 
     //Below are depreciated, slightly
@@ -139,7 +139,7 @@ namespace PROfit{
      * @param var_index  Variable index to fill (default 0).
      * @return A PROspec with one random systematic throw applied.
      */
-    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index=0);
+    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index);
 
     /**
      * @brief One systematic throw, split into signal and background pieces.
@@ -176,7 +176,7 @@ namespace PROfit{
      * @param other_index Variable index (default 0).
      * @return A PROspec with the specified spline thrown.
      */
-    PROspec FillSplineRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst,  const PROmodel &model,  const Eigen::VectorXf &cvparams, int spline, uint32_t seed, int other_index=0);
+    PROspec FillSplineRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst,  const PROmodel &model,  const Eigen::VectorXf &cvparams, int spline, uint32_t seed, int other_index);
 
     /**
      * @brief Throw one nuisance pull from N(0,1) truncated to spline @p i's allowed range.

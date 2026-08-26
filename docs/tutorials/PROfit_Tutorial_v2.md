@@ -135,9 +135,14 @@ the near detector; `background` matches every background subchannel in every
 channel and detector.
 
 **Variables.** Each channel can carry several binnings (`<bins>` entries):
-reconstructed energy, true L/E, true energy, and so on. One of them is the
-*fitting variable* (the reconstructed one); the others are used for the
-oscillation model (true L/E) and diagnostics. Plots are made for all of them.
+reconstructed energy, true L/E, true energy, and so on. Exactly one of them is
+the *fitting variable* — the one the χ² is actually computed in; the others are
+used for the oscillation model (true L/E) and diagnostics. Plots are made for
+all of them. Mark the fitting variable with `fit="true"` on its `<bins>` entry,
+or leave every entry unmarked to fit the first one (the historical default).
+`--fit-variable N` overrides the XML at run time, and needs **no re-`process`**:
+all variables live in the cached `_prop.bin`/`_syst.bin` already, and the
+fitting variable is not part of the config hash.
 
 **The parameter vector.** A fit point is
 `[physics parameters, one parameter per spline systematic]`, in that order.
@@ -213,12 +218,30 @@ Three things to keep in mind:
 </channel>
 ```
 
-Each `<bins>` entry is one *variable*. The **first** `<bins>` entry is the
-fitting variable (reconstructed energy here); the rest are extra binnings
-that PROfit tracks and plots for you (`plot="false"` suppresses plotting of a
-variable, useful for the 200-bin true-L/E binning that only exists for the
-oscillation model). Subchannel `plotname` and `color` control the stacked
-histograms in `plot`.
+Each `<bins>` entry is one *variable*, numbered from 0 in the order they appear
+(any `<bins2D>` entries come first, then the 1D `<bins>`). With no `fit=`
+attribute anywhere, the **first** entry is the fitting variable (reconstructed
+energy here); the rest are extra binnings that PROfit tracks and plots for you
+(`plot="false"` suppresses plotting of a variable, useful for the 200-bin
+true-L/E binning that only exists for the oscillation model). Subchannel
+`plotname` and `color` control the stacked histograms in `plot`.
+
+To fit a different variable, put `fit="true"` on its `<bins>` entry:
+
+```xml
+    <bins unit="Reconstructed Neutrino Energy [GeV]" min="0.1" max="3.0" nbins="16"/>
+    <bins unit="True L/E [km/GeV]" min="0" max="2.5" nbins="200" plot="false"/>
+    <bins unit="True Neutrino Energy [GeV]" min="0" max="3" nbins="20" fit="true"/>
+    <bins unit="Random Value" min="0" max="1" nbins="50"/>
+```
+
+At most one entry per channel may be marked, and every channel that marks one
+must land on the same index — variables are numbered globally, so a
+disagreement is a config error and PROfit refuses to start. A variable that a
+`<parameter variable_index=...>` claims for the oscillation model (true L/E
+here) is also refused: that binning is a physics grid, not an observable.
+`--fit-variable N` overrides the XML for a single run without touching the file
+and without re-running `process`.
 
 ### The oscillation model
 
@@ -319,9 +342,13 @@ The `<allowlist>` attributes:
   plots (comma-separated multi-tags are allowed but a few functions dislike
   them).
 * `binning` — which variable's bins the systematic response is built on
-  (`var0`, `var1`, ... in the order of the `<bins>`/`<variable>` entries;
-  default `var0`). E.g. cross-section splines are often better built in true
-  energy, detector systematics in the reco variable.
+  (`var0`, `var1`, ... in the order of the `<bins>`/`<variable>` entries; the
+  default, `reco`, means *the fitting variable*, so it follows `fit="true"`).
+  E.g. cross-section splines are often better built in true energy, detector
+  systematics in the reco variable. Note this default is baked into
+  `_syst.bin` at `process` time: if you later switch the fitting variable, an
+  unqualified systematic keeps the binning it was built with. Write
+  `binning="varN"` explicitly if you want that pinned down.
 * `knobvals` — for splines, the knob values if not stored in the file, as a
   space-separated list (default `-3 -2 -1 0 1 2 3`).
 * `prior=` / `center=` — override the default N(0,1) Gaussian pull;
@@ -329,6 +356,15 @@ The `<allowlist>` attributes:
 * `mode="covariance_to_spline"` with `num_decomp_knobs=` promotes a
   covariance to its leading eigenmode splines (the same machinery PROjector
   uses — see section 9). `restrict` bounds a spline's allowed range.
+* `apply_to_subchannel="pattern"` — restrict a weight-based systematic
+  (`spline`, `covariance`, `covariance_to_spline`, `hist1d/2d`, ...) to the
+  subchannels whose fullname contains the pattern (same plain substring
+  matching as `norm`/`flat`, e.g. `apply_to_subchannel="nu_SBND"` or
+  `"_ND_"`). Non-matching subchannels get exactly no response (flat spline
+  at 1 / zero covariance block), and the systematic's weight branch is only
+  required — or even looked for — in MCFiles that fill a matching
+  subchannel. This is how per-detector systematics work in multi-detector
+  fits where each detector's MC carries a different set of weight branches.
 
 ---
 

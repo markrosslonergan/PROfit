@@ -90,6 +90,8 @@ namespace PROfit{
         bool has_restrict = false;  ///< If true, clamp the knob value to [restrict_lo, restrict_hi] during evaluation and fitting.
         float restrict_lo = 0.0f;   ///< Lower clamp bound (used only when has_restrict is true).
         float restrict_hi = 0.0f;   ///< Upper clamp bound (used only when has_restrict is true).
+        std::string apply_to_subchannel; ///< Substring wildcard from XML apply_to_subchannel=; empty = systematic applies to every subchannel. Events in non-matching subchannels fill all universes at the CV weight (flat spline / zero covariance there).
+        std::vector<std::string> apply_to_subchannel_names; ///< Resolved subchannel fullnames matched by apply_to_subchannel (bookkeeping/logging).
 
         //boost serialization
         template<class Archive>
@@ -125,6 +127,10 @@ namespace PROfit{
             }
             if (version >= 4) {
                 ar & inflate;
+            }
+            if (version >= 5) {
+                ar & apply_to_subchannel;
+                ar & apply_to_subchannel_names;
             }
         }
 
@@ -300,7 +306,7 @@ namespace PROfit{
      *		syst_additional_weight: additional weight applied to systematic variation
      */
 
-    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, PROpeller& inprop);
+    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop);
 
     /**
      * @brief Convert a local or EOS file path to an XRootD URL.
@@ -330,6 +336,6 @@ namespace PROfit{
 
 };
 
-BOOST_CLASS_VERSION(PROfit::SystStruct, 4)
+BOOST_CLASS_VERSION(PROfit::SystStruct, 5)
 
 #endif

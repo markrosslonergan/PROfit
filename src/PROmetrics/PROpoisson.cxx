@@ -101,7 +101,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
     // strat != EventByEvent (not == BinnedChi2): matches the FD gradient
     // helpers so BinnedGrad uses one consistent spectrum model and keeps the
     // fill cache valid.
-    PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, strat != EventByEvent);
+    PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, strat != EventByEvent, config.i_prime);
 
     const Eigen::VectorXf vdata = shape_only
         ? data.Normalize(config,result)
@@ -168,7 +168,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
             Eigen::VectorXf phys = param_at.segment(0, nparams - nsyst);
             if(model.model_constraint && !model.model_constraint(phys)) return false;
             PROspec rl = FillSpectra(config, peller, *syst, model, param_at, fs_cache,
-                                     strat != EventByEvent);
+                                     strat != EventByEvent, config.i_prime);
             vmc_out = CollapseMatrix(config, rl.Spec());
             return true;
         };
@@ -179,7 +179,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
             Eigen::VectorXf phys = param_at.segment(0, nparams - nsyst);
             if(model.model_constraint && !model.model_constraint(phys)) return false;
             PROspec rl = FillSpectra(config, peller, *syst, model, param_at, fs_cache,
-                                     strat != EventByEvent);
+                                     strat != EventByEvent, config.i_prime);
             // vdata may depend on result in shape_only mode; preserve that
             // (shape_only re-normalises to perturbed result like the original).
             const Eigen::VectorXf vdata_l = shape_only ? data.Normalize(config, rl) : data.Spec();

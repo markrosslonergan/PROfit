@@ -77,11 +77,6 @@ int PRO3p2::UnitarityConstraint(const Eigen::VectorXf &v) {
     // more careful with unitarity since tau and steriles are not specified and checking the max value of probability
     if(4*Um4sq*Ue4sq + 4*Um5sq*Ue5sq + 8*std::sqrt(Um4sq*Ue4sq*Um5sq*Ue5sq) >= 1.0f) return 0;
 
-    if(1-4*(1-Ue4sq- Ue5sq)*(Ue4sq + Ue5sq) - 4*Ue4sq*Ue5sq >= 1.0f) return 0;
-
-    if(1-4*(1-Um4sq- Um5sq)*(Um4sq + Um5sq) - 4*Um4sq*Um5sq >= 1.0f) return 0;
-
-
     return 1;
 }
 

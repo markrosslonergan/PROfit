@@ -248,7 +248,7 @@ float PRO3p1_angles::Pmumu(float dmsq, float sinsq2th14, float sinsqth24, float 
     float c14 = (1.0+sqrt(1.0-s214))/2.0f;
 
     float sinterm = std::sin(1.266932679f*dmsq*(le));
-    float prob    = 1.0f - (c14*s24*(1.0f-c14*s24))*sinterm*sinterm;
+    float prob    = 1.0f - 4.0f*(c14*s24*(1.0f-c14*s24))*sinterm*sinterm;
 
 
     if(prob<0.0 || prob >1.0){
@@ -298,7 +298,7 @@ Eigen::MatrixXf PRO3p1_angles::get_probs(const Eigen::VectorXf &phys, const std:
         probs(i, 0) = 1.0f;
 
         // P_mumu
-        probs(i, 1) = 1.0f - c14*s24*(1.0f-c14*s24)*sinterm*sinterm;
+        probs(i, 1) = 1.0f - 4.0f*c14*s24*(1.0f-c14*s24)*sinterm*sinterm;
 
         // P_mue
         probs(i, 2) = s214*s24*sinterm*sinterm;
@@ -847,7 +847,7 @@ int PRO3p1_decay_invis::UnitarityConstraint(const Eigen::VectorXf &v){
     const float Ue4sq = maybe_convert_log("Ue4^2", v(param_name_to_index.at("Ue4^2")));
     const float Um4sq = maybe_convert_log("Um4^2", v(param_name_to_index.at("Um4^2")));
     const float g2 = maybe_convert_log("g2", v(param_name_to_index.at("g2")));
-    return   ((Ue4sq+Um4sq)<1 && g2>0 ? 1 : 0);
+    return   ((Ue4sq+Um4sq)<1 && g2>=0 ? 1 : 0);
 }
 
 // Equations from Jesse Mendez, slide 5 bottom https://microboone-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=45475&filename=2025-10-31-mendez-sterile-deacy.pdf&version=1
