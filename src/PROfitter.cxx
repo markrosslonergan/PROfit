@@ -155,6 +155,7 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
 float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points, const std::vector<FixedSeed> &fixed_seeds ) {
 
     metric.setGradientMode(fitconfig.gradient_mode);
+    total_lbfgs_iterations = 0;
 
     const bool tim_on = PROfit::GetScanTimingEnabled();
     auto fit_t0 = tim_on ? std::chrono::steady_clock::now()
@@ -169,6 +170,14 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     //cube and then mapped onto the full [lb, ub] fit box.
     std::vector<std::vector<float>> latin_samples = latin_hypercube_sampling(fitconfig.n_latin_points, ub.size(), d_uni,rng);
     recenter_latin_samples(latin_samples, ub, lb);
+    const Eigen::Index n_phys_dims = (Eigen::Index)metric.GetModel().nparams;
+    if(fitconfig.latin_phys_only){
+        // Physics-only LHS: nuisance parameters at nominal (0, clamped into the box)
+        // so the LHS chi2 ranks oscillation basins rather than random nuisance pulls.
+        for(auto &pt : latin_samples)
+            for(Eigen::Index i = n_phys_dims; i < (Eigen::Index)pt.size(); ++i)
+                pt[i] = std::min(std::max(0.0f, lb(i)), ub(i));
+    }
     if(seed_points.size()>0 && seed_points.front().size()>0){
         log<LOG_INFO>(L"%1% || Seed point passed in. Being included.") % __func__  ;
         for(auto & pt: seed_points){
@@ -272,6 +281,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
             niter = solver.minimize(metric, x, fx, lb, ub);
+            total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
             chi2s_localfits.push_back(fx);
 
@@ -339,6 +349,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
                     niter = solver.minimize(metric, x, fx, lb, ub);
+                    total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                     chi2s_localfits.push_back(fx);
 
@@ -431,6 +442,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 log<LOG_INFO>(L"%1% || Starting fixed-seed local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
                 niter = solver.minimize(metric, x, fx, flb, fub);
+                total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                 chi2s_localfits.push_back(fx);
 
@@ -467,6 +479,10 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
         //After the best best fit, do you want to do more of the latin ones?
         x = Eigen::Map<Eigen::VectorXf>(latin_samples[best_multistart[i+1]].data(), latin_samples[best_multistart[i+1]].size());
+        if(fitconfig.localfit_warm_nuisance && std::isfinite(chimin) && best_fit.size() == x.size() && x.size() > n_phys_dims){
+            // Physics from the latin point, nuisances from the best fit so far.
+            x.tail(x.size() - n_phys_dims) = best_fit.tail(x.size() - n_phys_dims);
+        }
         log<LOG_INFO>(L"%1% || Starting n_localfit local fit number %2%/%3% ") % __func__ % i  % fitconfig.n_localfit;
 
         if(run_progress)progress->increment_bar(2);
@@ -476,6 +492,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
                 niter = solver.minimize(metric, x, fx, lb, ub);
+                total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                 chi2s_localfits.push_back(fx);
 
@@ -632,10 +649,9 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
                 fit_ub(i) = metric.GetSysts().spline_has_restrict[si] ? metric.GetSysts().spline_restrict_hi[si] : metric.GetSysts().spline_hi[si];
             }
         }
-        // Scan fits start near-converged (continuation warm starts), where
-        // the linearised Gauss-Newton gradient is exact and several times
-        // cheaper than the full-FD modes.
-        metric.setGradientMode(PROmetric::GradientCentralLin);
+        // Scan fits use the configured gradient mode (default analytic — exact
+        // and the cheapest mode; the FD fallback applies where it is not implemented).
+        metric.setGradientMode(fitconfig.gradient_mode);
     }
 
     Eigen::VectorXf grad = Eigen::VectorXf::Constant(best_fit.size(), 0);

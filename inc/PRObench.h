@@ -30,6 +30,7 @@
 #define PROBENCH_H
 
 #include "PROconfig.h"
+#include "PROdata.h"
 #include "PROmetric.h"
 #include "PROpeller.h"
 #include "PROfitter.h"
@@ -67,11 +68,14 @@ namespace PRObench {
         Bench_MetricGrad_Nuis  = 1u << 11, ///< (l) PROmetric() chi² + finite-diff gradient, vary nuis only.
         Bench_MCMC_Burnin      = 1u << 12, ///< (m) Metropolis::step() during burnin (tune_mode=true; proposal Cholesky rebuilt every step + tune()).
         Bench_MCMC_Post        = 1u << 13, ///< (n) Metropolis::step() post-burnin (tune_mode=false; cached proposal Cholesky, no tune()).
+        Bench_GradCheck        = 1u << 14, ///< (o) Gradient cross-validation: every mode (incl. analytic) vs the central-full FD reference at random points. [GRADCHECK] lines.
+        Bench_GradModeFit      = 1u << 15, ///< (p) Repeated full PROfitter::Fit per gradient mode with matched seeds; logs wall time, LBFGS iterations, metric calls, best chi². [GRADBENCH] lines.
         Bench_FillSpectra_Group = Bench_FillSpectra_All | Bench_FillSpectra_Phys | Bench_FillSpectra_Nuis,
         Bench_Metric_Group      = Bench_Metric_All       | Bench_Metric_Phys       | Bench_Metric_Nuis,
         Bench_MetricGrad_Group  = Bench_MetricGrad_All   | Bench_MetricGrad_Phys   | Bench_MetricGrad_Nuis,
         Bench_Fit_Group         = Bench_Fit,
         Bench_MCMC_Group        = Bench_MCMC_Burnin      | Bench_MCMC_Post,
+        Bench_Grad_Group        = Bench_GradCheck        | Bench_GradModeFit,  ///< NOT in Bench_All: opt-in via --tests gradcheck/gradmodes/grad.
         Bench_All               = Bench_FillSpectra_Group | Bench_Metric_Group | Bench_MetricGrad_Group | Bench_Fit_Group | Bench_PseudoUniverse | Bench_Collapse | Bench_MCMC_Group,
     };
 
@@ -83,6 +87,28 @@ namespace PRObench {
         unsigned tests    = Bench_All;     ///< Bitmask of benchmarks to run.
         uint32_t rng_seed = 0xBEEFCAFE;    ///< Fixed seed for reproducibility.
         bool     binned   = true;          ///< FillSpectra binned vs event-by-event.
+        int      nthreads = 1;             ///< Worker threads for the (p) gradmodes fit benchmark (universes fitted in parallel).
+        /// Injected fake-data parameter vector (physics + splines) the chain built its
+        /// data spectrum from; used by the (p) benchmark to report truth for
+        /// parameter-recovery plots ([GRADBENCH-TRUTH] line). May be empty.
+        Eigen::VectorXf truth_params;
+        /// Output CSV for the (p) benchmark's per-fit records. PROlog suppresses
+        /// repeated-format lines after ~1000 emissions, so per-fit data goes to a
+        /// file; only the per-cell [GRADBENCH-SUMMARY] lines are logged.
+        std::string grad_csv = "gradbench_fits.csv";
+        /// Comma-separated preset names restricting the (p) benchmark's grid
+        /// (e.g. "grad-fast,grad-good"). Empty = run every preset. Universes and
+        /// per-universe fitter seeds depend only on rng_seed, so a filtered run's
+        /// CSV rows can be concatenated with an earlier full run's.
+        std::string grad_presets;
+        /// (p) benchmark: generate universes as FC-style pseudo-experiments
+        /// (thrown spline pulls + Cholesky covariance shift + Poisson) instead
+        /// of Poisson-only fluctuations of the base data spectrum.
+        bool throw_systs = false;
+        /// (p) benchmark: draw each universe's truth physics point uniformly
+        /// within the fit bounds; per-universe truth columns are added to the
+        /// CSV for parameter-recovery plots.
+        bool throw_phys = false;
     };
 
     /**
@@ -117,6 +143,7 @@ namespace PRObench {
         const PROconfig &config,
         const PROpeller &prop,
         PROmetric &metric,
+        const PROdata &data,
         const PROfitterConfig &fitconfig,
         const BenchOptions &opts);
 

@@ -191,10 +191,15 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
 
     if(rungradient){
         // ----- Gradient mode dispatch -----
-        // Four configurations driven by PROmetric::gradient_mode:
-        //   GradientCentralFull  (default): central FD on full chi² (each FD
+        // Five configurations driven by PROmetric::gradient_mode:
+        //   GradientAnalytic     (default): fully analytic — dδ/dθ from
+        //                          FillSpectraGradient plus the closed-form
+        //                          uᵀ(dM/dθ)u term. See the analytic block
+        //                          below for the derivation and its two
+        //                          validity requirements.
+        //   GradientCentralFull:   central FD on full chi² (each FD
         //                          rebuilds covariance + Cholesky). Most
-        //                          accurate, slowest.
+        //                          accurate FD mode, slowest.
         //   GradientOneSidedFull: forward FD on full chi² using base value.
         //                         ~2× faster, O(h) vs O(h²).
         //   GradientCentralLin:   central FD on δ only. M held at base; the
@@ -204,14 +209,30 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         //                         (M⁻¹δ)^T (dM/dθ) (M⁻¹δ) term — exact at the
         //                         minimum, very small far from it.
         //   GradientOneSidedLin:  forward FD on δ only + Gauss-Newton chain.
-        //                         Fastest mode.
+        //                         Fastest FD mode.
         //
         // Boundary handling is preserved across all modes: any FD step that
         // would land on a parameter bound is downgraded to a one-sided
         // stencil pointing into the interior, and the "out-of-bounds gradient
         // bounce" is applied (zero the gradient when it would push further
         // out of the box).
-        const GradientMode mode = gradient_mode;
+        GradientMode mode = gradient_mode;
+        // The analytic gradient requires (a) the binned factorised spectrum
+        // (spec = systw .* H*probs) for FillSpectraGradient — the event-by-event
+        // fill mixes physics and systematics per event — and (b) a statistical
+        // covariance that does not move with the parameters, since the closed-form
+        // dM/dθ term below only differentiates the systematic part of M. Metrics
+        // whose statisticalVariances depend on the prediction (PROpearson, PROCNP)
+        // would need an extra diag(dvar/dθ) term that is not wired up yet, so they
+        // fall back to the Gauss-Newton FD mode (exact at the minimum).
+        if (mode == GradientAnalytic &&
+            (strat == EventByEvent || statisticalVariancesDependOnPrediction())) {
+            static std::atomic<bool> warned_fallback{false};
+            if(!warned_fallback.exchange(true))
+                log<LOG_WARNING>(L"%1% || Analytic gradient not available for this metric/strategy (EventByEvent, or prediction-dependent statistical variance); falling back to %2%.") % __func__ % gradientModeName(GradientFallback);
+            mode = GradientFallback;
+        }
+        const bool analytic   = (mode == GradientAnalytic);
         const bool linearised = (mode == GradientCentralLin) || (mode == GradientOneSidedLin);
         const bool one_sided  = (mode == GradientOneSidedFull) || (mode == GradientOneSidedLin);
 
@@ -222,7 +243,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         // prior_covariance_inv (correlated) — no FD on the pull.
         Eigen::VectorXf Minv_delta_b;
         Eigen::VectorXf pull_grad_nuis; // size = nsyst, dP/dθ_n
-        if (linearised) {
+        if (linearised || analytic) {
             Minv_delta_b = M.llt().solve(delta);
             const Eigen::VectorXf centered = subvector2 - syst->spline_centers;
             if (!correlated_systematics) {
@@ -232,6 +253,102 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             } else {
                 pull_grad_nuis = 2.0f * (prior_covariance_inv * centered);
             }
+        }
+
+        if (analytic) {
+            // ----- Fully analytic gradient -----
+            // Notation (θ = all parameters, physics + nuisance):
+            //   s(θ)  full-binning MC spectrum (result.Spec(), N bins)
+            //   T     collapsing matrix (N × n_c, sparse): collapsed spectrum c = Tᵀ s
+            //   d     comparison spectrum (collapsed), idx = usable active bins.
+            //         In shape_only mode d is the area-normalised data held FIXED at
+            //         the base point — the same frozen-normdata convention every FD
+            //         mode below uses (see compute_delta_at) — so d is θ-independent
+            //         here in all modes.
+            //   δ(θ)  = c(idx) − d(idx)                                  (reduced residual)
+            //   F     fractional systematic covariance (N × N, symmetric)
+            //   M(θ)  = diag(var(idx)) + [Tᵀ diag(s) F diag(s) T](idx,idx) (stat + syst)
+            //         with var θ-independent (guaranteed by the dispatch gate above:
+            //         prediction-dependent variances fall back to FD).
+            //   P(θ)  nuisance pull penalty
+            //   χ²(θ) = δᵀ M⁻¹ δ + P
+            //
+            // Step 1 — differentiate χ² = δᵀ M⁻¹ δ + P term by term (product rule;
+            // both δ and M depend on θ). Since M is symmetric the two residual
+            // terms are equal, and d(M⁻¹)/dθ = −M⁻¹ (dM/dθ) M⁻¹:
+            //   dχ²/dθ = (dδ/dθ)ᵀ M⁻¹ δ + δᵀ M⁻¹ (dδ/dθ) + δᵀ [d(M⁻¹)/dθ] δ + dP/dθ
+            //          = 2 δᵀ M⁻¹ (dδ/dθ) − δᵀ M⁻¹ (dM/dθ) M⁻¹ δ + dP/dθ.
+            // Writing u = M⁻¹ δ (one Cholesky solve, shared by both terms):
+            //   dχ²/dθ = 2 uᵀ (dδ/dθ) − uᵀ (dM/dθ) u + dP/dθ.
+            //
+            // Step 2 — residual term. δ depends on θ only through s, so with the
+            // spectrum Jacobian G = ds/dθ (N × nparams, from FillSpectraGradient):
+            //   dδ/dθ = (Tᵀ G)(idx, :)     ⇒     2 uᵀ (dδ/dθ) = 2 (TᵀG)(idx,:)ᵀ u.
+            //
+            // Step 3 — covariance term uᵀ (dM/dθ) u (this is the term the linearised
+            // FD modes drop). Work one parameter θ_j at a time, and write ṡ = ds/dθ_j
+            // (= G(:,j), a full-binning vector). The stat part diag(var) does not depend
+            // on θ, so only M_sys = [Tᵀ diag(s) F diag(s) T](idx,idx) contributes;
+            // the product rule on diag(s) F diag(s) gives
+            //   dM_sys/dθ_j = [Tᵀ ( diag(ṡ) F diag(s) + diag(s) F diag(ṡ) ) T](idx,idx).
+            //
+            // 3a. Undo the (idx,idx) restriction. u lives on the idx bins only; define
+            //     u_c ∈ R^{n_c} as u placed at its idx positions and 0 elsewhere. Then
+            //     for any n_c × n_c matrix A,  uᵀ A(idx,idx) u = u_cᵀ A u_c  (the zeros
+            //     kill every row/column outside idx), so
+            //       uᵀ (dM/dθ_j) u = u_cᵀ Tᵀ ( diag(ṡ) F diag(s) + diag(s) F diag(ṡ) ) T u_c.
+            //
+            // 3b. Undo the collapse. Define w = T u_c ∈ R^N: since T maps each full
+            //     bin to exactly one collapsed bin, w is just u_c broadcast — every
+            //     full bin carries the u value of the collapsed bin it belongs to. So
+            //       uᵀ (dM/dθ_j) u = wᵀ diag(ṡ) F diag(s) w + wᵀ diag(s) F diag(ṡ) w.
+            //
+            // 3c. The two summands are transposes of each other (F is symmetric), and
+            //     each is a scalar, so they are equal:
+            //       uᵀ (dM/dθ_j) u = 2 wᵀ diag(ṡ) F diag(s) w.
+            //
+            // 3d. Read this as elementwise products of N-vectors (∘ = Hadamard):
+            //     diag(s) w = w ∘ s, and diag(ṡ) w = w ∘ ṡ, hence
+            //       2 wᵀ diag(ṡ) F diag(s) w = 2 (w ∘ ṡ) · [F (w ∘ s)] = 2 ṡ · ( w ∘ g ),
+            //     with g = F (w ∘ s) ∈ R^N (one matrix-vector product with F).
+            //     Note g depends on s, u and F but NOT on which parameter θ_j we are
+            //     differentiating with respect to — so it is computed once per gradient
+            //     call, and the per-parameter cost is one dot product G(:,j)·(w ∘ g).
+            //
+            // Putting it together, for each parameter j:
+            //   dχ²/dθ_j = 2 (TᵀG)(idx,j)·u − 2 G(:,j)·(w ∘ g) + dP/dθ_j,
+            // i.e. grad = 2 (TᵀG)(idx,:)ᵀ u − 2 Gᵀ (w∘g) + [0; dP/dθ_nuis]. No finite
+            // differences, no extra spectrum fills, no extra Cholesky factorisation.
+            const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+            Eigen::VectorXf u_c = Eigen::VectorXf::Zero(T.cols());
+            for(size_t k = 0; k < reduced_size; ++k)
+                u_c(non_empty_indices[k]) = Minv_delta_b(k);
+            const Eigen::VectorXf w_full = T * u_c;
+            const Eigen::VectorXf g_full = syst->fractional_covariance * w_full.cwiseProduct(result.Spec());
+            const Eigen::VectorXf wg = w_full.cwiseProduct(g_full);
+
+            Eigen::MatrixXf G = FillSpectraGradient(config, peller, *syst, model, param, fs_cache, config.i_prime);
+            Eigen::MatrixXf TtG = T.transpose() * G; // collapsed-space Jacobian (ncollapsed × nparams)
+            Eigen::VectorXf grad_vec = 2.0f * (TtG(idx, Eigen::all).transpose() * Minv_delta_b)
+                                     - 2.0f * (G.transpose() * wg);
+            grad_vec.segment(model.nparams, nsyst) += pull_grad_nuis;
+
+            for (size_t i = 0; i < model.nparams + nsyst; i++) {
+                if(is_fixed.size() > 0 && is_fixed.at(i)) { gradient(i) = 0.0f; continue; }
+                gradient(i) = grad_vec(i);
+                // Same boundary "bounce" as the FD paths: zero the gradient when
+                // it would push further out of the box.
+                const float boundary_tol = 2.0f * std::numeric_limits<float>::epsilon();
+                const bool at_lower = std::fabs(param(i) - lb(i)) < boundary_tol;
+                const bool at_upper = std::fabs(ub(i) - param(i)) < boundary_tol;
+                if ((at_lower && gradient(i) > 0) || (at_upper && gradient(i) < 0))
+                    gradient(i) = 0.0f;
+                if (!std::isfinite(gradient(i))) gradient(i) = 0.0f;
+            }
+
+            last_param = param;
+            last_value = value;
+            return value;
         }
 
         // ----- Helpers (closures over the outer scope) -----

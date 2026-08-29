@@ -179,6 +179,49 @@ Eigen::MatrixXf PRO3p1::get_probs(const Eigen::VectorXf &phys, const std::vector
     return probs;
 }
 
+std::vector<Eigen::MatrixXf> PRO3p1::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Model (x = k · Δm² · L/E, Ue = |Ue4|², Um = |Um4|²; columns 1..3):
+    //   P_mumu = 1 − 4 Um (1 − Um) sin²x
+    //   P_mue  =     4 Ue Um       sin²x
+    //   P_ee   = 1 − 4 Ue (1 − Ue) sin²x
+    // Derivatives w.r.t. the physical parameters (then × chain factors ddm, dUe, dUm):
+    //   ∂/∂Δm²: each probability's sin²x coefficient × d(sin²x)/dΔm² = sin(2x)·k·L/E
+    //   ∂P_mumu/∂Um = −4 (1 − 2 Um) sin²x          (d[Um(1−Um)]/dUm = 1 − 2Um)
+    //   ∂P_mue/∂Ue  =  4 Um sin²x,   ∂P_mue/∂Um = 4 Ue sin²x
+    //   ∂P_ee/∂Ue   = −4 (1 − 2 Ue) sin²x
+    const auto &le_arr = var_arrs[0];
+    float dmsq  = maybe_convert_log("dmsq",  phys(0));
+    float Ue4sq = maybe_convert_log("Ue4^2", phys(1));
+    float Um4sq = maybe_convert_log("Um4^2", phys(2));
+
+    // Chain factors d(linear)/d(internal); all three params are log10 by default.
+    constexpr float LN10 = 2.302585093f;
+    float ddm = is_log10[0] ? LN10 * dmsq  : 1.0f;
+    float dUe = is_log10[1] ? LN10 * Ue4sq : 1.0f;
+    float dUm = is_log10[2] ? LN10 * Um4sq : 1.0f;
+
+    constexpr float k = 1.266932679f;
+    std::vector<Eigen::MatrixXf> grads(3, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float x = k * dmsq * le_arr[i];
+        float sinterm = std::sin(x);
+        float s2 = sinterm * sinterm;
+        float dsin2_ddm = std::sin(2.0f*x) * k * le_arr[i] * ddm;  // d(sin^2 x)/d(internal dmsq)
+
+        // col 1: P_mumu = 1 - 4 Um(1-Um) sin^2
+        grads[0](i, 1) = -4.0f * Um4sq * (1.0f - Um4sq) * dsin2_ddm;   // ∂/∂θ(Δm²)
+        grads[2](i, 1) = -4.0f * (1.0f - 2.0f*Um4sq) * s2 * dUm;       // ∂/∂θ(Um)
+        // col 2: P_mue = 4 Ue Um sin^2
+        grads[0](i, 2) =  4.0f * Ue4sq * Um4sq * dsin2_ddm;            // ∂/∂θ(Δm²)
+        grads[1](i, 2) =  4.0f * Um4sq * s2 * dUe;                     // ∂/∂θ(Ue)
+        grads[2](i, 2) =  4.0f * Ue4sq * s2 * dUm;                     // ∂/∂θ(Um)
+        // col 3: P_ee = 1 - 4 Ue(1-Ue) sin^2
+        grads[0](i, 3) = -4.0f * Ue4sq * (1.0f - Ue4sq) * dsin2_ddm;   // ∂/∂θ(Δm²)
+        grads[1](i, 3) = -4.0f * (1.0f - 2.0f*Ue4sq) * s2 * dUe;       // ∂/∂θ(Ue)
+    }
+    return grads;
+}
+
 // ------------------------------------------------------------------
 // PRO3p1_angles
 // ------------------------------------------------------------------
@@ -309,6 +352,56 @@ Eigen::MatrixXf PRO3p1_angles::get_probs(const Eigen::VectorXf &phys, const std:
     }
 
     return probs;
+}
+
+std::vector<Eigen::MatrixXf> PRO3p1_angles::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Parameters: Δm², s214 = sin²2θ₁₄, s24 = sin²θ₂₄. With
+    //   c14 = cos²θ₁₄ = (1 + √(1 − s214)) / 2     ⇒  dc14/ds214 = −1 / (4 √(1 − s214))
+    //   A   = c14 · s24  (= |Um4|²)                ⇒  ∂A/∂s214 = s24 · dc14/ds214,  ∂A/∂s24 = c14
+    // the probabilities are (x = k · Δm² · L/E)
+    //   P_mumu = 1 − 4 A (1 − A) sin²x   ⇒  ∂P_mumu/∂A = −4 (1 − 2A) sin²x, chained through ∂A/∂s214, ∂A/∂s24
+    //   (the factor 4 is explicit here because sin²2θ_μμ = 4A(1−A) is not itself a parameter)
+    //   P_mue  = s214 · s24 · sin²x
+    //   P_ee   = 1 − s214 · sin²x
+    // Δm² enters only through sin²x: d(sin²x)/dΔm² = sin(2x) · k · L/E.
+    const auto &le_arr = var_arrs[0];
+    float dmsq = maybe_convert_log("dmsq", phys(0));
+    float s214 = maybe_convert_log("sinsq2th14", phys(1));
+    float s24  = maybe_convert_log("sinsqth24", phys(2));
+    float root = std::sqrt(std::max(0.0f, 1.0f - s214));
+    float c14  = (1.0f + root) / 2.0f;
+
+    // Chain factors d(linear)/d(internal) for log10 parameters.
+    constexpr float LN10 = 2.302585093f;
+    float ddm   = is_log10[0] ? LN10 * dmsq : 1.0f;
+    float ds214 = is_log10[1] ? LN10 * s214 : 1.0f;
+    float ds24  = is_log10[2] ? LN10 * s24  : 1.0f;
+    // A = c14 * s24 (the |Um4|^2 of Pmumu); dc14/ds214 = -1/(4 root).
+    float A = c14 * s24;
+    float dA_ds214 = (root > 0.0f ? -s24 / (4.0f * root) : 0.0f) * ds214;
+    float dA_ds24  = c14 * ds24;
+
+    constexpr float k = 1.266932679f;
+    std::vector<Eigen::MatrixXf> grads(3, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float x = k * dmsq * le_arr[i];
+        float sinterm = std::sin(x);
+        float s2 = sinterm * sinterm;
+        float dsin2_ddm = std::sin(2.0f*x) * k * le_arr[i] * ddm;
+
+        // col 1: P_mumu = 1 - 4 A(1-A) sin^2
+        grads[0](i, 1) = -4.0f * A * (1.0f - A) * dsin2_ddm;
+        grads[1](i, 1) = -4.0f * (1.0f - 2.0f*A) * s2 * dA_ds214;
+        grads[2](i, 1) = -4.0f * (1.0f - 2.0f*A) * s2 * dA_ds24;
+        // col 2: P_mue = s214 s24 sin^2
+        grads[0](i, 2) = s214 * s24 * dsin2_ddm;
+        grads[1](i, 2) = s24 * s2 * ds214;
+        grads[2](i, 2) = s214 * s2 * ds24;
+        // col 3: P_ee = 1 - s214 sin^2
+        grads[0](i, 3) = -s214 * dsin2_ddm;
+        grads[1](i, 3) = -s2 * ds214;
+    }
+    return grads;
 }
 
 // ------------------------------------------------------------------
@@ -449,6 +542,51 @@ Eigen::MatrixXf PRO3p1_3A::get_probs(const Eigen::VectorXf &phys, const std::vec
     }
 
     return probs;
+}
+
+std::vector<Eigen::MatrixXf> PRO3p1_3A::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Parameters: Δm², see = sin²2θ_ee, s24 = sin²θ₂₄. With
+    //   Um = |Um4|² = s24 (1 + √(1 − see)) / 2   ⇒  ∂Um/∂see = −s24 / (4 √(1 − see)),  ∂Um/∂s24 = (1 + √(1 − see)) / 2
+    // the probabilities are (x = k · Δm² · L/E)
+    //   P_mumu = 1 − 4 Um (1 − Um) sin²x   ⇒  ∂P_mumu/∂Um = −4 (1 − 2 Um) sin²x, chained through ∂Um/∂see, ∂Um/∂s24
+    //   P_mue  = s24 · see · sin²x
+    //   P_ee   = 1 − see · sin²x
+    const auto &le_arr = var_arrs[0];
+    float dmsq = maybe_convert_log("dmsq", phys(0));
+    float see  = maybe_convert_log("sinsq2thee", phys(1));
+    float s24  = maybe_convert_log("sinsqth24", phys(2));
+    float root = std::sqrt(std::max(0.0f, 1.0f - see));
+    float Um4sq = s24 / 2.0f * (1.0f + root);
+    float smue  = s24 * see;
+
+    constexpr float LN10 = 2.302585093f;
+    float ddm  = is_log10[0] ? LN10 * dmsq : 1.0f;
+    float dsee = is_log10[1] ? LN10 * see  : 1.0f;
+    float ds24 = is_log10[2] ? LN10 * s24  : 1.0f;
+    float dUm_dsee = (root > 0.0f ? -s24 / (4.0f * root) : 0.0f) * dsee;
+    float dUm_ds24 = (1.0f + root) / 2.0f * ds24;
+
+    constexpr float k = 1.266932679f;
+    std::vector<Eigen::MatrixXf> grads(3, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float x = k * dmsq * le_arr[i];
+        float sinterm = std::sin(x);
+        float s2 = sinterm * sinterm;
+        float dsin2_ddm = std::sin(2.0f*x) * k * le_arr[i] * ddm;
+
+        // col 1: P_mumu = 1 - 4 Um(1-Um) sin^2
+        grads[0](i, 1) = -4.0f * Um4sq * (1.0f - Um4sq) * dsin2_ddm;
+        grads[1](i, 1) = -4.0f * (1.0f - 2.0f*Um4sq) * s2 * dUm_dsee;
+        grads[2](i, 1) = -4.0f * (1.0f - 2.0f*Um4sq) * s2 * dUm_ds24;
+        // col 2: P_mue = s24 see sin^2
+        grads[0](i, 2) = smue * dsin2_ddm;
+        grads[1](i, 2) = s24 * s2 * dsee;
+        grads[2](i, 2) = see * s2 * ds24;
+        // col 3: P_ee = 1 - see sin^2
+        grads[0](i, 3) = -see * dsin2_ddm;
+        grads[1](i, 3) = -s2 * dsee;
+    }
+    return grads;
 }
 
 // ------------------------------------------------------------------
@@ -655,6 +793,50 @@ Eigen::MatrixXf PRO3p1_3B::get_probs(const Eigen::VectorXf &phys, const std::vec
     return probs;
 }
 
+std::vector<Eigen::MatrixXf> PRO3p1_3B::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Parameters: Δm², smm = sin²2θ_μμ, sB. With
+    //   Ue = |Ue4|² = sB (1 + √(1 − smm)) / 2   ⇒  ∂Ue/∂smm = −sB / (4 √(1 − smm)),  ∂Ue/∂sB = (1 + √(1 − smm)) / 2
+    // the probabilities are (x = k · Δm² · L/E)
+    //   P_mumu = 1 − smm · sin²x
+    //   P_mue  = sB · smm · sin²x
+    //   P_ee   = 1 − 4 Ue (1 − Ue) sin²x   ⇒  ∂P_ee/∂Ue = −4 (1 − 2 Ue) sin²x, chained through ∂Ue/∂smm, ∂Ue/∂sB
+    const auto &le_arr = var_arrs[0];
+    float dmsq = maybe_convert_log("dmsq", phys(0));
+    float smm  = maybe_convert_log("sinsq2thmumu", phys(1));
+    float sB   = maybe_convert_log("sB", phys(2));
+    float root = std::sqrt(std::max(0.0f, 1.0f - smm));
+    float Ue4sq = (sB / 2.0f) * (1.0f + root);
+
+    constexpr float LN10 = 2.302585093f;
+    float ddm  = is_log10[0] ? LN10 * dmsq : 1.0f;
+    float dsmm = is_log10[1] ? LN10 * smm  : 1.0f;
+    float dsB  = is_log10[2] ? LN10 * sB   : 1.0f;
+    float dUe_dsmm = (root > 0.0f ? -sB / (4.0f * root) : 0.0f) * dsmm;
+    float dUe_dsB  = (1.0f + root) / 2.0f * dsB;
+
+    constexpr float k = 1.266932679f;
+    std::vector<Eigen::MatrixXf> grads(3, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float x = k * dmsq * le_arr[i];
+        float sinterm = std::sin(x);
+        float s2 = sinterm * sinterm;
+        float dsin2_ddm = std::sin(2.0f*x) * k * le_arr[i] * ddm;
+
+        // col 1: P_mumu = 1 - smm sin^2
+        grads[0](i, 1) = -smm * dsin2_ddm;
+        grads[1](i, 1) = -s2 * dsmm;
+        // col 2: P_mue = sB smm sin^2
+        grads[0](i, 2) = sB * smm * dsin2_ddm;
+        grads[1](i, 2) = sB * s2 * dsmm;
+        grads[2](i, 2) = smm * s2 * dsB;
+        // col 3: P_ee = 1 - 4 Ue(1-Ue) sin^2
+        grads[0](i, 3) = -4.0f * Ue4sq * (1.0f - Ue4sq) * dsin2_ddm;
+        grads[1](i, 3) = -4.0f * (1.0f - 2.0f*Ue4sq) * s2 * dUe_dsmm;
+        grads[2](i, 3) = -4.0f * (1.0f - 2.0f*Ue4sq) * s2 * dUe_dsB;
+    }
+    return grads;
+}
+
 // ------------------------------------------------------------------
 // PRO3p1_3C
 // ------------------------------------------------------------------
@@ -801,6 +983,56 @@ Eigen::MatrixXf PRO3p1_3C::get_probs(const Eigen::VectorXf &phys, const std::vec
     }
 
     return probs;
+}
+
+std::vector<Eigen::MatrixXf> PRO3p1_3C::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Parameters: Δm², smue = sin²2θ_μe (log10), ξ (linear). With
+    //   Um = |Um4|² = e^{−ξ} √smue / 2,   Ue = |Ue4|² = e^{+ξ} √smue / 2
+    //   ∂Um/∂ξ = −Um,  ∂Ue/∂ξ = +Ue
+    //   ∂Um/∂smue = e^{−ξ} · d√smue/dsmue / 2  (and likewise for Ue); for the log10
+    //   parameter d√smue/dθ = ln10 · √smue / 2, which stays finite as smue → 0
+    // the probabilities are (x = k · Δm² · L/E)
+    //   P_mumu = 1 − 4 Um (1 − Um) sin²x   ⇒  ∂P_mumu/∂Um = −4 (1 − 2 Um) sin²x
+    //   P_mue  = smue · sin²x
+    //   P_ee   = 1 − 4 Ue (1 − Ue) sin²x   ⇒  ∂P_ee/∂Ue   = −4 (1 − 2 Ue) sin²x
+    const auto &le_arr = var_arrs[0];
+    float dmsq = maybe_convert_log("dmsq", phys(0));
+    float smue = maybe_convert_log("sinsq2thmue", phys(1));
+    float xi   = maybe_convert_log("xi", phys(2));
+    float sqrtsin = std::sqrt(std::max(0.0f, smue));
+    float Um4sq = std::exp(-xi) * sqrtsin / 2.0f;
+    float Ue4sq = std::exp( xi) * sqrtsin / 2.0f;
+
+    constexpr float LN10 = 2.302585093f;
+    float ddm   = is_log10[0] ? LN10 * dmsq : 1.0f;
+    float dsmue = is_log10[1] ? LN10 * smue : 1.0f;
+    float dxi   = is_log10[2] ? LN10 * xi   : 1.0f;
+    // d sqrt(smue) / d(internal smue): for log10 params LN10*sqrt/2 (finite at 0).
+    float dsqrt = is_log10[1] ? LN10 * sqrtsin / 2.0f : (sqrtsin > 0.0f ? 1.0f / (2.0f * sqrtsin) : 0.0f);
+    float dUm_dsmue = std::exp(-xi) * dsqrt / 2.0f, dUm_dxi = -Um4sq * dxi;
+    float dUe_dsmue = std::exp( xi) * dsqrt / 2.0f, dUe_dxi =  Ue4sq * dxi;
+
+    constexpr float k = 1.266932679f;
+    std::vector<Eigen::MatrixXf> grads(3, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float x = k * dmsq * le_arr[i];
+        float sinterm = std::sin(x);
+        float s2 = sinterm * sinterm;
+        float dsin2_ddm = std::sin(2.0f*x) * k * le_arr[i] * ddm;
+
+        // col 1: P_mumu = 1 - 4 Um(1-Um) sin^2
+        grads[0](i, 1) = -4.0f * Um4sq * (1.0f - Um4sq) * dsin2_ddm;
+        grads[1](i, 1) = -4.0f * (1.0f - 2.0f*Um4sq) * s2 * dUm_dsmue;
+        grads[2](i, 1) = -4.0f * (1.0f - 2.0f*Um4sq) * s2 * dUm_dxi;
+        // col 2: P_mue = smue sin^2
+        grads[0](i, 2) = smue * dsin2_ddm;
+        grads[1](i, 2) = s2 * dsmue;
+        // col 3: P_ee = 1 - 4 Ue(1-Ue) sin^2
+        grads[0](i, 3) = -4.0f * Ue4sq * (1.0f - Ue4sq) * dsin2_ddm;
+        grads[1](i, 3) = -4.0f * (1.0f - 2.0f*Ue4sq) * s2 * dUe_dsmue;
+        grads[2](i, 3) = -4.0f * (1.0f - 2.0f*Ue4sq) * s2 * dUe_dxi;
+    }
+    return grads;
 }
 
 // ------------------------------------------------------------------
@@ -1021,6 +1253,66 @@ Eigen::MatrixXf PRO3p1_decay_invis::get_probs(const Eigen::VectorXf &phys, const
     }
 
     return probs;
+}
+
+std::vector<Eigen::MatrixXf> PRO3p1_decay_invis::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Parameters: Δm², Ue = |Ue4|², Um = |Um4|², g² (linear). With
+    //   δ = k · Δm² · L/E,   c = cos 2δ,   e = exp(−g² δ / 8π),   osc = 1 − 2 e c + e²
+    // the probabilities (see the derivation above Pmue) are
+    //   P_aa  = 1 − 2 Ua (1 − e c) + Ua² · osc        (a = μ for col 1, e for col 3)
+    //   P_mue = Ue · Um · osc
+    // Everything except the mixings depends on θ only through δ and g²:
+    //   ∂e/∂δ = −(g²/8π) e,   ∂c/∂δ = −2 sin 2δ,   ∂(ec)/∂δ = e' c + e c',   ∂osc/∂δ = −2 ∂(ec)/∂δ + 2 e e'
+    //   ∂e/∂g² = −(δ/8π) e,   ∂(ec)/∂g² = c ∂e/∂g²,                          ∂osc/∂g² = −2 ∂(ec)/∂g² + 2 e ∂e/∂g²
+    //   ∂δ/∂Δm² = k · L/E
+    // and for the mixings  ∂P_aa/∂Ua = −2 (1 − e c) + 2 Ua · osc,  ∂P_mue/∂Ue = Um · osc,  ∂P_mue/∂Um = Ue · osc.
+    const auto &le_arr = var_arrs[0];
+    float dmsq  = maybe_convert_log("dmsq", phys(0));
+    float Ue4sq = maybe_convert_log("Ue4^2", phys(1));
+    float Um4sq = maybe_convert_log("Um4^2", phys(2));
+    float g2    = maybe_convert_log("g2", phys(3));
+
+    constexpr float LN10 = 2.302585093f;
+    float ddm = is_log10[0] ? LN10 * dmsq  : 1.0f;
+    float dUe = is_log10[1] ? LN10 * Ue4sq : 1.0f;
+    float dUm = is_log10[2] ? LN10 * Um4sq : 1.0f;
+    float dg2 = is_log10[3] ? LN10 * g2    : 1.0f;
+
+    constexpr float k = 1.266932679f;
+    constexpr float inv8pi = 1.0f / (8.0f * 3.14159f);   // same constant as get_probs
+    std::vector<Eigen::MatrixXf> grads(4, Eigen::MatrixXf::Zero(le_arr.size(), model_functions.size()));
+    for(size_t i = 0; i < le_arr.size(); ++i) {
+        float delta   = k * dmsq * le_arr[i];
+        float costerm = std::cos(2.0f*delta);
+        float expterm = std::exp(-g2 * delta * inv8pi);
+        float ec      = expterm * costerm;
+        float osc     = 1.0f - 2.0f*ec + expterm*expterm;
+
+        // Derivatives of ec and osc wrt delta and g2.
+        float de_ddelta = -g2 * inv8pi * expterm;
+        float dc_ddelta = -2.0f * std::sin(2.0f*delta);
+        float dec_ddelta  = de_ddelta * costerm + expterm * dc_ddelta;
+        float dosc_ddelta = -2.0f * dec_ddelta + 2.0f * expterm * de_ddelta;
+        float de_dg2   = -delta * inv8pi * expterm;
+        float dec_dg2  = de_dg2 * costerm;
+        float dosc_dg2 = -2.0f * dec_dg2 + 2.0f * expterm * de_dg2;
+        float ddelta_ddm = k * le_arr[i] * ddm;
+
+        // col 1: P_mumu = 1 - 2 Um (1 - ec) + Um^2 osc
+        grads[0](i, 1) = (2.0f*Um4sq*dec_ddelta + Um4sq*Um4sq*dosc_ddelta) * ddelta_ddm;
+        grads[2](i, 1) = (-2.0f*(1.0f - ec) + 2.0f*Um4sq*osc) * dUm;
+        grads[3](i, 1) = (2.0f*Um4sq*dec_dg2 + Um4sq*Um4sq*dosc_dg2) * dg2;
+        // col 2: P_mue = Ue Um osc
+        grads[0](i, 2) = Ue4sq * Um4sq * dosc_ddelta * ddelta_ddm;
+        grads[1](i, 2) = Um4sq * osc * dUe;
+        grads[2](i, 2) = Ue4sq * osc * dUm;
+        grads[3](i, 2) = Ue4sq * Um4sq * dosc_dg2 * dg2;
+        // col 3: P_ee = 1 - 2 Ue (1 - ec) + Ue^2 osc
+        grads[0](i, 3) = (2.0f*Ue4sq*dec_ddelta + Ue4sq*Ue4sq*dosc_ddelta) * ddelta_ddm;
+        grads[1](i, 3) = (-2.0f*(1.0f - ec) + 2.0f*Ue4sq*osc) * dUe;
+        grads[3](i, 3) = (2.0f*Ue4sq*dec_dg2 + Ue4sq*Ue4sq*dosc_dg2) * dg2;
+    }
+    return grads;
 }
 
 }

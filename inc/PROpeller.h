@@ -310,12 +310,8 @@ namespace PROfit{
                     log<LOG_INFO>(L"%1% || Wildcard '%2%' with scaling factor %3% matches:")
                         % __func__ % detector.c_str() % value;
 
-                    std::vector<std::string> scalenames;
-                    for (const auto& name : inconfig.m_fullnames) {
-                        if (name.find(detector) != std::string::npos) {
-                            scalenames.push_back(name);
-                        }
-                    }
+                    // Unanchored regex (plain substrings behave as before); see PROconfig.h.
+                    std::vector<std::string> scalenames = MatchNames(inconfig.m_fullnames, detector, "--scale pattern");
 
                     log<LOG_INFO>(L"%1% || %2% . ") % __func__  % scalenames;
 

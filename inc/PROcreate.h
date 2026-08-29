@@ -79,7 +79,7 @@ namespace PROfit{
         std::shared_ptr<PROspec> p_cv;   ///< Shared pointer to the central-value spectrum.
         std::vector<std::shared_ptr<PROspec>> p_multi_spec; ///< Shared pointers to per-universe variation spectra.
 
-        std::vector<int> norm_bins; ///< Bin indices used for shape-normalisation (empty = normalise all bins).
+        std::vector<int> norm_bins; ///< Bin indices a "norm"/"norm_to_covariance" systematic applies to (never empty: a pattern matching no subchannel is a fatal config error).
         float norm_value = 0.0f;    ///< Normalisation target integral (used in shape-only mode; only set for "norm" systematics).
         bool force_0_cv = false;    ///< If true, normalise spline shifts by the shift at knob=0.
         std::vector<int> include_only_weights; ///< 1-based indices of weight universes to include; empty = all.
@@ -90,7 +90,7 @@ namespace PROfit{
         bool has_restrict = false;  ///< If true, clamp the knob value to [restrict_lo, restrict_hi] during evaluation and fitting.
         float restrict_lo = 0.0f;   ///< Lower clamp bound (used only when has_restrict is true).
         float restrict_hi = 0.0f;   ///< Upper clamp bound (used only when has_restrict is true).
-        std::string apply_to_subchannel; ///< Substring wildcard from XML apply_to_subchannel=; empty = systematic applies to every subchannel. Events in non-matching subchannels fill all universes at the CV weight (flat spline / zero covariance there).
+        std::string apply_to_subchannel; ///< Unanchored-regex wildcard from XML apply_to_subchannel= (plain substrings work as-is); empty = systematic applies to every subchannel. Events in non-matching subchannels fill all universes at the CV weight (flat spline / zero covariance there).
         std::vector<std::string> apply_to_subchannel_names; ///< Resolved subchannel fullnames matched by apply_to_subchannel (bookkeeping/logging).
 
         //boost serialization

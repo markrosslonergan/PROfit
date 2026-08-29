@@ -50,6 +50,8 @@ namespace PROfit {
         size_t global_channel_index = 0;
         size_t n_unmatched_channels = 0;
         bool ok = true;
+        // Unanchored regex (plain substrings behave as before); see PROconfig.h.
+        std::regex re = CompilePattern(pattern, "PROjector channel pattern");
         for(size_t im = 0; im < config.m_num_modes; ++im) {
             for(size_t id = 0; id < config.m_num_detectors; ++id) {
                 for(size_t ic = 0; ic < config.m_num_channels; ++ic, ++global_channel_index) {
@@ -57,7 +59,7 @@ namespace PROfit {
                     const size_t nsub = config.m_num_subchannels[ic];
                     for(size_t sc = 0; sc < nsub; ++sc, ++global_subchannel_index) {
                         const std::string &fullname = config.m_fullnames[global_subchannel_index];
-                        if(fullname.find(pattern) != std::string::npos) ++n_match;
+                        if(PatternMatches(fullname, re)) ++n_match;
                     }
                     if(n_match == nsub && nsub > 0) {
                         matched_channels.push_back(global_channel_index);

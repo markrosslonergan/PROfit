@@ -44,6 +44,9 @@ public:
 
     // ---------- Disappearance: νe → νe (α=e) ----------
     float Pee(const Eigen::VectorXf &v, float le) const;
+
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 }

@@ -18,7 +18,6 @@ PROpearson::PROpearson(const std::string tag, const PROconfig &conin, const PROp
     // No buildConstantStatCache() here: the Pearson variance is the prediction, so the
     // reduced statistical covariance has to be rebuilt on every evaluation. The floor in
     // statisticalVariances() does keep the *set* of bins constant.
-    gradient_mode = GradientOneSidedFull;
 }
 
 bool PROpearson::statisticalVariancesDependOnPrediction() const {

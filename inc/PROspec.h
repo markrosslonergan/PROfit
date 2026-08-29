@@ -53,9 +53,10 @@ namespace PROfit{
      * throws or MCMC sampling.  All vectors have length equal to the number of collapsed bins.
      */
     struct PROerrorbar {
-            Eigen::VectorXf error_down;   ///< Down (low) uncertainty per bin.
-            Eigen::VectorXf error_up;     ///< Up (high) uncertainty per bin.
+            Eigen::VectorXf error_down;   ///< Down (low) uncertainty per bin, measured from error_point + center_shift.
+            Eigen::VectorXf error_up;     ///< Up (high) uncertainty per bin, measured from error_point + center_shift.
             Eigen::VectorXf error_point;  ///< Central value per bin (may be scaled).
+            Eigen::VectorXf center_shift; ///< Offset of the band center from error_point (nonzero only for data-constrained bands, where the posterior prediction is pulled away from the best-fit spectrum).
             Eigen::MatrixXf covariance;   ///< Bin-to-bin covariance matrix.
             /**
              * @brief Construct a PROerrorbar with all vectors/matrices zeroed.
@@ -65,6 +66,7 @@ namespace PROfit{
                 error_down = Eigen::VectorXf::Zero(size);
                 error_up = Eigen::VectorXf::Zero(size);
                 error_point = Eigen::VectorXf::Zero(size);
+                center_shift = Eigen::VectorXf::Zero(size);
                 covariance = Eigen::MatrixXf::Zero(size, size);
             };
     };

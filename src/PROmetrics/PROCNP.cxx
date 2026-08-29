@@ -21,7 +21,6 @@ PROCNP::PROCNP(const std::string tag, const PROconfig &conin, const PROpeller &p
                     physics_param_fixed, true) {
     // No buildConstantStatCache() here: mu, and therefore the CNP variance, moves with the
     // physics parameters, so the reduced statistical covariance is rebuilt per evaluation.
-    gradient_mode = GradientOneSidedFull;
 }
 
 bool PROCNP::statisticalVariancesDependOnPrediction() const {

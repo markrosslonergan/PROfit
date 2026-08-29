@@ -50,7 +50,7 @@ static float throw_restricted_spline(const PROsyst &systs, size_t i,
 // ====================================================================
 //  Section 1a — run_throw_global_fit
 //
-//  Minimal global fit per throw, distilled from the core of do_a_fit in
+//  Minimal global fit per throw, distilled from the core of run_global_fit in
 //  bin/PROfit.cxx (lines 3323-3357). Strips out progress bar, MCMC covariance,
 //  and error-band side-effects — we only need the best-fit parameter vector
 //  to use as a warm-start seed for the AMR level-0 evaluations.
@@ -115,7 +115,7 @@ static ThrowGlobalFit run_throw_global_fit(
     float best_chi2 = fitter.Fit(*metric, seed_pt);
     Eigen::VectorXf best_fit = fitter.best_fit;
 
-    // Sweep the frequency-domain harmonic seed alternatives — same trick as do_a_fit.
+    // Sweep the frequency-domain harmonic seed alternatives — same trick as run_global_fit.
     fitter.calcFreqSeedPoints(*metric);
     for (size_t i = 0; i < fitter.freq_seed_points.size(); ++i) {
         const float c = fitter.freq_seed_values.at(i);

@@ -70,6 +70,7 @@ Appendices:
 
 * [Appendix A: regenerating every plot in this tutorial](#appendix-a-regenerating-every-plot-in-this-tutorial)
 * [Appendix B: available physics models](#appendix-b-available-physics-models-incpromodelh)
+* [Appendix C: the pre-fit and post-fit error bands, in full](#appendix-c-the-pre-fit-and-post-fit-error-bands-in-full)
 
 ---
 
@@ -129,10 +130,18 @@ subchannel has a *fullname* of the form
 ```
 
 Everywhere PROfit accepts a "pattern" (background subtraction, POT scaling,
-PROjector channel selection, flat systematics) it does **plain substring
-matching** against these fullnames — no regex. `"_ND_"` matches everything in
-the near detector; `background` matches every background subchannel in every
-channel and detector.
+PROjector channel selection, flat/norm systematics, `apply_to_subchannel=`)
+it matches it against these fullnames as an **unanchored regex**
+(`std::regex_search`, ECMAScript). A plain substring is a valid regex and
+behaves exactly as before: `"_ND_"` matches everything in the near detector;
+`background` matches every background subchannel in every channel and
+detector. Regex gives you more when you need it — `"nu_(ND|FD)_numu"`,
+`"^nu_ND_numu_signal$"` (anchored full match). Two caveats: in XML, `&` and
+`<` must be written `&amp;`/`&lt;` (standard XML escaping — all other regex
+metacharacters pass through untouched), and on the command line quote the
+pattern so the shell doesn't expand `*`, `(`, `|`, etc. A pattern that is an
+invalid regex, or that matches nothing (flat/norm/`apply_to_subchannel`), is
+a fatal, clearly-logged error.
 
 **Variables.** Each channel can carry several binnings (`<bins>` entries):
 reconstructed energy, true L/E, true energy, and so on. Exactly one of them is
@@ -200,7 +209,7 @@ Three things to keep in mind:
   dummy detector instead (e.g. `sbndnumu` + `icarusnumu`) — at the cost of
   handling the relative POT scaling yourself in the branch weights.
 * **Never put underscores inside a name.** The fullname is built by joining
-  the four levels with `_`; an underscore inside a name breaks the substring
+  the four levels with `_`; an underscore inside a name breaks the pattern
   bookkeeping.
 
 ### Channels, binnings, and subchannels
@@ -358,9 +367,10 @@ The `<allowlist>` attributes:
   uses — see section 9). `restrict` bounds a spline's allowed range.
 * `apply_to_subchannel="pattern"` — restrict a weight-based systematic
   (`spline`, `covariance`, `covariance_to_spline`, `hist1d/2d`, ...) to the
-  subchannels whose fullname contains the pattern (same plain substring
-  matching as `norm`/`flat`, e.g. `apply_to_subchannel="nu_SBND"` or
-  `"_ND_"`). Non-matching subchannels get exactly no response (flat spline
+  subchannels whose fullname matches the pattern (same unanchored-regex
+  matching as `norm`/`flat` — plain substrings work as-is, e.g.
+  `apply_to_subchannel="nu_SBND"` or `"_ND_"`, and regex like
+  `"nu_(ND|FD)"` too). Non-matching subchannels get exactly no response (flat spline
   at 1 / zero covariance block), and the systematic's weight branch is only
   required — or even looked for — in MCFiles that fill a matching
   subchannel. This is how per-detector systematics work in multi-detector
@@ -1243,7 +1253,7 @@ PROfit -x tutorial.xml -t TUT -o pj --seed 405 -n 8 \
 # → TUT_pj_PROjector_constraint.bin
 ```
 
-What happens: every subchannel matching `_ND_` (substring, and matches must
+What happens: every subchannel matching `_ND_` (unanchored regex — substrings work — and matches must
 cover **whole channels** — χ² lives in collapsed space) is selected; all
 covariance-type systematics are *promoted* to their eigenmode splines so the
 fit has explicit parameters for them (`--projector-knobs N` limits to the top
@@ -1704,6 +1714,430 @@ parameter (bounds from the parameter's `min`/`max` attributes, default 1);
 every non-floated subchannel stays fixed at 1. `model_rule` is ignored —
 events are routed by subchannel membership. Needs no L/E variable. Useful
 for sideband/template fits and cross-section-style normalization studies.
+
+---
+
+# Appendix C: the pre-fit and post-fit error bands, in full
+
+This appendix is the complete, self-contained recipe for the shaded error
+bands PROfit draws around the prediction. There are two of them, and they
+answer two different questions:
+
+* the **pre-fit band** answers *"before we look at any data, how uncertain is
+  our prediction?"* — it is a picture of the systematic priors, nothing more;
+* the **post-fit band** answers *"after the fit, how uncertain is the
+  prediction, and where does it actually sit?"* — the data has now constrained
+  both the spline nuisances *and* the covariance-encoded systematics, so this
+  band is (usually much) narrower, and its center can move.
+
+Below we work out the exact maths in the form the code computes it, name the
+function that implements each step, and state every assumption. Section C.4
+at the end *derives* the key formulas from scratch, so nothing here needs to
+be taken on faith.
+
+### C.0 Notation and shared ingredients
+
+Everything happens in the **collapsed bin space of the fitting variable**
+(`config.i_prime`) — the same space the χ² lives in, after subchannels have
+been summed into channels. Throughout, write:
+
+```
+θ = (φ, s)        the parameter vector: physics φ, then one param per spline s
+P(θ)              the collapsed predicted spectrum at θ (FillSpectra + collapse)
+θ_CV              the central-value parameters (physics at CV, splines at their centers)
+θ̂  = (φ̂, ŝ)      the global best fit
+d                 the collapsed data spectrum (Asimov, fake, or real)
+```
+
+**Covariance-type systematics** (including MC-stat) are not fit parameters:
+their summed *fractional* covariance `F` (`PROsyst::fractional_covariance`)
+is folded into the χ² analytically, as described in section 1. The band
+machinery needs two things built from `F` once, at a reference spectrum
+(`PROsyst::DecomposeFractionalCovariance`): the *absolute* covariance, and a
+"square root" of it that turns unit Gaussian random numbers into correlated
+spectrum fluctuations. Note that `F` lives in the *uncollapsed* bin space, so
+the absolute covariance is built there and collapsed afterwards:
+
+```
+Σ = collapse( diag(P_unc)·F·diag(P_unc) )   absolute covariance; P_unc is the
+                                            UNCOLLAPSED spectrum matching F's dims
+Σ = U S Uᵀ                                  (eigendecomposition)
+L = U·√S        with modes below tolerance dropped (their columns are zero)
+```
+
+so that `Σ = L·Lᵀ` (up to the dropped below-tolerance modes), and a random
+spectrum fluctuation with exactly the covariance Σ is simply `L·g` with
+`g ~ N(0, 1)` per component. `L` is n_bins × n_bins with `k ≤ n_bins`
+non-zero columns (the rank). Each non-zero column of `L` is one independent
+"mode" of correlated systematic variation — that picture matters in C.2 and
+C.4, where each mode becomes one effective parameter.
+
+One approximation to note now: `L` is **frozen at its reference spectrum**.
+Inside the χ² the covariance is rescaled by the *current* prediction at every
+single evaluation, but the band machinery builds `L` once — the
+**linear-response approximation**. The default pre-fit band references the CV
+spectrum; the post-fit band, the `--mcmc-prefit` variant, and both degenerate
+shortcuts (below) reference the best-fit spectrum, because that is the
+spectrum they are drawn around.
+
+**Spline systematics** have Gaussian priors `s_j ~ N(c_j, σ_j)` (XML
+`center=`/`prior=`, defaults 0 and 1), and are genuine fit parameters — the
+fit moves them, so their post-fit spread must come from sampling the fit's
+posterior, not from a formula.
+
+All bands are reported per bin as **16/84 percentiles** of an ensemble of
+sampled spectra — a 68% interval that keeps any real asymmetry, rather than
+forcing a symmetric ±σ — plus a full bin-to-bin covariance of the ensemble
+for anything downstream that needs correlations (2D→1D projections,
+ratio-error propagation).
+
+### C.1 The pre-fit band — sampling the prior
+
+*(Implemented in `getErrorBand` → `FillSystRandomThrow` (src/PROcess.cxx);
+the per-variable bands from `plot` and the default global pre-fit band both
+use this. `--mcmc-prefit` swaps in a prior-only Metropolis chain through the
+same machinery as C.2 with zero data — note that variant, like the post-fit
+band, references the best-fit spectrum rather than the CV.)*
+
+The idea is the simplest thing you could do: **throw every systematic from
+its prior many times, rebuild the spectrum each time, and look at the spread
+of spectra you get.** No data is involved anywhere. Concretely, for each of
+`N = 2500` throws `i`:
+
+1. **Throw every spline from its prior**: `s_j⁽ⁱ⁾ ~ N(c_j, σ_j)`,
+   independently per spline (marginals only — XML correlations enter the fit
+   through the pull term, not these throws). Physics stays at the CV.
+2. **Rebuild the spectrum through the full (nonlinear) spline response**:
+   `S⁽ⁱ⁾ = P(φ_CV, s⁽ⁱ⁾)` — each event/bin is reweighted through its response
+   spline at the thrown knob values, then collapsed. This is where the
+   nonlinearity of the spline systematics is kept honestly: a +1σ throw and a
+   −1σ throw need not have equal and opposite effects.
+3. **Add a covariance throw on top**: `S⁽ⁱ⁾ ← S⁽ⁱ⁾ + L·g⁽ⁱ⁾`, `g⁽ⁱ⁾ ~ N(0,1)`,
+   with `L` built at the CV spectrum. This single vector of Gaussian numbers,
+   pushed through `L`, fluctuates all bins together with exactly the
+   covariance Σ.
+
+The band in each bin `b` is then read off the ensemble:
+
+```
+e⁺_b = q84_b − P_b(θ_CV)        e⁻_b = P_b(θ_CV) − q16_b
+```
+
+with `q16/q84` the percentiles of the 2500 values of `S_b⁽ⁱ⁾`, quoted about
+the **CV prediction** — which is the ensemble center to first order (spline
+nonlinearity can shift the throw mean slightly off the CV; it is the same
+effect that makes e⁺ ≠ e⁻). The stored covariance is
+`(1/N)·Σᵢ (S⁽ⁱ⁾−P_CV)(S⁽ⁱ⁾−P_CV)ᵀ`.
+
+That is the whole story before data: **prior widths, centered on the CV.**
+
+### C.2 The post-fit band — sampling the posterior
+
+*(Implemented in `getMCMCErrorBand` (inc/PROplot.h), called by
+`run_global_fit` (bin/PROfit_fit.cxx) with the data spectrum; drawn by
+`plot_channels`.)*
+
+After the fit, the two kinds of systematic need different treatment, because
+the fit treated them differently. The **splines** were genuine fit
+parameters, so their post-fit spread comes from sampling the fit's posterior
+directly (Step 1). The **covariance systematics** were never fit parameters —
+the fit marginalized them analytically — so their post-fit spread has to be
+*reconstructed* from a formula (Step 2). The two mechanisms compose exactly,
+and section C.4 proves the formula used in Step 2.
+
+**Step 1 — sample the spline posterior with MCMC.** A Metropolis chain runs
+over the *free* spline parameters (physics is held at `φ̂`, as are any
+`--fix`'d splines), targeting the fit likelihood itself,
+
+```
+exp( −χ²(φ̂, s | d) / 2 )
+```
+
+with the full fit metric. Two things ride along for free because the target
+is the real χ²: the covariance-marginalized `M = stat + Σ(θ)` (where the
+covariance is rescaled by the *current* prediction at every evaluation — the
+frozen `L` of C.0 is only a band-reconstruction approximation, never a fit
+approximation), and the spline pull terms including any configured
+correlations. In plain words: the chain wanders through spline space visiting
+each point in proportion to how well it describes the data, given everything
+else the fit knew. Defaults: 25,000 burn-in + 20,000 kept steps
+(`--fit-options MCMCburn/MCMCiter`). Each kept step `i` gives a spectrum
+
+```
+S⁽ⁱ⁾ = P(φ̂, s⁽ⁱ⁾)        (collapsed; NO prior covariance throw here)
+```
+
+— note the covariance systematics contribute *nothing* yet; adding a prior
+`L·g` throw here would be wrong, because the data has constrained them.
+
+**Step 2 — reconstruct the covariance-systematic posterior per sample.**
+Here is the key fact (derived in C.4): because the covariance systematics
+shift the spectrum *linearly* and have Gaussian priors, their posterior given
+the data and a fixed spline point is **exactly Gaussian, with a mean and
+covariance you can write down**. So instead of fitting them, we compute the
+Gaussian and draw from it — once per chain step.
+
+First, restrict to the **contributing bins** `B`: bins that are active
+(`PROconfig::SetActiveBins` mask) **and** have `d_b > 0`. These are exactly
+the bins PROchi uses (its statistical term is `diag(max(d,1))` and zero-data
+bins are marginalized away), so the reconstruction is constrained by the same
+information the fit was — PROjector-masked channels, for example, cannot pull
+on anything. On those bins define:
+
+```
+C   = diag( max(d_b, 1) )                 statistical covariance, b ∈ B
+L_B = rows of L in B, zero columns dropped   (n_B × k)
+A   = 1_k + L_Bᵀ C⁻¹ L_B                  (k × k, factorized once, in double)
+```
+
+Then for every chain step `i`, with residual `u⁽ⁱ⁾ = d − S⁽ⁱ⁾` on `B`:
+
+```
+α⁽ⁱ⁾ = A⁻¹ L_Bᵀ C⁻¹ u⁽ⁱ⁾  +  δ⁽ⁱ⁾ ,      δ⁽ⁱ⁾ ~ N(0, A⁻¹)
+S⁽ⁱ⁾ ← S⁽ⁱ⁾ + L·α⁽ⁱ⁾                      (full rows: the shift touches every bin,
+                                           the constraint is informed only by B)
+```
+
+In plain words: the first term is the *best-fit pull* — how far the data
+drags each covariance mode, given where this particular spline sample left
+the prediction — and the second term is the *left-over uncertainty* of that
+pull. (Numerically, `δ` is drawn as `U⁻¹v` with `A = UᵀU` the Cholesky factor
+and `v ~ N(0,1_k)`, which has covariance exactly `A⁻¹` without ever forming a
+matrix inverse.)
+
+Pushed into spectrum space (via the identity `A⁻¹L_BᵀC⁻¹ = L_Bᵀ(C+Σ_BB)⁻¹`,
+proved in C.4), the two pieces become the familiar constraint formulas:
+
+```
+mean pull:      L·α_min = Σ[:,B] (C + Σ_BB)⁻¹ u        (the "constrained" shift)
+fluctuation:    cov( L·δ ) = Σ − Σ[:,B] (C + Σ_BB)⁻¹ Σ[B,:]   (the shrunk width)
+```
+
+— i.e. exactly the conditional-Gaussian update every "ND-constrains-FD"-style
+analysis uses, applied per posterior sample. This is provably identical
+(C.4) to promoting the covariance to eigen-knob spline parameters
+(`covariance_to_spline`) and fitting them, up to two caveats: the linear
+response of `L` (frozen at the best-fit spectrum) and the promoted knobs'
+±3σ spline range, which the analytic pull does not have.
+
+**Step 3 — extract the band.** Per bin `b`, sort the `S_b⁽ⁱ⁾` and take
+
+```
+m_b  = q50_b                          the sample median
+e⁺_b = q84_b − m_b ,   e⁻_b = m_b − q16_b
+shift_b = m_b − P_b(θ̂)               stored as center_shift
+```
+
+Why the **median** and not the best-fit spectrum? After Step 2 the sample
+cloud genuinely sits *away* from `P(θ̂)` — the data pulled it. If we quoted
+`|quantile − P(θ̂)|` instead, a thin band sitting next to the best fit would
+get folded into a fat band straddling it, which is both wrong and misleading.
+So the code measures the width about where the cloud actually is (the
+median), and records *how far the cloud moved* separately (`center_shift`).
+The stored covariance is made **central** for the same reason (second moment
+minus the mean-shift outer product), so that projected widths do not
+double-count the displacement.
+
+**Step 4 — what is drawn.** The red curve in every post-fit plot is the
+**constrained best fit**
+
+```
+P_constrained = P(θ̂) + shift
+```
+
+— the spline best fit *plus* the covariance pull — folded into the best-fit
+histogram at construction, so the main stack view, 2D maps, slices,
+projections, and all ratio panels use it consistently. The band `[m − e⁻,
+m + e⁺]` rides exactly on that curve. The payoff of this convention: an
+all-spline analysis and an all-covariance analysis of the same systematics
+produce the *same* red line and the *same* band (that is the equivalence of
+C.4 made visible); and for a spline-only fit `shift ≡ 0`, so nothing moves
+and the plots look exactly as they always did. Legends label the curve
+`Best-Fit ± 1σ (post-fit)` in the main view and `Constrained Best-Fit` on
+the ratio pages.
+
+**Degenerate shortcut.** If the chain would have zero free parameters
+(covariance-only systematics, or everything `--fix`'d), there is nothing to
+sample — the conditional Gaussian of Step 2 *is* the entire posterior — so no
+MCMC runs at all. `getCovarianceOnlyErrorBand` evaluates the two closed-form
+lines once: shift `Σ[:,B](C+Σ_BB)⁻¹u`, covariance
+`Σ − Σ[:,B](C+Σ_BB)⁻¹Σ[B,:]`, symmetric errors `√diag`, centered on
+`P(θ̂) + shift`. (Called without data it returns the prior `√diag(Σ)` band —
+the pre-fit degenerate case.)
+
+### C.3 Properties & checks
+
+Closure properties you can test:
+
+* **Shrinkage**: the covariance part of the posterior strictly shrinks —
+  `Σ_post = Σ − Σ(C+Σ)⁻¹Σ` is smaller than `Σ` as a matrix. Bin-by-bin on a
+  plot the guarantee holds at matched prediction: the pre-fit `L` is scaled
+  at the CV spectrum and the post-fit `L` at the best-fit spectrum, so if the
+  fit moved the prediction a lot in some bin, the absolute widths being
+  compared reference different event counts there. In practice (best fit ≈
+  CV) the post-fit band is narrower everywhere, and in the high-statistics
+  limit `Σ ≫ C` it approaches the pure statistical width — the data has
+  simply measured the bins.
+* **Asimov closure**: with `d = P(θ̂)` the per-sample pulls average to zero,
+  `shift → 0`, and the constrained best fit coincides with the plain best
+  fit.
+* **The pull is a shrinkage of the residual — as a vector, not per bin**:
+  the shift `Σ(C+Σ)⁻¹·u` scales each *mode* of Σ by a factor between 0 and 1
+  (large where the systematic budget dominates the statistics, small where
+  statistics dominate). Because the modes correlate bins, an individual bin
+  can legitimately be pulled *beyond* its own residual, or even against it,
+  by its correlated neighbours — seeing that in a plot is not a bug.
+* **Representation independence**: converting a `covariance` systematic to
+  `covariance_to_spline` (all modes kept) must reproduce the same band and
+  the same constrained best fit, up to MC noise, the linearity approximation,
+  and pulls beyond 3σ.
+
+Some things to note, which may not be obvious:
+
+* The constraint assumes the covariance systematics act **linearly and
+  unboundedly** on the spectrum. The same assumption their presence in the
+  χ² covariance already makes, so this is NOT the same as splines with a 3 sigma cutoff (but should be close)
+* `C = diag(max(d,1))` matches **PROchi**; for `PROCNP`/`Poisson` fits the
+  reconstruction is an approximation to the corresponding stat model.
+* PROjector-masked channels (active-bins mask, zeroed data) are excluded
+  from `B` automatically. Aka masked bins cannot pull on the systematics.
+* The post-fit band is a posterior **conditioned on the very data drawn on
+  top of it**. Agreement of data with the shrunken band is partly by
+  construction: goodness-of-fit comes from the fit χ², never from this plot.
+* For 2D fitting variables everything above happens per flattened (x,y) bin;
+  the 1D projection bands sum the shift linearly and take widths from the
+  (central) covariance summed over the projected block, while the per-slice
+  pages use the per-bin percentile widths directly.
+
+### C.4 Why this works — deriving the pull and its covariance
+
+Nothing in Step 2 of C.2 needs to be taken on faith: both formulas fall out
+of ordinary calculus on the χ², in about a page. What we can show is equivalance of pulls and covariance, aka *putting a systematic in the covariance matrix and fitting it as an
+explicit pull parameter are the **same fit**, and the pull's best-fit value
+and uncertainty can be recovered exactly even when you chose the covariance
+route.* (This is the result of G. Putnam's SBN note "How to Obtain Pull Terms
+for Systematic Uncertainties Embedded in a Covariance Matrix", written here
+in PROfit's variables. Need to upload to DocDB)
+
+**Setup.** Take the covariance systematics and make them explicit fit
+parameters for a moment. C.0 built `Σ = L·Lᵀ`, so each non-zero column of `L`
+is one independent mode of correlated variation; give each mode a knob
+`α_j`, so the prediction becomes `P(θ) + L·α`, and give each knob a unit
+Gaussian prior (that is what "the mode has size √S" already encoded into
+`L`), contributing a pull term `αᵀα`. With `C` the statistical covariance and
+`u ≡ d − P(θ)` the residual, the χ² with everything explicit is
+
+```
+χ²(θ, α) = (u − L·α)ᵀ C⁻¹ (u − L·α)  +  αᵀα  +  pulls(s)
+```
+
+In plain words: how far is the (shifted) prediction from the data in units
+of the statistical error, plus how far did we bend each systematic knob in
+units of its prior.
+
+**Step 1 — minimize over α.** Expand the first term and collect powers of α:
+
+```
+χ² = uᵀC⁻¹u  −  2αᵀ(LᵀC⁻¹u)  +  αᵀ(LᵀC⁻¹L + 1)α  +  pulls(s)
+```
+
+Setting the derivative with respect to α to zero:
+
+```
+∂χ²/∂α = −2 LᵀC⁻¹u + 2 (1 + LᵀC⁻¹L) α  =  0
+```
+
+and naming `A ≡ 1 + LᵀC⁻¹L` (the same `A` as C.2), the best-fit pull is
+
+```
+α_min = A⁻¹ LᵀC⁻¹ u
+```
+
+The second derivative is `∂²χ²/∂α∂α = 2A`, a constant — the χ² is *exactly*
+a parabola in α (this is what "linear systematic" buys you). A quadratic χ²
+means a Gaussian likelihood, and a curvature of `2A` means its covariance is
+
+```
+cov(α) = A⁻¹        (the "restricted" posterior covariance of the pulls)
+```
+
+Those are precisely the two objects Step 2 of C.2 uses: draw
+`α = α_min + δ` with `δ ~ N(0, A⁻¹)`.
+
+**Step 2 — complete the square.** Because the χ² is an exact parabola in α,
+it can be rewritten with no approximation as its minimum plus the quadratic
+around it:
+
+```
+χ²(θ, α) = χ²(θ, α_min)  +  (α − α_min)ᵀ A (α − α_min)
+```
+
+(Multiply out the right-hand side and use the stationarity condition
+`A·α_min = LᵀC⁻¹u`; every cross term cancels.) This one line *is* the whole
+theorem: for any fixed θ and data, the α-dependence of the likelihood is
+exactly the Gaussian `N(α_min, A⁻¹)` — so sampling α from that Gaussian, per
+posterior sample of θ, reproduces the full joint posterior of (θ, α). That
+is literally what the code does.
+
+**Step 3 — recover the covariance-matrix form.** What is the minimum value
+`χ²(θ, α_min)`? Substituting α_min into the expanded χ² (two of the three
+α-terms merge via stationarity):
+
+```
+χ²(θ, α_min) = uᵀC⁻¹u − uᵀC⁻¹L·A⁻¹·LᵀC⁻¹u + pulls(s)
+```
+
+Now use the Woodbury matrix identity, which states exactly that
+
+```
+(C + L·Lᵀ)⁻¹  =  C⁻¹ − C⁻¹L·A⁻¹·LᵀC⁻¹
+```
+
+(you can verify it by multiplying both sides by `C + LLᵀ`). The two terms
+collapse into one:
+
+```
+χ²(θ, α_min)  =  uᵀ (C + Σ)⁻¹ u  +  pulls(s)
+```
+
+which is PROfit's actual χ² — the one with `M = C + Σ` that the fitter
+minimizes and section 1 describes. So: **fitting the knobs explicitly and
+profiling them out gives the identical χ²(θ) as never introducing them and
+putting Σ in the covariance matrix.** (For Gaussians, profiling and
+marginalizing differ only by a θ-independent constant, so the statement holds
+either way you read it.) The two representations are the same fit; the
+covariance route just discards the record of where the knobs went — and
+Steps 1–2 above are the recipe for getting that record back.
+
+**Step 4 — the spectrum-space forms.** The band code applies the pull to the
+spectrum, so translate both objects with `Σ = LLᵀ`. First a small identity:
+
+```
+LᵀC⁻¹(C + Σ) = Lᵀ + LᵀC⁻¹LLᵀ = (1 + LᵀC⁻¹L)Lᵀ = A·Lᵀ
+      ⇒   A⁻¹LᵀC⁻¹ = Lᵀ(C + Σ)⁻¹
+```
+
+Applying it to the mean and to the covariance (`A⁻¹ = 1 − Lᵀ(C+Σ)⁻¹L`
+follows from the same line):
+
+```
+L·α_min   =  L·Lᵀ(C+Σ)⁻¹u        =  Σ (C+Σ)⁻¹ u
+cov(L·δ)  =  L·A⁻¹·Lᵀ            =  Σ − Σ (C+Σ)⁻¹ Σ
+```
+
+— the "constrained shift" and "shrunk width" quoted in C.2. In the fit
+itself only the contributing bins `B` enter, which is the same derivation
+with `L` replaced by `L_B` and the shift `L·α` still applied to every bin —
+exactly the restriction Step 2 of C.2 makes.
+
+**Reading the result.** `Σ(C+Σ)⁻¹` is a matrix "fraction" — systematics over
+(statistics + systematics). Where the systematic budget dominates, the
+fraction approaches 1 and the data pulls the prediction essentially all the
+way onto itself; where statistics dominate, it approaches 0 and the
+prediction barely moves. The posterior width `Σ − Σ(C+Σ)⁻¹Σ` is the prior
+width minus what the data pinned down — always smaller, shrinking to the
+statistical floor in the high-statistics limit. Everything the post-fit band
+does is these two lines, evaluated once per MCMC sample.
 
 ---
 

@@ -231,6 +231,103 @@ namespace PROfit {
     }
 
 
+    Eigen::MatrixXf FillSpectraGradient(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, size_t var_index) {
+        const size_t nbins_var = inconfig.m_num_variable_bins_total[var_index];
+        const size_t nsplines  = insyst.GetNSplines();
+        const size_t nphys     = inmodel.nparams;
+        Eigen::VectorXf phys   = params.segment(0, nphys);
+        Eigen::VectorXf shifts = params.segment(nphys, params.size() - nphys);
+
+        // ---- Per-spline factors f_i(k) and derivatives f'_i(k), same math as FillSpectra ----
+        Eigen::MatrixXf factors  = Eigen::MatrixXf::Ones(nbins_var, nsplines);
+        Eigen::MatrixXf dfactors = Eigen::MatrixXf::Zero(nbins_var, nsplines);
+        Eigen::VectorXf systw    = Eigen::VectorXf::Constant(nbins_var, 1);
+        for(int i = 0; i < (int)nsplines; ++i) {
+            size_t binning = insyst.spline_binnings[i];
+            if(binning == var_index) {
+                for(size_t k = 0; k < nbins_var; ++k) {
+                    factors(k, i)  = insyst.GetSplineShift(i, shifts(i), (int)k);
+                    dfactors(k, i) = insyst.GetSplineShiftDeriv(i, shifts(i), (int)k);
+                }
+            } else {
+                const size_t nbins_binning = inconfig.m_num_variable_bins_total[binning];
+                Eigen::VectorXf spline_vals(nbins_binning), spline_derivs(nbins_binning);
+                for(size_t b = 0; b < nbins_binning; ++b) {
+                    spline_vals(b)   = insyst.GetSplineShift(i, shifts(i), (int)b);
+                    spline_derivs(b) = insyst.GetSplineShiftDeriv(i, shifts(i), (int)b);
+                }
+                // The migration factor is LINEAR in the spline values, so its derivative
+                // is the same GEMV applied to the per-bin spline derivatives.
+                Eigen::VectorXf weighted  = inprop.variable_hist_storage.WeightedColSum(binning, var_index, spline_vals);
+                Eigen::VectorXf dweighted = inprop.variable_hist_storage.WeightedColSum(binning, var_index, spline_derivs);
+                auto it_us = cache.unweighted_sums.find(binning);
+                if(it_us == cache.unweighted_sums.end())
+                    it_us = cache.unweighted_sums.emplace(binning, inprop.variable_hist_storage.UnweightedColSum(binning, var_index)).first;
+                const Eigen::VectorXf &unweighted = it_us->second;
+                for(size_t k = 0; k < nbins_var; ++k) {
+                    if(unweighted(k) > 0) {
+                        factors(k, i)  = weighted(k)  / unweighted(k);
+                        dfactors(k, i) = dweighted(k) / unweighted(k);
+                    }
+                }
+            }
+            systw.array() *= factors.col(i).array();
+        }
+
+        // ---- Physics result (H * probs) and per-parameter probability derivatives ----
+        Eigen::VectorXf result;
+        std::vector<Eigen::MatrixXf> pgrads;
+        if(inmodel.is_trivial) {
+            result = inmodel.H_combined[var_index].col(0);
+        } else {
+            // Reuse (or build) the constant flat physics grid exactly as FillSpectra does.
+            if(!cache.phys_grid_valid) {
+                const size_t N_ivars = inmodel.ivars.size();
+                std::vector<size_t> ivar_sizes(N_ivars);
+                for(size_t k = 0; k < N_ivars; ++k)
+                    ivar_sizes[k] = inprop.variable_midbin[inmodel.ivars[k]].size();
+                cache.phys_grid.assign(N_ivars, std::vector<float>(inmodel.n_phys_bins));
+                for(long int flat = 0; flat < inmodel.n_phys_bins; ++flat) {
+                    long int rem = flat;
+                    for(int k = (int)N_ivars - 1; k >= 0; --k) {
+                        cache.phys_grid[k][flat] = inprop.variable_midbin[inmodel.ivars[k]][rem % ivar_sizes[k]];
+                        rem /= (long int)ivar_sizes[k];
+                    }
+                }
+                cache.phys_grid_valid = true;
+            }
+            auto probs = inmodel.get_probs(phys, cache.phys_grid);
+            Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
+            result = inmodel.H_combined[var_index] * probs_flat;
+            pgrads = inmodel.get_probs_grad(phys, cache.phys_grid);
+        }
+
+        // ---- Assemble d(spec)/d(param) columns; spec = systw .* result ----
+        Eigen::MatrixXf G = Eigen::MatrixXf::Zero(nbins_var, nphys + nsplines);
+        if(!inmodel.is_trivial) {
+            for(size_t p = 0; p < nphys; ++p) {
+                Eigen::Map<const Eigen::VectorXf> dprobs_flat(pgrads[p].data(), pgrads[p].size());
+                G.col(p) = systw.cwiseProduct(inmodel.H_combined[var_index] * dprobs_flat);
+            }
+        }
+        constexpr float kTiny = 1e-30f;
+        for(size_t i = 0; i < nsplines; ++i) {
+            for(size_t k = 0; k < nbins_var; ++k) {
+                const float f = factors(k, i);
+                float excl; // product of all OTHER splines' factors at bin k
+                if(std::abs(f) > kTiny) {
+                    excl = systw(k) / f;
+                } else {
+                    excl = 1.0f;
+                    for(size_t j = 0; j < nsplines; ++j)
+                        if(j != i) excl *= factors(k, j);
+                }
+                G(k, nphys + i) = excl * dfactors(k, i) * result(k);
+            }
+        }
+        return G;
+    }
+
     PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, bool binned, size_t var_index){
         PROspec myspectrum(inconfig.m_num_variable_bins_total[var_index]);
         Eigen::VectorXf phys   = params.segment(0, inmodel.nparams);

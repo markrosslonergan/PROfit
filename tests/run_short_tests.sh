@@ -197,6 +197,25 @@ else
     note "SKIP  t26aptzero  (no root executable for the numeric assertion)"
 fi
 
+# --- 10. regex wildcards (patterns are unanchored ECMAScript regexes) ---------
+# Plain substrings keep their old meaning (every test above covers that); here
+# a genuine regex alternation must be accepted end-to-end. NAME:percent splits
+# on the LAST colon, so regex constructs containing ':' survive too.
+sed 's#>nu_ND_numu:0.02<#>nu_(ND|FD)_numu:0.02<#' local_test.xml > local_regex.xml
+SAVED_COMMON=("${COMMON[@]}")
+COMMON=(-x local_regex.xml -t "${TAG}rgx" -n 1 -v 2 --seed 405 --preset fast)
+run_test t27regexprocess process
+run_test t28regexglobal --use-fake-data global
+# An invalid regex must be refused loudly (CompilePattern fatal)...
+sed 's#>nu_ND:0.01<#>*bad:0.01<#' local_test.xml > local_regex_bad.xml
+COMMON=(-x local_regex_bad.xml -t "${TAG}rgxbad" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail t29badregex   process
+# ...and so must a valid regex that matches no subchannel (zero-match fatal).
+sed 's#>nu_ND:0.01<#>^nomatch$:0.01<#' local_test.xml > local_regex_none.xml
+COMMON=(-x local_regex_none.xml -t "${TAG}rgxnone" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail t30nomatch    process
+COMMON=("${SAVED_COMMON[@]}")
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

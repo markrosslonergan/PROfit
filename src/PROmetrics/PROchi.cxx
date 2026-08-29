@@ -8,8 +8,6 @@ PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &p
                std::vector<float> physics_param_fixed)
     : PROcovariance(tag, conin, pin, systin, modelin, datain, strat, shape_only,
                     physics_param_fixed) {
-    gradient_mode = GradientOneSidedFull; ///< Default for PROchi: one-sided forward FD on full chi² (~2× faster).
-
     // Neyman variance is the observed data, so outside shape_only mode both the set of
     // usable bins and their variances are constant across the whole fit and can be built
     // once here. In shape_only mode the comparison spectrum is renormalised against every

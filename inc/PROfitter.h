@@ -68,7 +68,9 @@ namespace PROfit {
      * Latin hypercube sampling, Particle Swarm Optimisation, and L-BFGS-B local refinement.
      * Also includes MCMC and harmonic seed-search parameters.  Parameters can be set via
      * a named map (e.g. from command-line options) or by selecting a named preset
-     * ("fast", "good", "overkill", "sensitivity").
+     * ("fast", "good", "overkill", "sensitivity", or the multistart presets
+     * "grad-fast", "grad-good", "grad-deep", "grad-overkill": physics-only LHS,
+     * no PSO, many L-BFGS-B multistarts — designed around the analytic gradient).
      */
     struct PROfitterConfig {
 
@@ -90,6 +92,14 @@ namespace PROfit {
         float swarm_convergence_theshold = 1e-4;     ///< PSO convergence threshold: stop if improvement < this value.
 
         int n_localfit = 10;                         ///< Number of L-BFGS-B local refinement fits run after PSO.
+        /// Sample the LHS in the physics subspace only (nuisance parameters at nominal 0).
+        /// A full-space LHS ranks start points by a chi2 dominated by random nuisance
+        /// pulls; a physics-only LHS ranks them by the oscillation landscape instead.
+        bool latin_phys_only = false;
+        /// Start the nuisance block of every LHS multistart descent from the best fit so
+        /// far (physics from the LHS point). Nuisance minima are nearly common across
+        /// oscillation basins, so descents converge in fewer iterations.
+        bool localfit_warm_nuisance = false;
         size_t n_max_local_retries = 1;              ///< Maximum retries if an L-BFGS-B fit throws an exception.
 
         size_t MCMCiter = 20'000;  ///< Number of MCMC iterations (after burn-in) for posterior sampling.
@@ -129,7 +139,7 @@ namespace PROfit {
         /// GradientOneSidedFull for ~2× speedup, or to one of the *Lin variants for
         /// the Gauss-Newton-style linearised gradient (5–20× speedup, exact at minimum).
         /// See PROmetric::GradientMode for the full mode matrix.
-        PROmetric::GradientMode gradient_mode = PROmetric::GradientCentralLin;
+        PROmetric::GradientMode gradient_mode = PROmetric::GradientAnalytic; ///< Gradient mode PROfitter::Fit sets on the metric (default: exact analytic; see PROmetric::GradientMode for the fallback).
 
         /** @brief Default constructor — leaves all parameters at their default values. */
         PROfitterConfig(){};
@@ -137,7 +147,8 @@ namespace PROfit {
         /**
          * @brief Construct from a named preset and an optional map of overrides.
          * @param input_fit_options  Map of parameter-name to value overrides applied after the preset.
-         * @param fit_preset         Preset name: "fast", "good", "overkill", or "sensitivity".
+         * @param fit_preset         Preset name: "fast", "good", "overkill", "sensitivity", or the
+         *                           multistart presets "grad-fast", "grad-good", "grad-deep", "grad-overkill".
          * @param isScan             If true, apply reduced settings appropriate for a parameter scan.
          */
         PROfitterConfig(std::map<std::string, float> input_fit_options, std::string fit_preset, bool isScan){
@@ -222,6 +233,52 @@ namespace PROfit {
 
 
 
+            // ---- grad-* presets ----
+            // Same L-BFGS-B pipeline and (default analytic) gradient, but: LHS sampled in
+            // physics space only, no PSO stage (n_swarm_iterations = 1 degenerates the
+            // swarm to its start points, so the descents start from the best-ranked
+            // LHS points themselves), and the budget spent on many multistart descents
+            // instead. Benchmarked on pseudo-experiments with thrown systematics,
+            // thrown oscillation parameters and Poisson fluctuations (nueapp and 3+1):
+            // each tier reaches deeper minima than the same-cost standard preset, and
+            // grad-deep beats "overkill" in every dchi2 quantile at ~1/3 the time.
+            // n_swarm_particles also sizes the ranked-LHS start pool, so it equals
+            // n_localfit here.
+            else if(fit_preset == "grad-fast" || fit_preset == "grad-good" ||
+                    fit_preset == "grad-deep" || fit_preset == "grad-overkill"){
+                param.epsilon = 1e-5;
+                param.epsilon_rel = 1e-6;
+                param.max_iterations = 200;
+                param.max_linesearch = 25;
+                // NOTE: LBFGSpp's default past=1 keeps the relative-stagnation test
+                // (delta) active; it is how descents terminate cleanly once float noise
+                // stalls the line search. Do NOT set past=0 or delta below ~1e-6 (the
+                // float ulp scale of a typical chi2): the test then never fires, every
+                // descent grinds until the More-Thuente line search throws, and thrown
+                // descents are discarded by the fitter.
+                param.delta = 1e-6;
+                param.wolfe = 0.90;
+                param.ftol = 1e-4;
+                param.m = 10;
+                param.max_submin =10;
+                param.min_step = std::numeric_limits<float>::epsilon();
+
+                n_swarm_iterations = 1;
+                latin_phys_only = true;
+
+                if(fit_preset == "grad-fast"){          //  ~0.8 s (3+1) / 0.2 s (nueapp) per fit
+                    n_latin_points = 300;   n_swarm_particles = 8;   n_localfit = 8;
+                } else if(fit_preset == "grad-good"){   //  ~1.5 s / 0.5 s
+                    n_latin_points = 1000;  n_swarm_particles = 16;  n_localfit = 16;
+                } else if(fit_preset == "grad-deep"){   //  ~4 s / 1 s
+                    n_latin_points = 2000;  n_swarm_particles = 50;  n_localfit = 50;
+                    localfit_warm_nuisance = true;
+                } else {                                //  grad-overkill: ~9 s / 2.3 s
+                    n_latin_points = 4000;  n_swarm_particles = 100; n_localfit = 100;
+                    localfit_warm_nuisance = true;
+                }
+            }
+
             std::string whichFit = ( isScan? "Simplier Scan" : "Detailed Global");
             log<LOG_INFO>(L"%1% ||Fit and  L-BFGS-B parameters for the %2% minimia finder.  ") % __func__ % whichFit.c_str();
             for(const auto &[param_name, value]: input_fit_options) {
@@ -285,6 +342,10 @@ namespace PROfit {
                         exit(EXIT_FAILURE);
                     }
 
+                } else if(param_name == "latin_phys_only") {
+                    latin_phys_only = (value != 0);
+                } else if(param_name == "localfit_warm_nuisance") {
+                    localfit_warm_nuisance = (value != 0);
                 } else if(param_name == "n_localfit") {
                     n_localfit = value;
                     if(n_localfit < 1) {
@@ -405,6 +466,8 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || ------------ PROfitter specific -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || n_latin_points: %2%  ") % __func__ % n_latin_points;
             log<LOG_INFO>(L"%1% || latin_diversity_factor: %2%  ") % __func__ % latin_diversity_factor;
+            log<LOG_INFO>(L"%1% || latin_phys_only: %2%  ") % __func__ % latin_phys_only;
+            log<LOG_INFO>(L"%1% || localfit_warm_nuisance: %2%  ") % __func__ % localfit_warm_nuisance;
             log<LOG_INFO>(L"%1% || n_localfit: %2%  ") % __func__ % n_localfit;
             log<LOG_INFO>(L"%1% || n_max_local_retries: %2%  ") % __func__ % n_max_local_retries;
             log<LOG_INFO>(L"%1% || use_bkg_seed: %2%  ") % __func__ % use_bkg_seed;
@@ -469,6 +532,8 @@ namespace PROfit {
             log<LOG_INFO>(L"------ PROfitter Specific Parameters ------");
             log<LOG_INFO>(L"  n_latin_points                       : Number of Latin hypercube points to sample across all parameters");
             log<LOG_INFO>(L"  latin_diversity_factor               : Diversity of latin points, 0: no distance weighting, 1: select most diverse far away points");
+            log<LOG_INFO>(L"  latin_phys_only                      : 1 = sample the latin hypercube in physics-parameter space only (nuisances at nominal); 0 = all parameters");
+            log<LOG_INFO>(L"  localfit_warm_nuisance               : 1 = start each latin multistart descent's nuisance parameters at the best fit so far; 0 = at the latin point");
             log<LOG_INFO>(L"  n_localfit                           : Total number of L-BFGS-B fits to do after PSO");
             log<LOG_INFO>(L"  n_max_local_retries                  : Maximum retries if L-BFGS-B throws an exception");
             log<LOG_INFO>(L"  use_bkg_seed                         : 1 (default) fits the background-only fixed seed (physics pinned at model defaults) as a candidate; 0 disables");
@@ -571,6 +636,7 @@ namespace PROfit {
             bool run_progress;                     ///< True if a progress bar should be updated during fitting.
 
             std::vector<Eigen::VectorXf> freq_seed_points; ///< Seed points found by the harmonic frequency scan.
+            size_t total_lbfgs_iterations = 0; ///< L-BFGS-B iterations summed over all local refinements of the most recent Fit() (benchmark diagnostic).
             std::vector<float> freq_seed_values;           ///< Chi-squared values at the harmonic seed points.
             std::vector<float> harmonic_scan_pos;          ///< Diagnostic: frequency positions of the last harmonic scan curve (sorted, finite points only).
             std::vector<float> harmonic_scan_chi;          ///< Diagnostic: chi-squared values of the last harmonic scan curve, parallel to harmonic_scan_pos.

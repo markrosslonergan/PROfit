@@ -143,7 +143,15 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         // GradientOneSidedFull — but with a fixed forward stencil rather than
         // the LBFGS-direction-tracking heuristic, which was always somewhat
         // approximate.
-        const GradientMode mode = gradient_mode;
+        GradientMode mode = gradient_mode;
+        // Analytic gradient is implemented in PROchi only so far. For Poisson the
+        // linearised chain rule is already exact modulo FD truncation in dδ/dθ.
+        if (mode == GradientAnalytic) {
+            static std::atomic<bool> warned_analytic{false};
+            if(!warned_analytic.exchange(true))
+                log<LOG_WARNING>(L"%1% || Analytic gradient not implemented for PROpoisson; falling back to %2%.") % __func__ % gradientModeName(GradientFallback);
+            mode = GradientFallback;
+        }
         const bool linearised = (mode == GradientCentralLin) || (mode == GradientOneSidedLin);
         const bool one_sided  = (mode == GradientOneSidedFull) || (mode == GradientOneSidedLin);
 

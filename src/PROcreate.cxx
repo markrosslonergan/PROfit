@@ -179,12 +179,13 @@ namespace PROfit {
         bool useXrootD = !noxrootd;
 
         // Validate apply_to_subchannel wildcards up front: each pattern must match at
-        // least one subchannel fullname (substring match, same convention as norm/flat),
-        // and only the weight/universe-based types honor it.
+        // least one subchannel fullname (unanchored regex, same convention as norm/flat;
+        // plain substrings work as-is), and only the weight/universe-based types honor it.
         for(const auto& [sys_name, pattern] : inconfig.m_mcgen_variation_apply_to_subchannel){
+            std::regex re = CompilePattern(pattern, "apply_to_subchannel of systematic " + sys_name);
             bool any_match = false;
             for(const auto& fullname : inconfig.m_fullnames){
-                if(fullname.find(pattern) != std::string::npos){ any_match = true; break; }
+                if(PatternMatches(fullname, re)){ any_match = true; break; }
             }
             if(!any_match){
                 log<LOG_ERROR>(L"%1% || ERROR! apply_to_subchannel='%2%' for systematic %3% matches NO subchannel fullname. Is this a typo?") % __func__ % pattern.c_str() % sys_name.c_str();
@@ -206,8 +207,9 @@ namespace PROfit {
         auto file_has_matching_subchannel = [&inconfig](int fid, const std::string &sys_name) -> bool {
             auto it = inconfig.m_mcgen_variation_apply_to_subchannel.find(sys_name);
             if(it == inconfig.m_mcgen_variation_apply_to_subchannel.end()) return true;
+            std::regex re = CompilePattern(it->second, "apply_to_subchannel of systematic " + sys_name);
             for(const auto &bv : inconfig.m_branch_variables[fid])
-                if(bv->associated_hist.find(it->second) != std::string::npos) return true;
+                if(PatternMatches(bv->associated_hist, re)) return true;
             return false;
         };
 
@@ -495,7 +497,12 @@ namespace PROfit {
         if(inconfig.m_num_variation_type_hist1d>0 || inconfig.m_num_variation_type_hist2d>0){
             for(auto& allow_sys : inconfig.m_mcgen_variation_type_map){
                 if(allow_sys.second=="hist1d" || allow_sys.second=="hist2d"){
-                    map_systematic_num_universe[allow_sys.first] = 1;
+                    // A name matching a <HistVarSection> carries as many universes as
+                    // it declared <variation> children (asymmetric case); otherwise the
+                    // usual single measured universe (symmetric case).
+                    auto hv_it = inconfig.m_histvar_knobvals_map.find(allow_sys.first);
+                    map_systematic_num_universe[allow_sys.first] =
+                        (hv_it != inconfig.m_histvar_knobvals_map.end()) ? hv_it->second.size() : 1;
                 }
             }
         }
@@ -534,9 +541,7 @@ namespace PROfit {
             const bool has_apply_to = apply_it != inconfig.m_mcgen_variation_apply_to_subchannel.end();
             std::vector<std::string> apply_names;
             if(has_apply_to){
-                for(const auto &name : inconfig.m_fullnames)
-                    if(name.find(apply_it->second) != std::string::npos)
-                        apply_names.push_back(name);
+                apply_names = MatchNames(inconfig.m_fullnames, apply_it->second, "apply_to_subchannel of systematic " + sys_name);
                 log<LOG_INFO>(L"%1% || Systematic %2% has apply_to_subchannel='%3%' which matches subchannels: %4%") % __func__ % sys_name.c_str() % apply_it->second.c_str() % apply_names;
             }
 
@@ -639,9 +644,21 @@ namespace PROfit {
                     log<LOG_INFO>(L"%1% || External filename:  %2%, External Matrix :%3% . Use for variable number %4%") % __func__ % sv.back().external_filename.c_str() % sys_name.c_str() % sv.back().binning;
                 }
                 if(sys_mode == "hist1d" || sys_mode == "hist2d") {
-                    map_systematic_knob_vals[sys_name] = {1.0f};
+                    auto hv_it = inconfig.m_histvar_knobvals_map.find(sys_name);
+                    if(hv_it != inconfig.m_histvar_knobvals_map.end()) {
+                        map_systematic_knob_vals[sys_name].assign(hv_it->second.begin(), hv_it->second.end());
+                    } else {
+                        map_systematic_knob_vals[sys_name] = {1.0f};
+                    }
                     sv.back().knob_index = map_systematic_knob_vals[sys_name];
+                    // knob_index stays in declaration order (parallel to the hist1d/hist2d
+                    // TH1/TH2 vector filled in the same order in PROconfig), but PROsyst
+                    // expects universes stored from smallest to greatest knob value
+                    // Without this, a HistVarSection  declaring its +1 variation before
+                    // its -1 (or any non-ascending knobval order) would store universes
+                    // out of order.
                     sv.back().knobval = sv.back().knob_index;
+                    std::sort(sv.back().knobval.begin(), sv.back().knobval.end());
                     sv.back().binning = binningindex;
                     // restrict= widens the single linear parameter beyond its default
                     // [0,1] knob range (the linear segments extrapolate; use with
@@ -655,7 +672,9 @@ namespace PROfit {
                 }
                 if(sys_mode == "norm" || sys_mode == "norm_to_covariance") {
                     log<LOG_INFO>(L"%1% || Systematic variation %2% is a match for a normalization systematic. Processing as such. ") % __func__ % sys_name.c_str();
-                    size_t colonPos = sys_name.find(':');
+                    // Split on the LAST colon: the percent never contains one, and the
+                    // pattern may (regex constructs like (?:...) or [[:alpha:]]).
+                    size_t colonPos = sys_name.rfind(':');
                     if (colonPos == std::string::npos) {
                         log<LOG_ERROR>(L"%1% || ERROR, you asked for a norm spline systematic but its not in NAME:percentate format %2%") % __func__  % sys_name.c_str();
                         exit(EXIT_FAILURE);
@@ -667,6 +686,9 @@ namespace PROfit {
                     if(sys_mode == "norm"){
                         sv.back().has_restrict = true;
                         sv.back().restrict_hi = 3.0f;
+                        // FIXME: -1.0/std::floor(flat_percent) is -inf for any percent < 1
+                        // (floor gives 0); likely intended -1.0/flat_percent. Left as-is here
+                        // because changing it alters throw-restriction behavior (separate PR).
                         sv.back().restrict_lo = -1.0/std::floor(flat_percent);
                         log<LOG_INFO>(L"%1% || Setting restrict=[%2%, %3%] for systematic %4%") % __func__ % sv.back().restrict_lo % sv.back().restrict_hi % sys_name.c_str();
                     }
@@ -675,20 +697,13 @@ namespace PROfit {
                     sv.back().knobval = sv.back().knob_index;
                     std::sort(sv.back().knobval.begin(), sv.back().knobval.end());
 
-                    log<LOG_INFO>(L"%1% || Regex pattern %2% (and percent %3%) which matches: ") % __func__ % wild.c_str() % flat_percent;
-                    std::vector<std::string> flatnames;
-                    
-                    // Compile the regex pattern once outside the loop for better performance
-                    // (Assuming 'wild' holds your pattern string)
-                    std::regex subchannel_regex(wild);
-                
-                    for(auto & name : inconfig.m_fullnames){
-                        // Use std::regex_match for full-string matching (equivalent to fnmatch behavior)
-                        if(std::regex_match(name, subchannel_regex)){
-                            flatnames.push_back(name);
-                        }
+                    log<LOG_INFO>(L"%1% || Pattern %2% (and percent %3%) which matches: ") % __func__ % wild.c_str() % flat_percent;
+                    // Unanchored regex (plain substrings behave as before); see PROconfig.h.
+                    std::vector<std::string> flatnames = MatchNames(inconfig.m_fullnames, wild, "norm systematic '" + sys_name + "'");
+                    if(flatnames.empty()) {
+                        log<LOG_ERROR>(L"%1% || ERROR: norm systematic '%2%' pattern '%3%' matches NO subchannel fullname. Fullnames are <mode>_<detector>_<channel>_<subchannel>; matching is an unanchored regex (plain substrings work).") % __func__ % sys_name.c_str() % wild.c_str();
+                        exit(EXIT_FAILURE);
                     }
-                    
                     log<LOG_INFO>(L"%1% || %2% . ") % __func__  % flatnames;
 
                     std::vector<int> flatbins;
@@ -710,7 +725,7 @@ namespace PROfit {
                 }
 
                 for(size_t i = 0 ; i != inconfig.m_mcgen_weightmaps_patterns.size(); ++i){
-                    if (inconfig.m_mcgen_weightmaps_uses[i] && sys_name.find(inconfig.m_mcgen_weightmaps_patterns[i]) != std::string::npos) {
+                    if (inconfig.m_mcgen_weightmaps_uses[i] && PatternMatches(sys_name, CompilePattern(inconfig.m_mcgen_weightmaps_patterns[i], "weightMaps <variation pattern=>"))) {
                         sys_weight_formula = sys_weight_formula + "*(" + inconfig.m_mcgen_weightmaps_formulas[i]+")";
                         sys_mode           = inconfig.m_mcgen_weightmaps_mode[i];
 
@@ -838,10 +853,12 @@ namespace PROfit {
             // apply_to_subchannel: per-branch mask over systematics (1 = the systematic
             // varies events from this branch's subchannel; 0 = fill universes at CV).
             std::vector<std::vector<char>> branch_syst_applies(num_branch, std::vector<char>(total_num_systematics, 1));
-            for(int ib = 0; ib != num_branch; ++ib){
-                for(size_t is = 0; is < total_num_systematics; ++is){
-                    const std::string &pattern = syst_vector[0][is].apply_to_subchannel;
-                    if(!pattern.empty() && branches[ib]->associated_hist.find(pattern) == std::string::npos){
+            for(size_t is = 0; is < total_num_systematics; ++is){
+                const std::string &pattern = syst_vector[0][is].apply_to_subchannel;
+                if(pattern.empty()) continue;
+                std::regex re = CompilePattern(pattern, "apply_to_subchannel of systematic " + syst_vector[0][is].GetSysName());
+                for(int ib = 0; ib != num_branch; ++ib){
+                    if(!PatternMatches(branches[ib]->associated_hist, re)){
                         branch_syst_applies[ib][is] = 0;
                         log<LOG_DEBUG>(L"%1% || Systematic %2% will NOT vary subchannel %3% (apply_to_subchannel='%4%').") % __func__ % syst_vector[0][is].GetSysName().c_str() % branches[ib]->associated_hist.c_str() % pattern.c_str();
                     }
@@ -1512,35 +1529,80 @@ namespace PROfit {
                 if(spline_bin < 0) continue;
                 int var_num = inconfig.m_mcgen_variation_histaxisvars_map.at(var_syst_objs.front()->systname)[0];
                 float val = vars[var_num].first();
-                TH1 *h = inconfig.m_mcgen_variation_hist1d_map.at(var_syst_objs.front()->systname);
-                int bin = h->FindBin(val);
-                float wgt = h->GetBinContent(bin);
-                if(std::isnan(val) || std::isinf(val)) wgt = 1;
-                if(val < h->GetXaxis()->GetXmin() || val > h->GetXaxis()->GetXmax()) wgt = 1;
+                const auto &hists = inconfig.m_mcgen_variation_hist1d_map.at(var_syst_objs.front()->systname);
 
-                // Only filling 1 sigma, so just combine CV and Universe filling
-                for(auto so: var_syst_objs) {
-                    so->FillCV(spline_bin, mc_weight);
-                    so->FillUniverse(0, spline_bin, wgt*mc_weight);
+                for(auto so: var_syst_objs) so->FillCV(spline_bin, mc_weight);
+
+                // A HistVarSection may optionally restrict which subchannels this
+                // systematic's ratio-histogram lookup applies to (mirrors DetVarSection's
+                // <subchannel> list). Events outside that restriction get an inert
+                // (weight=1) fill below rather than skipping the loop
+                bool in_scope = true;
+                auto hv_restrict_it = inconfig.m_histvar_subchannels_map.find(var_syst_objs.front()->systname);
+                if(hv_restrict_it != inconfig.m_histvar_subchannels_map.end() && !hv_restrict_it->second.empty()) {
+                    in_scope = hv_restrict_it->second.count(inconfig.GetSubchannelName(subchannel_index)) > 0;
                 }
-                
+
+                // One measured universe (symmetric, hists.size()==1) or several
+                // (asymmetric, via HistVarSection). hists[is] and knob_index[is] are both
+                // in XML declaration order, but PROsyst expects universes stored smallest-
+                // to-greatest knob value: look up is's sorted position u in knobval (same
+                // pattern the spline path above uses) and fill into that slot instead of is
+                // directly, so a HistVarSection isn't required to declare its <variation>s
+                // in ascending knobval order.
+                for(int is = 0; is < var_syst_objs.front()->GetNUniverse(); ++is) {
+                    size_t u = 0;
+                    for(; u < var_syst_objs.front()->knobval.size(); ++u)
+                        if(var_syst_objs.front()->knobval[u] == var_syst_objs.front()->knob_index[is]) break;
+
+                    float wgt = 1;
+                    if(in_scope) {
+                        TH1 *h = hists[is];
+                        int bin = h->FindBin(val);
+                        wgt = h->GetBinContent(bin);
+                        if(std::isnan(val) || std::isinf(val)) wgt = 1;
+                        if(val < h->GetXaxis()->GetXmin() || val > h->GetXaxis()->GetXmax()) wgt = 1;
+                    }
+
+                    for(auto so: var_syst_objs)
+                        so->FillUniverse(u, spline_bin, wgt*mc_weight);
+                }
+
             } else if(var_syst_objs.front()->mode == "hist2d") {
                 if(spline_bin < 0) continue;
                 int xvar_num = inconfig.m_mcgen_variation_histaxisvars_map.at(var_syst_objs.front()->systname)[0];
                 int yvar_num = inconfig.m_mcgen_variation_histaxisvars_map.at(var_syst_objs.front()->systname)[1];
                 float xval = vars[xvar_num].first();
                 float yval = vars[yvar_num].first();
-                TH2 *h = inconfig.m_mcgen_variation_hist2d_map.at(var_syst_objs.front()->systname);
-                int bin = h->FindBin(xval, yval);
-                float wgt = h->GetBinContent(bin);
-                if(std::isnan(xval) || std::isnan(yval) || std::isinf(xval) || std::isinf(yval)) wgt = 1;
-                if(xval < h->GetXaxis()->GetXmin() || xval > h->GetXaxis()->GetXmax()
-                    || yval < h->GetYaxis()->GetXmin() || yval > h->GetYaxis()->GetXmax()) wgt = 1;
+                const auto &hists = inconfig.m_mcgen_variation_hist2d_map.at(var_syst_objs.front()->systname);
 
-                // Only filling 1 sigma, so just combine CV and Universe filling
-                for(auto so: var_syst_objs) {
-                    so->FillCV(spline_bin, mc_weight);
-                    so->FillUniverse(0, spline_bin, wgt*mc_weight);
+                for(auto so: var_syst_objs) so->FillCV(spline_bin, mc_weight);
+
+                // See the hist1d branch above for the rationale.
+                bool in_scope = true;
+                auto hv_restrict_it = inconfig.m_histvar_subchannels_map.find(var_syst_objs.front()->systname);
+                if(hv_restrict_it != inconfig.m_histvar_subchannels_map.end() && !hv_restrict_it->second.empty()) {
+                    in_scope = hv_restrict_it->second.count(inconfig.GetSubchannelName(subchannel_index)) > 0;
+                }
+
+                // See the hist1d branch above for why is is mapped to its sorted position u.
+                for(int is = 0; is < var_syst_objs.front()->GetNUniverse(); ++is) {
+                    size_t u = 0;
+                    for(; u < var_syst_objs.front()->knobval.size(); ++u)
+                        if(var_syst_objs.front()->knobval[u] == var_syst_objs.front()->knob_index[is]) break;
+
+                    float wgt = 1;
+                    if(in_scope) {
+                        TH2 *h = hists[is];
+                        int bin = h->FindBin(xval, yval);
+                        wgt = h->GetBinContent(bin);
+                        if(std::isnan(xval) || std::isnan(yval) || std::isinf(xval) || std::isinf(yval)) wgt = 1;
+                        if(xval < h->GetXaxis()->GetXmin() || xval > h->GetXaxis()->GetXmax()
+                            || yval < h->GetYaxis()->GetXmin() || yval > h->GetYaxis()->GetXmax()) wgt = 1;
+                    }
+
+                    for(auto so: var_syst_objs)
+                        so->FillUniverse(u, spline_bin, wgt*mc_weight);
                 }
             } else if(var_syst_objs.front()->mode == "explicit_spline") {
                 if(spline_bin < 0) continue;

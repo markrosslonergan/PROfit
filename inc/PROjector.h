@@ -6,8 +6,9 @@
  * @details PROjector implements a two-stage alternative to a joint near+far detector fit:
  *
  *   Stage 1 (--projector-prefit "<pattern>"): fit ONLY the subchannels whose fullname
- *   ("<mode>_<detector>_<channel>_<subchannel>") contains the given substring pattern
- *   (same wildcard convention as --bkg-subtract and PROsyst::CreateFlatMatrix). Before
+ *   ("<mode>_<detector>_<channel>_<subchannel>") matches the given pattern — an
+ *   unanchored regex, so plain substrings work as-is (same wildcard convention as
+ *   --bkg-subtract and PROsyst::CreateFlatMatrix; see PROconfig.h). Before
  *   the fit, all covariance-type systematics are promoted to eigenmode spline nuisance
  *   parameters (via PROsyst::FillSplinesFromCovarianceMatrix) so that the ENTIRE
  *   systematic constraint — splines and covariance modes, including their data-induced
@@ -52,7 +53,7 @@ namespace PROfit {
      * being non-empty selects pre-fit or projected mode respectively.
      */
     struct PROjectorRunConfig {
-        std::string prefit_pattern;   ///< Non-empty => stage-1 pre-fit mode; substring matched against subchannel fullnames.
+        std::string prefit_pattern;   ///< Non-empty => stage-1 pre-fit mode; unanchored regex matched against subchannel fullnames (plain substrings work).
         std::string constraint_file;  ///< Non-empty => stage-2 projected mode; path to a saved constraint file.
         int num_decomp_knobs = -1;    ///< Eigenmodes kept when promoting covariance to splines (-1 = all positive modes, no residual).
         std::vector<std::string> keep_covariance; ///< Covariance systematics NOT promoted (stay as unconstrained covariance).
@@ -104,12 +105,13 @@ namespace PROfit {
 
     /**
      * @brief Resolve a subchannel wildcard into complete channels and validate it.
-     * @details Matches @p pattern as a substring of every subchannel fullname (the
-     * convention of find_subchannels_by_pattern). Because the chi2 lives in collapsed
+     * @details Matches @p pattern against every subchannel fullname as an unanchored
+     * regex — plain substrings work as-is (the convention of
+     * find_subchannels_by_pattern). Because the chi2 lives in collapsed
      * (channel-level) space, a channel is only selectable as a whole: if a pattern
      * matches SOME but not ALL subchannels of a channel this function fails loudly.
      * @param config           Analysis configuration.
-     * @param pattern          Substring pattern.
+     * @param pattern          Pattern (unanchored regex; plain substrings work).
      * @param matched_channels Output: global channel indices whose subchannels all matched.
      * @return True if the selection is valid (no partially-matched channel, at least one
      *         matched and one unmatched channel).

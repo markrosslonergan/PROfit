@@ -83,6 +83,9 @@ public:
      * @return Matrix (n_phys_bins, 4): columns = {1, P_mumu, P_mue, P_ee}.
      */
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 /**
@@ -110,6 +113,8 @@ public:
     float Pee(float dmsq, float sinsq2th14, float sinsqth24, float le) const;
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 /**
@@ -137,6 +142,8 @@ public:
     float Pee(float dmsq, float sinsq2thee, float sinsqth24, float le) const;
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 /**
@@ -173,6 +180,8 @@ public:
     float Pee(float dmsq, float sinsq2thmumu, float sB, float le) const;
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 /**
@@ -203,6 +212,8 @@ public:
     float Pee(float dmsq, float sinsq2thmue, float xi, float le) const;
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 /**
@@ -233,6 +244,8 @@ public:
     float Pee(float dmsq, float Ue4sq, float Um4sq, float g2, float le) const;
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
+    /** @brief Closed-form derivatives of get_probs (see PROmodel::get_probs_grad). */
+    std::vector<Eigen::MatrixXf> get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 };
 
 }

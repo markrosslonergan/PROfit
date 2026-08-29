@@ -100,4 +100,15 @@ Eigen::MatrixXf PROtemplate::get_probs(const Eigen::VectorXf &phys, const std::v
     return probs;
 }
 
+std::vector<Eigen::MatrixXf> PROtemplate::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &) const {
+    // get_probs returns probs(0, k+1) = p_k (the k-th scale parameter itself), so
+    // ∂probs(0, k+1)/∂p_k = 1 and every other entry is 0. Times the chain factor
+    // (ln10 · p_k) if the parameter were log10; the template scales are linear.
+    constexpr float LN10 = 2.302585093f;
+    std::vector<Eigen::MatrixXf> grads(nparams, Eigen::MatrixXf::Zero(1, model_functions.size()));
+    for(size_t k = 0; k < nparams; ++k)
+        grads[k](0, (Eigen::Index)(k + 1)) = is_log10[k] ? LN10 * std::pow(10.0f, phys((Eigen::Index)k)) : 1.0f;
+    return grads;
+}
+
 }

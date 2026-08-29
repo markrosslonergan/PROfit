@@ -451,7 +451,9 @@ namespace PROfit {
         Eigen::MatrixXf fracM = Eigen::MatrixXf::Zero(nbins, nbins);
         Eigen::MatrixXf corrM = Eigen::MatrixXf::Identity(nbins, nbins);
 
-        size_t colonPos = sysname.find(':');
+        // Split on the LAST colon: the percent never contains one, and the
+        // pattern may (regex constructs like (?:...) or [[:alpha:]]).
+        size_t colonPos = sysname.rfind(':');
         if (colonPos == std::string::npos) {
             log<LOG_ERROR>(L"%1% || ERROR, you asked for a flat systematic but its not in NAME:percentate format %2%") % __func__  % sysname.c_str();
             exit(EXIT_FAILURE);
@@ -463,11 +465,11 @@ namespace PROfit {
 
 
         log<LOG_INFO>(L"%1% || Wildcard %2% (and percent %3%) which matches: ") % __func__  % wild.c_str() % flat_percent;
-        std::vector<std::string> flatnames;
-        for(auto & name: config.m_fullnames){
-            if(name.find(wild)!=std::string::npos){
-                flatnames.push_back(name); 
-            }
+        // Unanchored regex (plain substrings behave as before); see PROconfig.h.
+        std::vector<std::string> flatnames = MatchNames(config.m_fullnames, wild, "flat systematic '" + sysname + "'");
+        if(flatnames.empty()) {
+            log<LOG_ERROR>(L"%1% || ERROR: flat systematic '%2%' pattern '%3%' matches NO subchannel fullname. Fullnames are <mode>_<detector>_<channel>_<subchannel>; matching is an unanchored regex (plain substrings work).") % __func__ % sysname.c_str() % wild.c_str();
+            exit(EXIT_FAILURE);
         }
         log<LOG_INFO>(L"%1% || %2% . ") % __func__  % flatnames;
 
@@ -761,6 +763,26 @@ namespace PROfit {
         float x = (shift - seg->knot) / (hi - seg->knot); // normalize to [0, 1]
         const auto& c = seg->coeffs;
         return c[0] + x*(c[1] + x*(c[2] + x*c[3]));
+    }
+
+    float PROsyst::GetSplineShiftDeriv(int spline_num, float shift, int bin) const {
+        const Spline& spline = splines[spline_num];
+        if (bin < 0 || bin >= spline.bins) return 0;
+
+        // Same segment lookup as GetSplineShift so value and derivative always
+        // come from the same cubic.
+        int offset = bin * spline.segments_per_bin;
+        const SplineSegment* segs = &spline.segments[offset];
+        const SplineSegment* end = segs + spline.segments_per_bin;
+        const SplineSegment* seg = std::upper_bound(segs, end, shift, [](float x, const SplineSegment& s) { return x < s.knot; });
+        if (seg != segs) --seg;
+
+        float hi = seg + 1 < end ? seg[1].knot : spline_hi[spline_num];
+        float width = hi - seg->knot;
+        float x = (shift - seg->knot) / width;
+        const auto& c = seg->coeffs;
+        // d/dshift of c0 + x(c1 + x(c2 + x c3)) with x = (shift-knot)/width
+        return (c[1] + x*(2.0f*c[2] + 3.0f*x*c[3])) / width;
     }
 
     void PROsyst::FillSpline(const SystStruct& syst, bool unmirrored) {

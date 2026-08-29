@@ -248,6 +248,12 @@ namespace PROfit {
             float GetSplineShift(int syst_num, float shift, int bin) const;
             float GetSplineShift(std::string name, float shift, int bin) const;
 
+            /* Function: Analytic derivative d(weight)/d(shift) of GetSplineShift for the
+             * same (spline, shift, bin). Evaluates the derivative of the cubic segment
+             * GetSplineShift would use, so the two are consistent everywhere including
+             * beyond the outermost knots. Returns 0 for an out-of-range bin. */
+            float GetSplineShiftDeriv(int syst_num, float shift, int bin) const;
+
             /* Function: Get cv spectrum shifted using spline */
             PROspec GetSplineShiftedSpectrum(const PROconfig& config, const PROpeller& prop, std::string name, float shift) const;
             PROspec GetSplineShiftedSpectrum(const PROconfig& config, const PROpeller& prop, int syst_num, float shift) const;

@@ -92,6 +92,19 @@ namespace PROfit{
     PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, bool binned, size_t var_index);
 
     /**
+     * @brief Analytic Jacobian of the BINNED FillSpectra spectrum with respect to all parameters.
+     * @details Column j holds d(spec)/d(param_j) in full (uncollapsed) bin space, evaluated
+     * at @p params, for j = 0..nphys-1 (physics, via PROmodel::get_probs_grad) then
+     * j = nphys..nphys+nsplines-1 (spline nuisances, via PROsyst::GetSplineShiftDeriv).
+     * Self-contained: recomputes the per-spline factors and physics result it needs rather
+     * than trusting the cache's pinned state (the Tier 1.3 incremental path deliberately
+     * leaves the cache at an older central point). Only the constant cache members
+     * (unweighted_sums, phys_grid) are reused/populated.
+     * @return Matrix (nbins_var_full, nphys + nsplines).
+     */
+    Eigen::MatrixXf FillSpectraGradient(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, size_t var_index = 0);
+
+    /**
      * @brief Master spectrum-filling function combining oscillation weights and systematic spline weights.
      * @details Iterates over MC events (or uses pre-binned histograms when @p binned is true),
      * computes oscillation probabilities via @p inmodel, applies spline shifts from @p insyst,

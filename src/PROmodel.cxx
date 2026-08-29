@@ -74,6 +74,24 @@ Eigen::MatrixXf PROmodel::get_probs(const Eigen::VectorXf &phys, const std::vect
     return probs;
 }
 
+std::vector<Eigen::MatrixXf> PROmodel::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
+    // Central FD on the probabilities only. Probabilities are O(1), so this is
+    // far better conditioned than FD on the full chi²; models with cheap
+    // closed-form derivatives should still override for exactness and speed.
+    std::vector<Eigen::MatrixXf> grads(nparams);
+    const float h = 1e-3f;
+    Eigen::VectorXf p = phys;
+    for(size_t i = 0; i < nparams; ++i) {
+        p(i) = phys(i) + h;
+        Eigen::MatrixXf plus = get_probs(p, var_arrs);
+        p(i) = phys(i) - h;
+        Eigen::MatrixXf minus = get_probs(p, var_arrs);
+        p(i) = phys(i);
+        grads[i] = (plus - minus) / (2.0f * h);
+    }
+    return grads;
+}
+
 void PROmodel::build_param_index() {
     param_name_to_index.clear();
     for(size_t i = 0; i < param_names.size(); ++i){
