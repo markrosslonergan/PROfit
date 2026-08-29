@@ -40,27 +40,73 @@ namespace PROfit{
     class PROcovariance : public PROmetric
     {
         protected:
+            // NOTE: declaration order is load-bearing. owned_config / owned_peller must be
+            // declared (and therefore initialised) BEFORE the config / peller references
+            // below, which bind to them when own_config_and_peller is set.
+            //
             // CNP historically owns immutable config/propeller snapshots for
             // FC workers. Other covariance metrics leave these empty and bind
             // config/peller directly to the caller-owned inputs.
             std::optional<PROconfig> owned_config;
             std::optional<PROpeller> owned_peller;
 
+            /**
+             * @brief Per-bin statistical variance used to build M inside operator().
+             * @param collapsed_prediction  Predicted spectrum, already collapsed to the
+             *                              fitting variable's bin space.
+             * @param comparison            The spectrum the prediction is compared against:
+             *                              the observed data, or its area-normalised form in
+             *                              shape_only mode.
+             * @param param                 Full parameter vector when available, so a metric
+             *                              can derive its variance from something other than
+             *                              the shifted prediction (PROCNP uses the
+             *                              physics-only CV). nullptr when not available.
+             * @return Vector of variances in the collapsed bin space. Bins whose variance is
+             *         not strictly positive are dropped from the fit, so an implementation
+             *         that wants to keep every bin must floor its variance.
+             */
             virtual Eigen::VectorXf statisticalVariances(
-                const PROspec &prediction, const Eigen::VectorXf &data,
+                const Eigen::VectorXf &collapsed_prediction, const Eigen::VectorXf &comparison,
                 const Eigen::VectorXf *param = nullptr) const = 0;
+
+            /**
+             * @brief True if statisticalVariances() depends on the prediction.
+             * @details When true, the full-FD gradient modes rebuild the statistical part of
+             * M at every finite-difference point instead of reusing the base-point one.
+             */
             virtual bool statisticalVariancesDependOnPrediction() const { return false; }
+
+            /**
+             * @brief Per-bin statistical variance used by getSingleChannelChi().
+             * @details Defaults to statisticalVariances() with no parameter vector. PROchi and
+             * PROCNP override it because their per-channel diagnostic path has historically
+             * used a different convention from their fit path (see those overrides).
+             * @param collapsed_cv  Predicted spectrum, already collapsed.
+             * @param comparison    Observed data, area-normalised in shape_only mode.
+             */
+            virtual Eigen::VectorXf singleChannelStatVariances(
+                const Eigen::VectorXf &collapsed_cv, const Eigen::VectorXf &comparison) const;
+
+            /**
+             * @brief Populate the constant-bin-selection cache from a fixed variance vector.
+             * @details Opt-in, called from a concrete metric's constructor. Only valid when
+             * that metric guarantees its variances (and therefore the set of bins with a
+             * positive variance) never change during the fit — PROchi outside shape_only mode
+             * is the only such case today. Metrics that do not call it rebuild the reduced
+             * statistical covariance on every operator() invocation.
+             */
+            void buildConstantStatCache(const Eigen::VectorXf &variances);
 
         public:
             const PROconfig &config;  ///< Analysis configuration (non-owning reference).
             const PROpeller &peller;  ///< MC event store (non-owning reference).
-            Eigen::MatrixXf collapsed_stat_covariance; ///< Statistical covariance in the collapsed bin space.
 
-            // Cached non-empty-bin slicing for default mode. In shape_only mode
-            // normdata depends on `result` so these are rebuilt per call instead.
-            std::vector<Eigen::Index> nec_indices;          ///< Indices of bins with positive data; empty if cache invalid.
-            Eigen::MatrixXf nec_reduced_stat_cov;           ///< Reduced collapsed_stat_covariance for nec_indices (default mode only).
-            bool nec_valid = false;                         ///< True iff !shape_only and cache populated in the ctor.
+            // Cached non-empty-bin slicing, valid only when the selected bins AND their
+            // variances are both independent of the prediction (i.e. PROchi outside
+            // shape_only mode). Every other case rebuilds them per call.
+            std::vector<Eigen::Index> nec_indices;          ///< Indices of bins with positive variance; empty if cache invalid.
+            Eigen::MatrixXf nec_reduced_stat_cov;           ///< Reduced statistical covariance for nec_indices.
+            bool nec_valid = false;                         ///< True iff buildConstantStatCache() populated the cache above.
 
             /*Function: Constructor bringing all objects together*/
             PROcovariance(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat = EventByEvent, bool shape_only = false, std::vector<float> physics_param_fixed = std::vector<float>(), bool own_config_and_peller = false);
@@ -68,18 +114,12 @@ namespace PROfit{
             PROcovariance(const PROcovariance &) = delete;
             PROcovariance &operator=(const PROcovariance &) = delete;
 
-
             /*Function: operator() is what is passed to minimizer.*/
             using PROmetric::operator();
             virtual float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient);
 
             /** @brief Reset cached state and clear any fixed-parameter list. */
-            virtual void reset() {
-                physics_param_fixed.clear();
-                last_value = 0;
-                last_param = Eigen::VectorXf::Constant(last_param.size(), 0);
-                fs_cache.invalidate();
-            }
+            virtual void reset();
 
             /** @brief Replace the internal systematic pointer with @p new_syst. */
             virtual void override_systs(const PROsyst &new_syst) {

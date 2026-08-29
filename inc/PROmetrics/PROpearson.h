@@ -22,8 +22,10 @@ namespace PROfit {
     /** Pearson chi-squared using predicted bin counts for statistical variance. */
     class PROpearson : public PROcovariance {
         protected:
-            Eigen::VectorXf statisticalVariances(const PROspec &prediction, const Eigen::VectorXf &data,
-                                                 const Eigen::VectorXf *param = nullptr) const override;
+            Eigen::VectorXf statisticalVariances(
+                const Eigen::VectorXf &collapsed_prediction, const Eigen::VectorXf &comparison,
+                const Eigen::VectorXf *param = nullptr) const override;
+
             bool statisticalVariancesDependOnPrediction() const override;
 
         public:
@@ -33,7 +35,6 @@ namespace PROfit {
                        std::vector<float> physics_param_fixed = std::vector<float>());
 
             PROmetric *Clone() const override;
-
     };
 }
 

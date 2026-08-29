@@ -55,17 +55,10 @@ namespace PROfit{
             virtual float operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient);
 
             /** @brief Reset cached state and clear any fixed-parameter list. */
-            virtual void reset() {
-                physics_param_fixed.clear();
-                last_value = 0;
-                last_param = Eigen::VectorXf::Constant(last_param.size(), 0);
-                fs_cache.invalidate();
-            }
+            virtual void reset();
 
             /** @brief Return a heap-allocated copy of this PROpoisson. */
-            virtual PROmetric *Clone() const {
-                 return new PROpoisson(model_tag, config, peller, syst, model, data, strat, shape_only, physics_param_fixed);
-            }
+            virtual PROmetric *Clone() const;
 
             /** @brief Replace the internal systematic pointer with @p new_syst. */
             virtual void override_systs(const PROsyst &new_syst) {

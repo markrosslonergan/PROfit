@@ -155,7 +155,7 @@ BenchResult time_metric(const std::string &tag,
     r.nbins = static_cast<int>(config.m_num_variable_bins_total[config.i_prime]);
 
     // The gradient path reads metric.lb / metric.ub for boundary handling
-    // (PROchi.cxx around line 185). Without setBounds() those vectors are
+    // (see the FD loop in PROcovariance::operator()). Without setBounds() those vectors are
     // size 0 and the index access asserts under Eigen. Mirror the standard
     // PROfit chain pattern (proglobal / profile / surface).
     if (with_gradient) {

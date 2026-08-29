@@ -36,8 +36,8 @@ namespace {
 
 PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROpeller &pin, const PROsyst *systin, const PROmodel &modelin, const PROdata &datain, EvalStrategy strat, bool shape_only, std::vector<float> physics_param_fixed) : PROmetric(tag, conin, systin, modelin, datain, strat, shape_only, physics_param_fixed), config(conin), peller(pin) {
 
-    // Snapshot the config's fit-region mask (if any); masked bins are skipped in
-    // the Baker-Cousins sum and contribute zero gradient.
+    // PROmetric's constructor has already snapshotted the config's fit-region mask (if
+    // any); masked bins are skipped in the Baker-Cousins sum and contribute zero gradient.
 
     if(syst->GetNCovar()) {
         log<LOG_WARNING>(L"%1% || Warning: Using a systematics object with covariance systematics with"
@@ -79,6 +79,17 @@ PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROp
         }
         prior_covariance_inv = prior_covariance.inverse();
     }
+}
+
+void PROpoisson::reset() {
+    physics_param_fixed.clear();
+    last_value = 0;
+    last_param = Eigen::VectorXf::Constant(last_param.size(), 0);
+    fs_cache.invalidate();
+}
+
+PROmetric *PROpoisson::Clone() const {
+    return new PROpoisson(model_tag, config, peller, syst, model, data, strat, shape_only, physics_param_fixed);
 }
 
 float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){

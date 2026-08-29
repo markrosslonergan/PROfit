@@ -64,29 +64,33 @@ PROcovariance::PROcovariance(const std::string tag, const PROconfig &conin, cons
         prior_covariance_inv = prior_covariance.inverse();
     }
 
-    // GP: What do you do if the MC has 0 events in a bin?
-    //     Proposed solution (hack?) here. Set the error to 1. This will return
-    //     the correct answer if there are no data events in the bin. It is a bit
-    //     iffier if there are data events in the bin, we may want to implement some
-    //     error handling there.
-    collapsed_stat_covariance = data.Spec().array().cwiseMax(1).matrix().asDiagonal();
+}
 
-    // Default-mode cache: in non-shape_only mode normdata == data.Spec() is constant
-    // across all operator() invocations, so non_empty_indices and the reduced stat
-    // covariance are constant. Build them once here and reuse them.
-    if(!shape_only) {
-        const Eigen::VectorXf &nd = data.Spec();
-        for(Eigen::Index i = 0; i < nd.size(); ++i)
-            if(nd(i) > 0 && binActive(i)) nec_indices.push_back(i);
-        if(!nec_indices.empty()) {
-            Eigen::VectorXf reduced_diag(nec_indices.size());
-            for(size_t k = 0; k < nec_indices.size(); ++k)
-                reduced_diag(k) = nd(nec_indices[k]);
-            nec_reduced_stat_cov = Eigen::MatrixXf(reduced_diag.asDiagonal());
-            nec_valid = true;
-        }
-        // If empty, leave nec_valid=false; operator() will throw on first call.
-    }
+void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances) {
+    nec_indices.clear();
+    nec_reduced_stat_cov.resize(0, 0);
+    nec_valid = false;
+    for(Eigen::Index i = 0; i < variances.size(); ++i)
+        if(variances(i) > 0 && binActive(i)) nec_indices.push_back(i);
+    // If nothing survives, leave the cache invalid: operator() rebuilds per call and
+    // throws there, where the error can name the offending evaluation.
+    if(nec_indices.empty()) return;
+    const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
+        idx(nec_indices.data(), (Eigen::Index)nec_indices.size());
+    nec_reduced_stat_cov = Eigen::MatrixXf(variances(idx).asDiagonal());
+    nec_valid = true;
+}
+
+void PROcovariance::reset() {
+    physics_param_fixed.clear();
+    last_value = 0;
+    last_param = Eigen::VectorXf::Constant(last_param.size(), 0);
+    fs_cache.invalidate();
+}
+
+Eigen::VectorXf PROcovariance::singleChannelStatVariances(
+        const Eigen::VectorXf &collapsed_cv, const Eigen::VectorXf &comparison) const {
+    return statisticalVariances(collapsed_cv, comparison, nullptr);
 }
 
 float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
@@ -120,28 +124,30 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     Eigen::VectorXf normdata = shape_only
         ? data.Normalize(config,result)
         : data.Spec();
-    const Eigen::VectorXf stat_variances = statisticalVariances(result, normdata, &param);
+
+    // Collapse once and reuse for the variance hook, the delta, and the diagnostics
+    // below. PROpearson's variance IS the collapsed prediction, so handing the hook an
+    // already-collapsed vector removes a second CollapseMatrix from every evaluation.
+    const Eigen::VectorXf collapsed_mc_spec = CollapseMatrix(config, result.Spec());
+    const Eigen::VectorXf stat_variances = statisticalVariances(collapsed_mc_spec, normdata, &param);
 
     // Collapsed systematic covariance computed as S^T F S with S = diag(spec)*T
     // kept sparse — the full-binning dense diag(s)*F*diag(s) is never
-    // materialized (this runs on every evaluation). Note the
-    // collapsed_stat_covariance member is deliberately NOT overwritten here:
-    // it keeps the ctor's cwiseMax(1)-guarded form for getSingleChannelChi
-    // (the per-call overwrite dropped that zero-bin guard and was only read
-    // by the NaN diagnostics below).
+    // materialized (this runs on every evaluation).
     Eigen::MatrixXf collapsed_full_covariance = CollapsedScaledCovariance(config, syst->fractional_covariance, result.Spec());
 
-    // non_empty_indices and reduced_collapsed_stat_covariance are constant in default
-    // (non-shape_only) mode and were precomputed in the ctor; in shape_only mode
-    // normdata depends on `result` so we must rebuild them per call.
+    // non_empty_indices and reduced_collapsed_stat_covariance are precomputed once
+    // (PROcovariance::buildConstantStatCache) only when the concrete metric guarantees
+    // that neither the selected bins nor their variances move with the prediction.
+    // Otherwise they are rebuilt here on every call.
     std::vector<Eigen::Index> nei_local;
     Eigen::MatrixXf rstat_local;
     if(!nec_valid) {
         for(Eigen::Index i = 0; i < normdata.size(); ++i)
             if(stat_variances(i) > 0 && binActive(i)) nei_local.push_back(i);
         if(nei_local.empty()) {
-            log<LOG_ERROR>(L"%1% || ERROR: All (active) data bins are empty!") % __func__;
-            throw std::runtime_error("All data bins are empty in PROchi.");
+            log<LOG_ERROR>(L"%1% || ERROR: No active bin has a positive statistical variance!") % __func__;
+            throw std::runtime_error("No usable bins in PROcovariance.");
         }
         const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
             idx_local(nei_local.data(), (Eigen::Index)nei_local.size());
@@ -162,7 +168,6 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     Eigen::MatrixXf M = reduced_collapsed_stat_covariance + reduced_collapsed_full_covariance;
 
     // Create reduced delta vector
-    Eigen::VectorXf collapsed_mc_spec = CollapseMatrix(config, result.Spec());
     Eigen::VectorXf delta = collapsed_mc_spec(idx) - normdata(idx);
 
     float pull = Pull(subvector2);
@@ -174,7 +179,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         log<LOG_ERROR>(L"%1% || ERROR: PROcovariance chi2 is NaN (%2%). This is very bad.\n"
                 L"covar_portion: %3%\npull: %4%\ndelta: %5%\n"
                 L"mc spec: %6%\ndata spec: %7%")
-            % __func__ % value % covar_portion % pull % delta % CollapseMatrix(config, result.Spec())
+            % __func__ % value % covar_portion % pull % delta % collapsed_mc_spec
             % data.Spec();
         // stat covariance diagonal (normdata) for diagnostics
         for (Eigen::Index i = 0; i < normdata.size(); ++i) {
@@ -255,14 +260,14 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             PROspec rl = FillSpectra(config, peller, *syst, model, param_at, fs_cache,
                                      strat != EventByEvent, config.i_prime);
             Eigen::MatrixXf cfcl  = CollapsedScaledCovariance(config, syst->fractional_covariance, rl.Spec());
+            Eigen::VectorXf cmcl  = CollapseMatrix(config, rl.Spec());
             Eigen::MatrixXf gM_lo;
             if(statisticalVariancesDependOnPrediction()) {
-                const Eigen::VectorXf varied_stat = statisticalVariances(rl, normdata, &param_at);
+                const Eigen::VectorXf varied_stat = statisticalVariances(cmcl, normdata, &param_at);
                 gM_lo = Eigen::MatrixXf(varied_stat(idx).asDiagonal()) + cfcl(idx, idx);
             } else {
                 gM_lo = reduced_collapsed_stat_covariance + cfcl(idx, idx);
             }
-            Eigen::VectorXf cmcl  = CollapseMatrix(config, rl.Spec());
             Eigen::VectorXf dl    = cmcl(idx) - normdata(idx);
             Eigen::VectorXf nuis  = param_at.segment(model.nparams, syst->GetNSplines());
             chi2_out = dl.dot(gM_lo.llt().solve(dl)) + Pull(nuis);
@@ -400,16 +405,19 @@ float PROcovariance::getSingleChannelChi(size_t global_channel_index, const PROs
     size_t nbin = config.m_channel_variable_bins[config.GetLocalChannelIndexFromGlobalChannelIndex(global_channel_index)][var_index].NBins();
     size_t startBin = config.GetCollapsedGlobalVariableBinStart(global_channel_index, var_index);
 
+    const Eigen::VectorXf collapsed_cv = CollapseMatrix(config, cv.Spec());
     const Eigen::VectorXf comparison = shape_only ? data.Normalize(config, cv) : data.Spec();
-    const Eigen::VectorXf stat_variances = statisticalVariances(cv, comparison);
+    const Eigen::VectorXf stat_variances = singleChannelStatVariances(collapsed_cv, comparison);
 
     // Restrict to this channel's active bins. Only meaningful for the fitting variable
-    // (the mask snapshot is for i_prime); other variables see every bin active.
+    // (the mask snapshot is for i_prime); other variables see every bin active. Bins are
+    // NOT additionally filtered on a positive variance here: this per-channel diagnostic
+    // has always reported every masked-in bin, and each metric's
+    // singleChannelStatVariances is responsible for keeping its own variances usable.
     const bool masked = (var_index == (size_t)config.i_prime) && hasActiveBinMask();
     std::vector<Eigen::Index> local_idx;
     for(size_t b = 0; b < nbin; ++b)
-        if((!masked || binActive((Eigen::Index)(startBin + b))) &&
-           stat_variances((Eigen::Index)(startBin + b)) > 0.0f)
+        if(!masked || binActive((Eigen::Index)(startBin + b)))
             local_idx.push_back((Eigen::Index)(startBin + b));
     if(local_idx.empty()) return 0.0f;
     const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
@@ -421,7 +429,7 @@ float PROcovariance::getSingleChannelChi(size_t global_channel_index, const PROs
         M += collapsed_full_covariance(idx, idx);
     }
 
-    Eigen::VectorXf delta = (CollapseMatrix(config, cv.Spec()) - comparison)(idx);
+    Eigen::VectorXf delta = (collapsed_cv - comparison)(idx);
     if(projection.size()) {
         Eigen::MatrixXf active_projection(projection.rows(), idx.size());
         for(Eigen::Index col = 0; col < idx.size(); ++col) {

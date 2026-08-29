@@ -3,10 +3,12 @@
  * @brief Abstract base class defining the chi-squared metric interface for PROfit optimisers.
  * @author PROfit Collaboration
  *
- * @details PROmetric is the pure-virtual interface that connects the physics chi-squared
+ * @details PROmetric is the interface that connects the physics chi-squared
  * calculation to the PROfitter multi-start optimiser.  Concrete implementations
- * (PROchi, PROCNP, PROpoisson) compute different chi-squared statistics while sharing
- * the common bounds, fixed-parameter, and call-counting infrastructure defined here.
+ * (PROchi, PROpearson and PROCNP via PROcovariance, plus PROpoisson) compute different
+ * chi-squared statistics while sharing the state and infrastructure defined here:
+ * the model/systematics/data handles, evaluation strategy, nuisance priors, FillSpectra
+ * cache, fit-region mask, parameter bounds, fixed-parameter masking and call counting.
  */
 #ifndef PROMETRIC_H
 #define PROMETRIC_H
@@ -28,7 +30,8 @@ namespace PROfit {
      * @brief Abstract base class for PROfit chi-squared metrics passed to the optimiser.
      * @details Defines the interface required by PROfitter: parameter bounds, fixed-parameter
      * masking, call counting, and the functor operator() that returns chi-squared and gradient.
-     * All concrete metrics (PROchi, PROCNP, PROpoisson) derive from this class.
+     * All concrete metrics derive from this class, the covariance-matrix ones
+     * (PROchi, PROpearson, PROCNP) through the shared PROcovariance engine.
      */
     class PROmetric {
         public:
@@ -307,12 +310,13 @@ namespace PROfit {
             GradientMode gradient_mode = GradientCentralLin; ///< Default: Gauss-Newton linearised gradient (M frozen at base). Use --grad-mode central-full for the legacy full-FD behaviour.
 
             /** @brief Snapshot of PROconfig's fit-region mask for the fitting variable
-             *  (collapsed space); empty = no mask, all bins active. Taken at construction
-             *  in every concrete metric — Clone() re-runs the constructor with the same
+             *  (collapsed space); empty = no mask, all bins active. Taken once in the
+             *  PROmetric constructor — Clone() re-runs the constructor with the same
              *  config, and FC/AFC workers construct fresh metrics from the same config,
              *  so the mask propagates everywhere without per-call-site plumbing.
-             *  NOTE: like lb/ub/is_fixed, this does NOT survive a raw copy-construction
-             *  (PROmetric's copy ctor is a no-op); always use Clone(). */
+             *  It is also carried over by the copy constructor below. Unlike this mask,
+             *  lb/ub/is_fixed are deliberately NOT copied, so a copy-constructed metric
+             *  still needs setBounds(); prefer Clone(). */
             std::vector<char> active_bins;
 
             /** @brief Fill active_bins from the config's mask for its primary fitting variable.
