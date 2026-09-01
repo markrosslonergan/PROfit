@@ -24,6 +24,15 @@ bool PROpearson::statisticalVariancesDependOnPrediction() const {
     return true;
 }
 
+PROmetric::GradientMode PROpearson::analyticFallbackMode() const {
+    // Not the linearised default: the Pearson variance IS the prediction, so the
+    // dM/dtheta term the Gauss-Newton mode drops is first-order in every fitted
+    // parameter. In tests the linearised fallback stalled well above the true
+    // minimum; the full one-sided FD converges to the same optimum as central-full
+    // at half the cost.
+    return GradientOneSidedFull;
+}
+
 Eigen::VectorXf PROpearson::statisticalVariances(
     const Eigen::VectorXf &collapsed_prediction, [[maybe_unused]] const Eigen::VectorXf &comparison,
     [[maybe_unused]] const Eigen::VectorXf *param) const {

@@ -227,10 +227,10 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         // fall back to the Gauss-Newton FD mode (exact at the minimum).
         if (mode == GradientAnalytic &&
             (strat == EventByEvent || statisticalVariancesDependOnPrediction())) {
+            mode = analyticFallbackMode();
             static std::atomic<bool> warned_fallback{false};
             if(!warned_fallback.exchange(true))
-                log<LOG_WARNING>(L"%1% || Analytic gradient not available for this metric/strategy (EventByEvent, or prediction-dependent statistical variance); falling back to %2%.") % __func__ % gradientModeName(GradientFallback);
-            mode = GradientFallback;
+                log<LOG_WARNING>(L"%1% || Analytic gradient not available for this metric/strategy (EventByEvent, or prediction-dependent statistical variance); falling back to %2%.") % __func__ % gradientModeName(mode);
         }
         const bool analytic   = (mode == GradientAnalytic);
         const bool linearised = (mode == GradientCentralLin) || (mode == GradientOneSidedLin);

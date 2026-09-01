@@ -28,6 +28,8 @@ namespace PROfit {
 
             bool statisticalVariancesDependOnPrediction() const override;
 
+            GradientMode analyticFallbackMode() const override;
+
         public:
             PROpearson(const std::string tag, const PROconfig &conin, const PROpeller &pin,
                        const PROsyst *systin, const PROmodel &modelin, const PROdata &datain,

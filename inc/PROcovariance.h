@@ -88,6 +88,16 @@ namespace PROfit{
                 const Eigen::VectorXf &collapsed_cv, const Eigen::VectorXf &comparison) const;
 
             /**
+             * @brief Gradient mode used when GradientAnalytic is requested but unavailable.
+             * @details Defaults to PROmetric::GradientFallback (Gauss-Newton linearised FD),
+             * matching upstream's choice for PROCNP. PROpearson overrides this with a
+             * full-FD mode: its statistical variance is the prediction itself, so the
+             * (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the linearised mode drops is first-order in the
+             * fitted parameters, and dropping it stalls the minimiser.
+             */
+            virtual GradientMode analyticFallbackMode() const { return GradientFallback; }
+
+            /**
              * @brief Populate the constant-bin-selection cache from a fixed variance vector.
              * @details Opt-in, called from a concrete metric's constructor. Only valid when
              * that metric guarantees its variances (and therefore the set of bins with a
