@@ -1447,7 +1447,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
 
                 //check for known attributes
-                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel"};
+                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel", "scale_range"};
                 for (const tinyxml2::XMLAttribute* attr = pAllowList->FirstAttribute(); attr; attr = attr->Next()) {
                     std::string name = attr->Name();
                     if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -1478,10 +1478,54 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 const char *include_resid_cov = pAllowList->Attribute("include_resid_cov");
                 const char *weights = pAllowList->Attribute("weights");
                 const char *apply_to_subchannel = pAllowList->Attribute("apply_to_subchannel");
+                const char *scale_range = pAllowList->Attribute("scale_range");
 
-
+                if(!variation_type) {
+                    throw std::invalid_argument(std::string("<allowlist>/<systematic> entry '") + wt + "' has no type= attribute");
+                }
                 m_mcgen_variation_type.push_back(variation_type);
                 m_mcgen_variation_type_map[wt] = variation_type;
+                const bool is_binned_unconstrained = std::string(variation_type) == "binned_unconstrained";
+                if(is_binned_unconstrained) {
+                    // One XML entry -> one free, un-pulled normalization parameter per bin of the
+                    // binning variable (see RegisterBinnedUnconstrainedChildren). The prior is
+                    // implicitly uniform and the fit range comes from scale_range, so the
+                    // Gaussian-prior / restrict attributes make no sense here.
+                    if(prior || center || prior_type) {
+                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                            "' cannot specify prior=, center= or prior_type= (its per-bin parameters always float freely with a uniform prior)");
+                    }
+                    if(restrict_str) {
+                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                            "' takes its range from scale_range=\"lo, hi\" (multiplicative scale units), not restrict=");
+                    }
+                    if(knobs || filename || xvar || yvar || mirrored || num_decomp_knobs || include_resid_cov || weights || force_0_cv || include_only_weights_str || scale || inflate) {
+                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                            "' only supports the attributes type, plotname, tag, binning, apply_to_subchannel and scale_range");
+                    }
+                    m_mcgen_variation_scale_range[wt] = {0.0f, 10.0f};
+                }
+                if(scale_range) {
+                    if(!is_binned_unconstrained) {
+                        throw std::invalid_argument(std::string("scale_range is only supported for type='binned_unconstrained' systematics; got type '") +
+                            variation_type + "' for '" + wt + "'");
+                    }
+                    char *end;
+                    float slo = std::strtof(scale_range, &end);
+                    if(end == scale_range)
+                        throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
+                    while(*end == ' ' || *end == ',') ++end;
+                    char *end2;
+                    float shi = std::strtof(end, &end2);
+                    if(end2 == end)
+                        throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
+                    if(!(slo < 1.0f && shi > 1.0f)) {
+                        throw std::invalid_argument(std::string("scale_range for systematic '") + wt + "' must strictly contain the CV scale of 1 (lo < 1 < hi), got [" +
+                            std::to_string(slo) + ", " + std::to_string(shi) + "]");
+                    }
+                    m_mcgen_variation_scale_range[wt] = {slo, shi};
+                    log<LOG_INFO>(L"%1% || Parsed scale_range=[%2%, %3%] for binned_unconstrained systematic %4%") % __func__ % slo % shi % wt.c_str();
+                }
                 if(prior_type) {
                     const std::string parsed_prior_type(prior_type);
                     static const std::map<std::string, SplinePriorType> supported_prior_types = {
@@ -2059,6 +2103,8 @@ int PROconfig::LoadFromXML(const std::string &filename){
             m_num_variation_type_hist2d+=1;
         } else if(m_mcgen_variation_type[i] == "explicit_spline"){
             m_num_variation_type_explicit+=1;
+        } else if(m_mcgen_variation_type[i] == "binned_unconstrained"){
+            m_num_variation_type_binned_unconstrained+=1;
         } else {
             log<LOG_ERROR>(L"%1% || Unrecognized variation type %2%") % __func__ % m_mcgen_variation_type[i].c_str();
         }
@@ -2075,6 +2121,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     log<LOG_INFO>(L"%1% || num_variation_type_spline: %2% ") % __func__ % m_num_variation_type_spline;
     log<LOG_INFO>(L"%1% || num_variation_type_spline_to_covariance: %2% ") % __func__ % m_num_variation_type_spline_to_covariance;
     log<LOG_INFO>(L"%1% || num_variation_type_explicit_spline: %2% ") % __func__ % m_num_variation_type_explicit;
+    log<LOG_INFO>(L"%1% || num_variation_type_binned_unconstrained: %2% ") % __func__ % m_num_variation_type_binned_unconstrained;
     if(m_use_mcstats){
         log<LOG_INFO>(L"%1% || Using MC intrinsic stat uncertainty. ") % __func__  ;
     }else{
@@ -2088,6 +2135,9 @@ int PROconfig::LoadFromXML(const std::string &filename){
     this->ValidateFitVariable();
 
     this->CalcTotalBins();
+
+    // Needs the subchannel fullnames and per-channel binnings that CalcTotalBins just built.
+    this->RegisterBinnedUnconstrainedChildren();
 
     log<LOG_INFO>(L"%1% || Checking number of Mode/Detector/Channel/Subchannels and BINs") % __func__;
     log<LOG_INFO>(L"%1% || num_modes: %2% ") % __func__ % m_num_modes;
@@ -2732,6 +2782,95 @@ int PROconfig::HexToROOTColor(const std::string& hexColor) const{
     return TColor::GetColor(r, g, b);
 }
 
+void PROconfig::RegisterBinnedUnconstrainedChildren(){
+    m_mcgen_variation_children.clear();
+    m_mcgen_variation_parent.clear();
+    for(size_t i = 0; i < m_mcgen_variation_allowlist.size(); ++i){
+        if(m_mcgen_variation_type[i] != "binned_unconstrained") continue;
+        const std::string parent = m_mcgen_variation_allowlist[i];
+
+        const int binning = m_mcgen_variation_binning_map.at(parent);
+        if(binning < 0 || binning >= (int)m_num_variables){
+            log<LOG_ERROR>(L"%1% || ERROR: binned_unconstrained systematic '%2%' asks for binning index %3% but only %4% variables are defined.") % __func__ % parent.c_str() % binning % m_num_variables;
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+
+        // Which subchannels get a free normalization: the apply_to_subchannel pattern, or all.
+        std::vector<std::string> names;
+        auto pattern_it = m_mcgen_variation_apply_to_subchannel.find(parent);
+        if(pattern_it != m_mcgen_variation_apply_to_subchannel.end()){
+            names = MatchNames(m_fullnames, pattern_it->second, "apply_to_subchannel of binned_unconstrained systematic '" + parent + "'");
+        } else {
+            names = m_fullnames;
+        }
+        if(names.empty()){
+            log<LOG_ERROR>(L"%1% || ERROR: binned_unconstrained systematic '%2%' matches NO subchannel fullname (apply_to_subchannel='%3%'). Fullnames are <mode>_<detector>_<channel>_<subchannel>; matching is an unanchored regex.")
+                % __func__ % parent.c_str() % (pattern_it == m_mcgen_variation_apply_to_subchannel.end() ? "" : pattern_it->second.c_str());
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+
+        // One parameter per LOCAL bin, shared by every matched subchannel, so all of them must
+        // carry the same binning of the chosen variable (always true within one channel).
+        size_t nlocal = 0;
+        bool first = true;
+        for(const auto &name : names){
+            size_t is = GetSubchannelIndex(name);
+            size_t ic = GetLocalChannelIndexFromGlobalSubchannelIndex(is);
+            size_t nb = m_channel_variable_bins.at(ic).at(binning).NBins();
+            if(first){ nlocal = nb; first = false; }
+            else if(nb != nlocal){
+                log<LOG_ERROR>(L"%1% || ERROR: binned_unconstrained systematic '%2%' spans subchannels with different binnings of variable %3% (%4% vs %5% bins at subchannel %6%). Restrict it with apply_to_subchannel to channels that share a binning, or use one entry per channel.")
+                    % __func__ % parent.c_str() % binning % nlocal % nb % name.c_str();
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        const auto &range = m_mcgen_variation_scale_range.at(parent);
+        const std::string parent_plotname = m_mcgen_variation_plotname_map.count(parent) ? m_mcgen_variation_plotname_map.at(parent) : parent;
+        auto tags_it = m_mcgen_variation_tags.find(parent);
+
+        std::vector<std::string> children;
+        children.reserve(nlocal);
+        for(size_t j = 0; j < nlocal; ++j){
+            const std::string child = parent + "_bin" + std::to_string(j);
+            if(m_mcgen_variation_type_map.count(child)){
+                log<LOG_ERROR>(L"%1% || ERROR: derived name '%2%' of binned_unconstrained systematic '%3%' collides with another systematic in the variation list.") % __func__ % child.c_str() % parent.c_str();
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+            children.push_back(child);
+            m_mcgen_variation_parent[child] = parent;
+            m_mcgen_variation_plotname_map[child] = parent_plotname + " bin " + std::to_string(j);
+            if(tags_it != m_mcgen_variation_tags.end()) m_mcgen_variation_tags[child] = tags_it->second;
+            m_mcgen_variation_binning_map[child] = binning;
+            m_mcgen_variation_prior_types[child] = SplinePriorType::Uniform;
+            // Fit parameter is scale-1 (CV at 0), so the box is [lo-1, hi-1].
+            m_mcgen_variation_restrict[child] = {range.first - 1.0f, range.second - 1.0f};
+        }
+        m_mcgen_variation_children[parent] = children;
+        // The parent itself never becomes a fit parameter, but marking it uniform lets the
+        // generic prior-type query reject it everywhere a Gaussian prior would be assumed.
+        m_mcgen_variation_prior_types[parent] = SplinePriorType::Uniform;
+
+        // <correlation> entries were parsed before this expansion, so check them here.
+        for(const auto &[a, b, rho] : m_mcgen_correlations){
+            const bool hits = (a == parent || b == parent ||
+                               std::find(children.begin(), children.end(), a) != children.end() ||
+                               std::find(children.begin(), children.end(), b) != children.end());
+            if(hits){
+                throw std::invalid_argument(std::string("binned_unconstrained systematic '") + parent +
+                    "' (or one of its per-bin parameters) cannot appear in a Gaussian <correlation> entry: " + a + " " + b);
+            }
+        }
+
+        log<LOG_INFO>(L"%1% || binned_unconstrained systematic '%2%' -> %3% free per-bin parameters (%4%_bin0..%4%_bin%5%) in binning %6%, scale range [%7%, %8%], shared across subchannels %9%")
+            % __func__ % parent.c_str() % nlocal % parent.c_str() % (nlocal - 1) % binning % range.first % range.second % names;
+    }
+}
+
 uint32_t PROconfig::CalcHash() const{
     int fixed_seed = 404;
     uint32_t hash;
@@ -2767,6 +2906,12 @@ uint32_t PROconfig::CalcHash() const{
     // cached SystStructs; empty map appends nothing so pre-existing hashes are unchanged.
     for (const auto& [sysname, pattern] : m_mcgen_variation_apply_to_subchannel)
         unique_string << sysname << "->" << pattern;
+    // binned_unconstrained: the cached SystStruct carries the binning, matched bins and
+    // scale range, so all three must invalidate the cache. Empty maps append nothing.
+    for (const auto& [sysname, range] : m_mcgen_variation_scale_range)
+        unique_string << sysname << "~" << range.first << "," << range.second;
+    for (const auto& [sysname, children] : m_mcgen_variation_children)
+        unique_string << sysname << "#" << children.size() << "@" << m_mcgen_variation_binning_map.at(sysname);
 
     for(const auto& vec: m_branch_variables){
         for(const auto& br: vec){

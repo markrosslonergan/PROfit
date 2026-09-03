@@ -26,6 +26,8 @@ namespace PROfit {
                     % (is_flux ? "pre-migration (flux)" : "post-migration");
                 spline_prior_types.back() = config.GetSplinePriorType(syst.systname);
                 ++n_splines;
+            } else if(syst.mode == "binned_unconstrained") {
+                FillBinnedUnconstrainedSplines(config, syst);
             } else if(syst.mode == "spline_to_covariance") {
                 if(model == nullptr){
                     log<LOG_ERROR>(L"%1% || spline_to_covariance requires a PROmodel to use spline2cov. "
@@ -964,6 +966,97 @@ namespace PROfit {
         spline_binnings.push_back(syst.binning);
         spline_prior_types.push_back(SplinePriorType::Gaussian);
 
+    }
+
+    void PROsyst::FillBinnedUnconstrainedSplines(const PROconfig& config, const SystStruct& syst) {
+        const int binning = syst.binning;
+        if(binning < 0 || binning >= (int)config.m_num_variable_bins_total.size()) {
+            log<LOG_ERROR>(L"%1% || binned_unconstrained systematic '%2%' has invalid binning index %3%.") % __func__ % syst.systname.c_str() % binning;
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+        const int nbins = (int)config.m_num_variable_bins_total[binning];
+        if(!syst.has_restrict || !(syst.restrict_lo < 0.0f && syst.restrict_hi > 0.0f)) {
+            log<LOG_ERROR>(L"%1% || binned_unconstrained systematic '%2%' needs a parameter range that contains 0 (CV), got [%3%, %4%].")
+                % __func__ % syst.systname.c_str() % syst.restrict_lo % syst.restrict_hi;
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+        const float theta_lo = syst.restrict_lo;
+        const float theta_hi = syst.restrict_hi;
+
+        // Group the free global bins by their LOCAL bin index within their subchannel: one
+        // parameter per local bin, shared by every matched subchannel.
+        std::map<int, std::vector<int>> bins_by_local;
+        for(int g : syst.norm_bins) {
+            if(g < 0 || g >= nbins) {
+                log<LOG_ERROR>(L"%1% || binned_unconstrained systematic '%2%' lists global bin %3% outside variable %4% (%5% bins).") % __func__ % syst.systname.c_str() % g % binning % nbins;
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+            size_t is = config.GetSubchannelIndexFromVariableGlobalBin((size_t)g, (size_t)binning);
+            size_t start = config.GetGlobalVariableBinStart(is, (size_t)binning);
+            bins_by_local[g - (int)start].push_back(g);
+        }
+        if(bins_by_local.empty()) {
+            log<LOG_ERROR>(L"%1% || binned_unconstrained systematic '%2%' frees no bins at all.") % __func__ % syst.systname.c_str();
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+        const int nlocal = bins_by_local.rbegin()->first + 1;
+
+        // Knots: roughly unit spacing on both sides of 0, with 0 itself always a knot and the
+        // outermost knots exactly at the parameter range. The response is exactly linear, so
+        // the knot placement only matters for GetSplineShift's per-segment normalisation (which
+        // assumes a following knot) and for keeping the segment containing 0 away from the last
+        // one, whose width is read from spline_hi and can be rewritten by --fix.
+        const int n_lo = std::max(1, (int)std::lround(-theta_lo));
+        const int n_hi = std::max(2, (int)std::lround(theta_hi));
+        std::vector<float> knots;
+        knots.reserve(n_lo + n_hi + 1);
+        for(int k = 0; k < n_lo; ++k) knots.push_back(theta_lo + k * (-theta_lo) / n_lo);
+        knots.push_back(0.0f);
+        for(int k = 1; k < n_hi; ++k) knots.push_back(k * theta_hi / n_hi);
+        knots.push_back(theta_hi);
+        const int nseg = (int)knots.size() - 1;
+
+        for(int j = 0; j < nlocal; ++j) {
+            auto it = bins_by_local.find(j);
+            const std::vector<int> owned = it == bins_by_local.end() ? std::vector<int>{} : it->second;
+            std::vector<char> is_owned(nbins, 0);
+            for(int g : owned) is_owned[g] = 1;
+
+            Spline spline;
+            spline.bins = nbins;
+            spline.segments_per_bin = nseg;
+            spline.segments.reserve((size_t)nbins * nseg);
+            for(int b = 0; b < nbins; ++b) {
+                for(int s = 0; s < nseg; ++s) {
+                    const float knot = knots[s];
+                    const float width = knots[s + 1] - knots[s];
+                    if(is_owned[b]) spline.segments.push_back(SplineSegment{knot, {1.0f + knot, width, 0.0f, 0.0f}});
+                    else            spline.segments.push_back(SplineSegment{knot, {1.0f, 0.0f, 0.0f, 0.0f}});
+                }
+            }
+
+            const std::string child = syst.systname + "_bin" + std::to_string(j);
+            syst_map[child] = {splines.size(), SystType::Spline};
+            splines.push_back(std::move(spline));
+            spline_names.push_back(child);
+            spline_lo.push_back(theta_lo);
+            spline_hi.push_back(theta_hi);
+            spline_has_restrict.push_back(true);
+            spline_restrict_lo.push_back(theta_lo);
+            spline_restrict_hi.push_back(theta_hi);
+            spline_binnings.push_back(binning);
+            spline_prior_types.push_back(SplinePriorType::Uniform);
+            spline_is_pre_migration.push_back(config.has_flux_tag(child));
+            ++n_splines;
+            log<LOG_DEBUG>(L"%1% || binned_unconstrained: spline '%2%' frees %3% global bins of variable %4%, parameter range [%5%, %6%], %7% segments per bin")
+                % __func__ % child.c_str() % owned.size() % binning % theta_lo % theta_hi % nseg;
+        }
+        log<LOG_INFO>(L"%1% || binned_unconstrained systematic '%2%' expanded into %3% free per-bin splines (%2%_bin0..%2%_bin%4%) in binning %5%")
+            % __func__ % syst.systname.c_str() % nlocal % (nlocal - 1) % binning;
     }
 
     void PROsyst::FillSplinesFromCovariance(const SystStruct& syst) {

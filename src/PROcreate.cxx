@@ -265,7 +265,7 @@ namespace PROfit {
             }
             auto type_it = inconfig.m_mcgen_variation_type_map.find(sys_name);
             const std::string sys_type = (type_it != inconfig.m_mcgen_variation_type_map.end()) ? type_it->second : "";
-            const std::vector<std::string> apply_to_supported = {"spline", "spline_to_covariance", "covariance", "covariance_to_spline", "norm", "hist1d", "hist2d", "explicit_spline"};
+            const std::vector<std::string> apply_to_supported = {"spline", "spline_to_covariance", "covariance", "covariance_to_spline", "norm", "hist1d", "hist2d", "explicit_spline", "binned_unconstrained"};
             if(std::find(apply_to_supported.begin(), apply_to_supported.end(), sys_type) == apply_to_supported.end()){
                 log<LOG_WARNING>(L"%1% || apply_to_subchannel is not supported for systematic %2% (type '%3%'); it will be IGNORED. (flat/norm already carry their own NAME:percent wildcard; external/mcstat/detvar are not per-event.)") % __func__ % sys_name.c_str() % sys_type.c_str();
             }
@@ -475,6 +475,16 @@ namespace PROfit {
             }
         }
 
+        // binned_unconstrained: the per-bin response is exactly linear in the parameter, so
+        // PROsyst synthesizes the splines analytically. No universes, no weight branch.
+        if(inconfig.m_num_variation_type_binned_unconstrained>0){
+            for(auto& allow_sys : inconfig.m_mcgen_variation_type_map){
+                if(allow_sys.second=="binned_unconstrained"){
+                    map_systematic_num_universe[allow_sys.first] = 0;
+                }
+            }
+        }
+
         // Do we have any norm systematics?
         if(inconfig.m_num_variation_type_norm>0 || inconfig.m_num_variation_type_norm_to_covariance>0){
             for(auto& allow_sys : inconfig.m_mcgen_variation_type_map){
@@ -610,6 +620,29 @@ namespace PROfit {
                         sv.back().restrict_hi = inconfig.m_mcgen_variation_restrict.at(sys_name).second;
                         log<LOG_INFO>(L"%1% || Setting restrict=[%2%, %3%] for systematic %4%") % __func__ % sv.back().restrict_lo % sv.back().restrict_hi % sys_name.c_str();
                     }
+                }
+                if(sys_mode == "binned_unconstrained"){
+                    // Record which global bins (in the systematic's own binning variable) carry a
+                    // free normalization; PROsyst groups them by local bin index into one spline
+                    // per bin. The fit parameter is scale-1, so restrict = [lo-1, hi-1].
+                    sv.back().binning = binningindex;
+                    const std::vector<std::string> &free_names = has_apply_to ? apply_names : inconfig.m_fullnames;
+                    std::vector<int> freebins;
+                    for(const auto &name : free_names){
+                        size_t is = inconfig.GetSubchannelIndex(name);
+                        size_t ic = inconfig.GetLocalChannelIndexFromGlobalSubchannelIndex(is);
+                        size_t start = inconfig.GetGlobalVariableBinStart(is, binningindex);
+                        for(size_t b = 0; b < inconfig.m_channel_variable_bins[ic][binningindex].NBins(); b++)
+                            freebins.push_back((int)(start+b));
+                    }
+                    sv.back().norm_bins = freebins;
+                    sv.back().norm_value = 1.0f;
+                    const auto &range = inconfig.m_mcgen_variation_scale_range.at(sys_name);
+                    sv.back().has_restrict = true;
+                    sv.back().restrict_lo = range.first - 1.0f;
+                    sv.back().restrict_hi = range.second - 1.0f;
+                    log<LOG_INFO>(L"%1% || binned_unconstrained systematic %2% frees bins %3% of variable %4% (scale range [%5%, %6%] -> parameter range [%7%, %8%])")
+                        % __func__ % sys_name.c_str() % freebins % binningindex % range.first % range.second % sv.back().restrict_lo % sv.back().restrict_hi;
                 }
                 if(sys_mode == "covariance_to_spline"){
                     sv.back().binning = binningindex;

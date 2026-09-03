@@ -284,6 +284,24 @@ void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel
     }
 }
 
+// A binned_unconstrained XML entry is never itself a PROsyst entry: it expands into
+// "<parent>_bin<j>" splines. Replace any parent name (typed directly, or pulled in via a
+// shared tag, which lists parent AND children) by its children, deduplicated in order,
+// so the subset/excluding lookups below only ever see real spline names.
+static void expand_binned_unconstrained_parents(std::vector<std::string> &names, const PROconfig &config) {
+    std::vector<std::string> expanded;
+    for(const std::string &n: names) {
+        auto it = config.m_mcgen_variation_children.find(n);
+        if(it != config.m_mcgen_variation_children.end()) {
+            for(const std::string &child: it->second)
+                if(std::find(expanded.begin(), expanded.end(), child) == expanded.end()) expanded.push_back(child);
+        } else if(std::find(expanded.begin(), expanded.end(), n) == expanded.end()) {
+            expanded.push_back(n);
+        }
+    }
+    names = expanded;
+}
+
 void include_or_exclude_systs(std::vector<PROsyst> &variable_systs, const PROconfig &config, const PROpt &options) {
     if(options.syst_list.size()) {
 
@@ -305,6 +323,7 @@ void include_or_exclude_systs(std::vector<PROsyst> &variable_systs, const PROcon
                 }
             }
         }
+        expand_binned_unconstrained_parents(systs_to_include, config);
         int io=0;
         for(PROsyst &syst: variable_systs){
             // variable_systs are built for plot=="true" OR i_prime — the fitting
@@ -336,6 +355,7 @@ void include_or_exclude_systs(std::vector<PROsyst> &variable_systs, const PROcon
                 }
             }
         }
+        expand_binned_unconstrained_parents(systs_to_exclude, config);
         int io=0;
         for(PROsyst &syst: variable_systs){
             // Same plot=="true"-or-i_prime rule as the subset branch above.

@@ -348,6 +348,7 @@ The five main `type`s:
 | `mcstat` | finite MC statistics | diagonal MC-stat covariance | no |
 | `norm` | you, in the XML (`pattern:fraction`) | ONE spline parameter giving a flat ±fraction normalisation on every subchannel whose fullname contains the pattern — 100% correlated inside the match, uncorrelated outside | yes (a spline; fraction must be < 0.333) |
 | `flat` | you, in the XML (`pattern:fraction`) | diagonal-only covariance — the error is uncorrelated bin-by-bin | no |
+| `binned_unconstrained` | you, in the XML (a name; scope via `apply_to_subchannel`) | ONE free, un-pulled normalisation parameter **per bin** of the `binning` variable, shared by every matched subchannel — the bins float independently inside `scale_range` (default ×0 to ×10) with a uniform prior | yes, N of them, named `<name>_bin0..<name>_bin(N-1)`, in units of (scale − 1) |
 
 `mcstat` you will almost always want on (finite MC statistics IS a
 systematic on the prediction); `norm` is the right tool for flux
@@ -396,6 +397,44 @@ The `<allowlist>` attributes:
   required — or even looked for — in MCFiles that fill a matching
   subchannel. This is how per-detector systematics work in multi-detector
   fits where each detector's MC carries a different set of weight branches.
+* `scale_range="lo, hi"` — `binned_unconstrained` only: the multiplicative
+  range every free bin may take (default `0, 10`; must contain 1).
+
+### Freeing a whole distribution bin-by-bin: `binned_unconstrained`
+
+```xml
+<bins unit="True E_{#nu} [GeV]" edges="0 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.2 1.5 2.0 3.0 20.0" plot="false"/>
+...
+<allowlist type="binned_unconstrained" binning="var2" apply_to_subchannel="numu_(cc|numunc|othernc)"
+           scale_range="0, 10" tag="FreeFlux" plotname="Free flux">free_flux</allowlist>
+```
+
+One line, N fit parameters: for each local bin `j` of the `binning` variable
+PROfit synthesizes a spline named `free_flux_bin<j>` that multiplies bin `j`
+of **every** matched subchannel (here, all neutrino subchannels of all three
+detectors — so one parameter per true-energy bin is shared between near and
+far, which is what a "flux shape fully unconstrained" study wants; write two
+entries with different `apply_to_subchannel` patterns to decorrelate them).
+The parameter is `scale − 1` so the CV sits at 0 like every other spline,
+its box is `[lo−1, hi−1]`, and there is **no Gaussian pull** (it is a
+`prior_type="uniform"` spline under the hood). Things to know:
+
+* the response is exactly linear, so nothing is read from the MC: no weight
+  branch, no universes, and the splines are rebuilt from the cached
+  `SystStruct` on every run (`process` is still needed once because the
+  binning variable must be in the `_prop.bin`);
+* every matched subchannel must share the binning of `binning` (always true
+  within one channel; PROfit refuses mixed binnings — use one entry per
+  channel instead);
+* when `binning` is not the fitting variable the per-bin factors are folded
+  into the reco spectrum through the CV migration matrix, exactly as for any
+  other true-binned spline (see `binning` above);
+* the parent name works everywhere a name is accepted for
+  `--syst-list`/`--exclude-systs` (it expands to its children), while
+  `--fix` and `--inject-systs` take the individual `_bin<j>` names;
+* `prior=`, `center=`, `prior_type=`, `restrict=` and `<correlation>` are
+  refused for these entries; FC/Brazil throws share the uniform-spline
+  caveat above (truncated Gaussian, not uniform).
 
 ### Asymmetric errors from histogram sources: `<HistVarFiles>`
 

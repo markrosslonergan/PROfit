@@ -324,6 +324,15 @@ namespace PROfit{
             /*
              * Function: Use TinyXML2 to load XML */
             int LoadFromXML(const std::string & filename);
+
+            /* Function: expand every type="binned_unconstrained" entry into its per-bin child
+             * names ("<parent>_bin<j>", one per local bin of the entry's binning variable, shared by
+             * every subchannel the apply_to_subchannel pattern matches) and register their plotname,
+             * tags, binning, restrict range and Uniform prior type so every name-keyed lookup
+             * downstream (--fix, --syst-list, PROplot, PROsurf) resolves. Needs the fullnames and
+             * per-channel binnings, so it runs after CalcTotalBins() and before CalcHash(). */
+            void RegisterBinnedUnconstrainedChildren();
+
             SplinePriorType GetSplinePriorType(const std::string &systematic) const {
                 auto it = m_mcgen_variation_prior_types.find(systematic);
                 return it == m_mcgen_variation_prior_types.end()
@@ -466,6 +475,7 @@ namespace PROfit{
             int m_num_variation_type_hist1d = 0;
             int m_num_variation_type_hist2d = 0;
             int m_num_variation_type_explicit = 0;
+            int m_num_variation_type_binned_unconstrained = 0;
 
             int m_num_mcgen_files;
             std::vector<std::string> m_mcgen_tree_name;	
@@ -526,7 +536,10 @@ namespace PROfit{
             std::map<std::string, int> m_mcgen_variation_num_decomp_knobs; //map of covariance_to_spline systematics to the number of eigenpairs to keep (-1 or missing = keep all)
             std::map<std::string, bool> m_mcgen_variation_include_resid_cov; //map of covariance_to_spline systematics to whether the un-kept eigenpairs are retained as a residual covariance (missing = true)
             std::map<std::string, std::string> m_mcgen_variation_apply_to_subchannel; //map of systematics with apply_to_subchannel="<wildcard>" (unanchored regex against subchannel fullnames; plain substrings work as-is): the systematic is only applied to matching subchannels, and its weight branch is only required in MCFiles that fill a matching subchannel
-      
+            std::map<std::string, std::pair<float,float>> m_mcgen_variation_scale_range; //binned_unconstrained only: allowed multiplicative scale [lo, hi] of every free bin (default [0, 10]); the fit parameter is scale-1 so the CV sits at 0
+            std::map<std::string, std::vector<std::string>> m_mcgen_variation_children; //binned_unconstrained parent XML name -> the per-bin spline names ("<parent>_bin<j>") it expands to in PROsyst
+            std::map<std::string, std::string> m_mcgen_variation_parent; //per-bin spline name -> its binned_unconstrained parent XML name
+
             //FIX skepic
             std::vector<std::string> systematic_name;
 

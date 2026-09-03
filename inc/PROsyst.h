@@ -235,6 +235,13 @@ namespace PROfit {
             /* Function: Fill splines assuming p_cv and p_multi_spec have been filled in the SystStruct*/
             void FillSpline(const SystStruct& syst, bool unmirrored);
 
+            /* Function: For a "binned_unconstrained" systematic, synthesize one exactly-linear spline
+             * per local bin of syst.binning: parameter theta = scale-1 (CV at 0), weight 1+theta in the
+             * owned bins of every subchannel listed in syst.norm_bins and exactly 1 elsewhere. Each
+             * spline is named "<syst.systname>_bin<j>", carries a Uniform prior (no pull) and is bounded
+             * by [restrict_lo, restrict_hi]. No universes are needed: nothing is read from the MC. */
+            void FillBinnedUnconstrainedSplines(const PROconfig& config, const SystStruct& syst);
+
             /* Function: For a "covariance_to_spline" systematic, build the fractional covariance from the
              * multi-universe spectra, eigendecompose it, and synthesize one linear spline per retained
              * eigenpair. Knobs are named "<syst.systname>_decomp_knob_<i>" where i = 0 corresponds to the
