@@ -242,6 +242,7 @@ namespace PROfit {
         std::vector<std::vector<std::map<std::string, std::vector<eweight_type>*>>> f_event_weights(num_files);
         std::vector<std::vector<std::map<std::string, std::vector<eweight_type>*>>> f_knob_vals(num_files);
         std::map<std::string, int> map_systematic_num_universe;
+        std::map<std::string, std::pair<int, int>> map_systematic_universe_source; // sys -> (fid, nuniverse) of the first file carrying it, for cross-file consistency checks
         std::map<std::string, std::vector<eweight_type>> map_systematic_knob_vals;
         std::map<std::string, std::string> map_systematic_type;
 
@@ -457,9 +458,23 @@ namespace PROfit {
 
                         log<LOG_INFO>(L"%1% || %2% has %3% montecarlo variations in branch %4%") % __func__ % it.first.c_str() % it.second->size() % branch_variable->associated_hist.c_str();
 
-                        map_systematic_num_universe[it.first] = std::max((int)map_systematic_num_universe[it.first], (int)it.second->size());
+                        int nuniv = (int)it.second->size();
+                        auto prev = map_systematic_universe_source.find(it.first);
+                        if(prev != map_systematic_universe_source.end() && prev->second.second != nuniv){
+                            log<LOG_ERROR>(L"%1% || Systematic %2% has %3% universes in file %4% (%5%) but %6% in file %7% (%8%). Every MCFile whose subchannels are covered by a systematic must carry the same number of universes for it, or exempt itself via apply_to_subchannel= or incl_systematics=\"false\".") % __func__ % it.first.c_str() % prev->second.second % prev->second.first % inconfig.m_mcgen_file_name[prev->second.first].c_str() % nuniv % fid % inconfig.m_mcgen_file_name[fid].c_str();
+                            log<LOG_ERROR>(L"Terminating.");
+                            exit(EXIT_FAILURE);
+                        }
+                        map_systematic_universe_source.emplace(it.first, std::make_pair(fid, nuniv));
+                        map_systematic_num_universe[it.first] = std::max((int)map_systematic_num_universe[it.first], nuniv);
                         if(f_knob.find(it.first+"_sigma") != std::end(f_knob)) {
-                            map_systematic_knob_vals[it.first] = *f_knob[it.first+"_sigma"];
+                            const std::vector<eweight_type> &kv = *f_knob[it.first+"_sigma"];
+                            auto kprev = map_systematic_knob_vals.find(it.first);
+                            if(kprev == map_systematic_knob_vals.end()){
+                                map_systematic_knob_vals[it.first] = kv;
+                            }else if(kprev->second != kv){
+                                log<LOG_WARNING>(L"%1% || Knob values for systematic %2% in file %3% (%4%) differ from an earlier file's; keeping the first file's values.") % __func__ % it.first.c_str() % fid % inconfig.m_mcgen_file_name[fid].c_str();
+                            }
                         }
                     }
                 }
@@ -1045,7 +1060,7 @@ namespace PROfit {
         log<LOG_DEBUG>(L"%1% || Using a total of %2% individual files") % __func__  % num_files;
 
         std::vector<long int> nentries(num_files,0);
-        std::vector<float> pot_scale(num_files, 1.0);
+        std::vector<std::vector<float>> pot_scale(num_files); // per (file, branch): the detector follows each branch's subchannel
         std::vector<TChain*> chains(num_files, nullptr);
         std::vector<std::vector<TChain*>> friendChains(num_files);
 
@@ -1055,8 +1070,9 @@ namespace PROfit {
             // No xrootd conversion here, matching the pre-refactor data path.
             nentries[fid] = buildMCFileChain(inconfig, fid, /*useXrootD=*/false, chains[fid], friendChains[fid]);
 
-            // grab branches 
+            // grab branches
             int num_branch = inconfig.m_branch_variables[fid].size();
+            pot_scale[fid].assign(num_branch, 1.0f);
             for(int ib = 0; ib != num_branch; ++ib) {
 
                 std::shared_ptr<BranchVariable> branch_variable = inconfig.m_branch_variables[fid][ib];
@@ -1070,13 +1086,15 @@ namespace PROfit {
                 float spec_pot = inconfig.m_det_pot[det];
                 //log<LOG_INFO>(L"%1% || Spectrum will be generated with %2% POT") % __func__ % spec_pot;
                 
+                float ps = 1.0f;
                 if(inconfig.m_mcgen_pot.at(fid) != -1){
-                    pot_scale[fid] = spec_pot/inconfig.m_mcgen_pot.at(fid);
+                    ps = spec_pot/inconfig.m_mcgen_pot.at(fid);
                 }
-                pot_scale[fid] *= inconfig.m_mcgen_scale[fid];
-                pot_scale[fid] /= inconfig.m_mcgen_partial_load_frac[fid];
+                ps *= inconfig.m_mcgen_scale[fid];
+                ps /= inconfig.m_mcgen_partial_load_frac[fid];
+                pot_scale[fid][ib] = ps;
                 log<LOG_INFO>(L"%1% || Branch POT: %2%, additional scale: %3%") % __func__ %  inconfig.m_mcgen_pot.at(fid) % inconfig.m_mcgen_scale[fid];
-                log<LOG_INFO>(L"%1% || POT scale factor: %2%") % __func__ %  pot_scale[fid];
+                log<LOG_INFO>(L"%1% || POT scale factor: %2%") % __func__ %  pot_scale[fid][ib];
 
 
                 //quick check that this branch associated subchannel is in the known chanels;
@@ -1191,7 +1209,7 @@ namespace PROfit {
                 for(int ib = 0; ib != num_branch; ++ib) {
                     std::vector<BranchVariable::Value> vars = branches[ib]->GetVariables();
                     float additional_weight = branches[ib]->GetTotalWeight();
-                    additional_weight *= pot_scale[fid];
+                    additional_weight *= pot_scale[fid][ib];
 
                     if(additional_weight == 0) //skip on event failing cuts
                         continue;

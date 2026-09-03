@@ -23,7 +23,12 @@
     <parameter name="L/E" variable_index="2"/>
 </model>
 
-<!-- Where to find the Montecarlo and how to fill all the subchannels defined above-->
+<!-- Where to find the Montecarlo and how to fill all the subchannels defined above.
+     One MCFile can fill many subchannels via multiple <branch> blocks, and the same
+     subchannel may also be filled by branches in SEVERAL MCFile blocks: each file's
+     events are scaled by its own pot= and the contributions are summed. If systematics
+     apply to a shared subchannel, every file filling it must carry the same weight
+     branches/universe counts (or set incl_systematics="false" on its branch). -->
 <MCFile treename="events/full/selected" filename="/exp/sbnd/data/users/markross/PROfit_Data/Tutorial2025/icarus_disappearance_08292025_sys.root" scale = "1.0" pot="1.67528e21"> 
     <friend treename="events/full/multisigmaTree" />
     <friend treename="events/full/multisimTree" />
