@@ -103,7 +103,7 @@ namespace {
 }
 
 
-PROconfig::PROconfig(const std::string &xml, bool rate_only, int fit_variable):
+PROconfig::PROconfig(const std::string &xml, bool rate_only, int fit_variable, bool quiet_unclaimed_subchannels):
     m_xmlname(xml),
     m_det_pot(),
     m_num_detectors(0),
@@ -124,6 +124,7 @@ PROconfig::PROconfig(const std::string &xml, bool rate_only, int fit_variable):
 {
     // Must be set before LoadFromXML: it resolves i_prime as its very first action.
     m_requested_fit_variable = fit_variable;
+    m_quiet_unclaimed_subchannels = quiet_unclaimed_subchannels;
 
     LoadFromXML(m_xmlname);
 
@@ -2549,7 +2550,10 @@ void PROconfig::remove_unused_files(){
         for(const auto& fullname : m_fullnames){
             auto it = claim_count.find(fullname);
             if(it == claim_count.end()){
-                log<LOG_WARNING>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty.") % __func__ % fullname.c_str();
+                if(m_quiet_unclaimed_subchannels)
+                    log<LOG_DEBUG>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty (expected for this child config).") % __func__ % fullname.c_str();
+                else
+                    log<LOG_WARNING>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty.") % __func__ % fullname.c_str();
             }else if(it->second > 1){
                 log<LOG_INFO>(L"%1% || Subchannel %2% is filled by %3% branches across MCFiles; contributions are POT-weighted and summed.") % __func__ % fullname.c_str() % it->second;
             }
@@ -2931,7 +2935,9 @@ PROconfig PROconfig::BuildDetVarConfig(size_t file_index) const {
     log<LOG_INFO>(L"%1% || Loading DetVar config for '%2%' from temporary XML: %3%") % __func__ % dvfile.name.c_str() % tmpfile.c_str();
     // Inherit the parent's fitting variable (see BuildDataConfig) — PROfit.cxx falls back to
     // the parent's i_prime when the DetVar config's is out of range, so keep them identical.
-    PROconfig dvconfig(tmpfile, m_bool_rate_only, static_cast<int>(i_prime));
+    // quiet_unclaimed_subchannels: the template only carries branches for this section's
+    // subchannels, so the other subchannels being empty is by design.
+    PROconfig dvconfig(tmpfile, m_bool_rate_only, static_cast<int>(i_prime), /*quiet_unclaimed_subchannels=*/true);
     std::filesystem::remove(tmpfile);
 
     // Propagate matching var branch names directly onto the mini-config so PROcess_CAFAna can read them.
