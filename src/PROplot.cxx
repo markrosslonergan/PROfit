@@ -3275,43 +3275,21 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         delete c;
     }
 
-    void plot_profile_vertical_pulls(const std::string &filename, const PROconfig &config, const PROsyst &systs, const PROmodel &model, const Eigen::VectorXf &best_fit, const std::vector<float> &values1_down, const std::vector<float> &values1_up, bool with_osc, bool sort_by_pull) {
-        const std::string suffix  = sort_by_pull ? "_vertical_pullordered" : "_vertical_xmlorder";
-        const std::string outname = filename + suffix + ".pdf";
-        const size_t offset = with_osc ? model.nparams : 0;
-        const int n = (int)systs.GetNSplines();
-        if(n == 0) {
-            log<LOG_WARNING>(L"%1% || No spline parameters to plot, skipping %2%") % __func__ % outname.c_str();
-            return;
-        }
-        if(values1_down.size() < offset + n || values1_up.size() < offset + n || (size_t)best_fit.size() < offset + n) {
-            log<LOG_WARNING>(L"%1% || Profile 1sigma vectors too short (down %2%, up %3%, best_fit %4%, need %5%); skipping %6%")
-                % __func__ % values1_down.size() % values1_up.size() % best_fit.size() % (offset + n) % outname.c_str();
-            return;
-        }
-
-        // Per-spline center (adopted global best fit) and asymmetric errors from
-        // the absolute dchi2=1 crossings of that parameter's profile curve.
-        std::vector<float> bf(n), elo(n), ehi(n);
-        std::vector<std::string> labels(n);
-        for(int i = 0; i < n; ++i) {
-            bf[i] = best_fit(offset + i);
-            const float lo = values1_down[offset + i], hi = values1_up[offset + i];
-            if(bf[i] < lo || bf[i] > hi)
-                log<LOG_WARNING>(L"%1% || Spline %2% best fit %3% outside its profile 1sigma crossings [%4%, %5%]; clamping that error side to 0.")
-                    % __func__ % systs.spline_names[i].c_str() % bf[i] % lo % hi;
-            elo[i] = std::max(0.0f, bf[i] - lo);
-            ehi[i] = std::max(0.0f, hi - bf[i]);
-            auto it = config.m_mcgen_variation_plotname_map.find(systs.spline_names[i]);
-            labels[i] = it != config.m_mcgen_variation_plotname_map.end() ? it->second : systs.spline_names[i];
-        }
-
-        // Display order: row k=0 is the TOP of the page (ROOT y-axis bin n-k).
-        std::vector<int> perm(n);
-        std::iota(perm.begin(), perm.end(), 0);
-        if(sort_by_pull)
-            std::stable_sort(perm.begin(), perm.end(),
-                    [&](int a, int b){ return std::abs(bf[a]) > std::abs(bf[b]); });
+    namespace {
+    // Shared renderer behind the compact vertical pull plots: one row per
+    // entry (entry 0 is the TOP of the page — pass vectors already in display
+    // order), black dot + asymmetric horizontal error bar, translucent +-1
+    // prior band, zebra stripes, right-hand numeric column (auto-switches to
+    // a "+-" format when every error is symmetric). Canvas height grows with
+    // the entry count and the PDF page is fitted to the canvas aspect. Used
+    // by plot_profile_vertical_pulls (spline nuisances) and
+    // plotCovariancePosteriorPulls (covariance modes / bins), so style
+    // changes here reach all of them.
+    void draw_vertical_pull_canvas(const std::string &outname, const std::string &canvas_name,
+            const std::vector<std::string> &labels, const std::vector<float> &bf,
+            const std::vector<float> &elo, const std::vector<float> &ehi, const char *x_title) {
+        const int n = (int)labels.size();
+        if(n == 0) return;
 
         // Symmetric x-range: the +-1 prior band always fully visible, runaway
         // intervals clamped at +-5 (off-scale sides get an arrow below).
@@ -3364,9 +3342,14 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             lab_size = (0.40f * c_width) / (0.55f * (float)max_label_len) / text_basis;
         const float value_size = lab_size;  // numeric column matches the names
         const float value_px = value_size * text_basis;
-        const float right = std::max(130.0f, 5.5f * value_px) / (float)c_width;
+        // The inline "x +- e" format (used when every error is symmetric) is
+        // wider than the stacked asymmetric one -- size the margin for it.
+        bool symmetric = true;
+        for(int k = 0; k < n; ++k)
+            if(elo[k] != ehi[k]) { symmetric = false; break; }
+        const float right = std::max(130.0f, (symmetric ? 7.5f : 5.5f) * value_px) / (float)c_width;
 
-        TCanvas *c = new TCanvas((filename + suffix).c_str(), (filename + suffix).c_str(), c_width, c_height);
+        TCanvas *c = new TCanvas(canvas_name.c_str(), canvas_name.c_str(), c_width, c_height);
         c->cd();
         c->SetLeftMargin(left);
         c->SetRightMargin(right);
@@ -3374,10 +3357,10 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         c->SetBottomMargin((float)bottom_px / (float)c_height);
         c->SetTicks(1, 0);
 
-        TH2F *frame = new TH2F((filename + suffix + "_frame").c_str(), "", 1, -X, X, n, 0, (float)n);
+        TH2F *frame = new TH2F((canvas_name + "_frame").c_str(), "", 1, -X, X, n, 0, (float)n);
         frame->SetStats(0);
         frame->SetDirectory(nullptr);
-        frame->GetXaxis()->SetTitle("(#theta_{BF} #minus #theta_{0}) / #sigma_{prior}");
+        frame->GetXaxis()->SetTitle(x_title);
         frame->GetXaxis()->SetTitleFont(42);
         frame->GetXaxis()->SetLabelFont(42);
         frame->GetXaxis()->SetTitleSize(axis_title_px / text_basis);
@@ -3392,7 +3375,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         // printed size so the mirrored top ticks don't grow on tall canvases.
         frame->GetXaxis()->SetTickLength(px_for(0.15f) / (float)c_height);
         for(int k = 0; k < n; ++k)
-            frame->GetYaxis()->SetBinLabel(n - k, labels[perm[k]].c_str());
+            frame->GetYaxis()->SetBinLabel(n - k, labels[k].c_str());
         frame->GetYaxis()->SetLabelFont(42);
         frame->GetYaxis()->SetLabelSize(lab_size);   // AFTER SetBinLabel: alphanumeric axes reset sizing
         frame->GetYaxis()->SetTickLength(0);
@@ -3429,17 +3412,16 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         const float arrow_len = 0.05f * 2.0f * X;
         TGraphAsymmErrors *g = new TGraphAsymmErrors(n);
         for(int k = 0; k < n; ++k) {
-            const int i = perm[k];
             const float y = (float)n - (float)k - 0.5f;
-            float x = bf[i], exl = elo[i], exh = ehi[i];
+            float x = bf[k], exl = elo[k], exh = ehi[k];
             bool clamp_lo = false, clamp_hi = false;
             if(x < -X) { x = -X + arrow_len; exl = exh = 0; clamp_lo = true; }
             if(x >  X) { x =  X - arrow_len; exl = exh = 0; clamp_hi = true; }
             if(x - exl < -X) { exl = x + X; clamp_lo = true; }
             if(x + exh >  X) { exh = X - x; clamp_hi = true; }
             if(clamp_lo || clamp_hi)
-                log<LOG_WARNING>(L"%1% || Spline %2% 1sigma interval extends past the +-%3% plot range (off-scale arrow drawn).")
-                    % __func__ % systs.spline_names[i].c_str() % X;
+                log<LOG_WARNING>(L"%1% || Entry %2% 1sigma interval extends past the +-%3% plot range (off-scale arrow drawn).")
+                    % __func__ % labels[k].c_str() % X;
             g->SetPoint(k, x, y);
             g->SetPointError(k, exl, exh, 0, 0);
             if(clamp_lo) {
@@ -3464,9 +3446,9 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         // to the frame); fixed left anchor keeps the column aligned.
         const float value_x = X + 0.05f * 2.0f * X;
         for(int k = 0; k < n; ++k) {
-            const int i = perm[k];
             TLatex *t = new TLatex(value_x, (float)n - (float)k - 0.5f,
-                    TString::Format("%.2f^{#plus%.2f}_{#minus%.2f}", bf[i], ehi[i], elo[i]));
+                    symmetric ? TString::Format("%.2f #pm %.2f", bf[k], ehi[k])
+                              : TString::Format("%.2f^{#plus%.2f}_{#minus%.2f}", bf[k], ehi[k], elo[k]));
             t->SetTextAlign(12);
             t->SetTextFont(42);
             t->SetTextSize(value_size);
@@ -3502,6 +3484,57 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         gStyle->SetEndErrorSize(end_err0);
         gStyle->SetPaperSize(paper_w0, paper_h0);
         delete c;
+    }
+    } // anonymous namespace
+
+    void plot_profile_vertical_pulls(const std::string &filename, const PROconfig &config, const PROsyst &systs, const PROmodel &model, const Eigen::VectorXf &best_fit, const std::vector<float> &values1_down, const std::vector<float> &values1_up, bool with_osc, bool sort_by_pull) {
+        const std::string suffix  = sort_by_pull ? "_vertical_pullordered" : "_vertical_xmlorder";
+        const std::string outname = filename + suffix + ".pdf";
+        const size_t offset = with_osc ? model.nparams : 0;
+        const int n = (int)systs.GetNSplines();
+        if(n == 0) {
+            log<LOG_WARNING>(L"%1% || No spline parameters to plot, skipping %2%") % __func__ % outname.c_str();
+            return;
+        }
+        if(values1_down.size() < offset + n || values1_up.size() < offset + n || (size_t)best_fit.size() < offset + n) {
+            log<LOG_WARNING>(L"%1% || Profile 1sigma vectors too short (down %2%, up %3%, best_fit %4%, need %5%); skipping %6%")
+                % __func__ % values1_down.size() % values1_up.size() % best_fit.size() % (offset + n) % outname.c_str();
+            return;
+        }
+
+        // Per-spline center (adopted global best fit) and asymmetric errors from
+        // the absolute dchi2=1 crossings of that parameter's profile curve.
+        std::vector<float> bf(n), elo(n), ehi(n);
+        std::vector<std::string> labels(n);
+        for(int i = 0; i < n; ++i) {
+            bf[i] = best_fit(offset + i);
+            const float lo = values1_down[offset + i], hi = values1_up[offset + i];
+            if(bf[i] < lo || bf[i] > hi)
+                log<LOG_WARNING>(L"%1% || Spline %2% best fit %3% outside its profile 1sigma crossings [%4%, %5%]; clamping that error side to 0.")
+                    % __func__ % systs.spline_names[i].c_str() % bf[i] % lo % hi;
+            elo[i] = std::max(0.0f, bf[i] - lo);
+            ehi[i] = std::max(0.0f, hi - bf[i]);
+            auto it = config.m_mcgen_variation_plotname_map.find(systs.spline_names[i]);
+            labels[i] = it != config.m_mcgen_variation_plotname_map.end() ? it->second : systs.spline_names[i];
+        }
+
+        // Display order: row k=0 is the TOP of the page.
+        std::vector<int> perm(n);
+        std::iota(perm.begin(), perm.end(), 0);
+        if(sort_by_pull)
+            std::stable_sort(perm.begin(), perm.end(),
+                    [&](int a, int b){ return std::abs(bf[a]) > std::abs(bf[b]); });
+        std::vector<std::string> ord_labels(n);
+        std::vector<float> ord_bf(n), ord_elo(n), ord_ehi(n);
+        for(int k = 0; k < n; ++k) {
+            ord_labels[k] = labels[perm[k]];
+            ord_bf[k]  = bf[perm[k]];
+            ord_elo[k] = elo[perm[k]];
+            ord_ehi[k] = ehi[perm[k]];
+        }
+
+        draw_vertical_pull_canvas(outname, filename + suffix, ord_labels, ord_bf, ord_elo, ord_ehi,
+                "(#theta_{BF} #minus #theta_{0}) / #sigma_{prior}");
     }
 
     int plotCovariancePosteriorPulls(const PROconfig &config, const PROpeller &prop, const PROsyst &syst, const PROmodel &model, const Eigen::VectorXf &best_fit, const Eigen::VectorXf &data_spec, const std::string &filename, int var_index, std::map<std::string, TObject*> *drawn_objs) {
@@ -3581,6 +3614,16 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         Eigen::VectorXd bin_shift = L_shift * alpha_hat;
         Eigen::VectorXd bin_prior_var = L_shift.cwiseProduct(L_shift).rowwise().sum();
         Eigen::VectorXd bin_post_var = (L_shift * inner_inv).cwiseProduct(L_shift).rowwise().sum().cwiseMax(0.0);
+
+        // Per-bin conditional shift and posterior width in pre-fit bin-sigma
+        // units, shared by the paginated pages and the vertical companion.
+        std::vector<float> norm_shift(nbins_coll, 0.0f), norm_sigma(nbins_coll, 0.0f);
+        for(size_t i = 0; i < nbins_coll; ++i) {
+            double prior_sigma = std::sqrt(bin_prior_var(i));
+            if(!in_fit[i] || prior_sigma <= 0) continue;
+            norm_shift[i] = bin_shift(i) / prior_sigma;
+            norm_sigma[i] = std::sqrt(bin_post_var(i)) / prior_sigma;
+        }
 
         log<LOG_INFO>(L"%1% || Covariance posterior pulls: %2% modes over %3% bins, max |pull| = %4%, min mode posterior sigma = %5%.")
             % __func__ % k % nb % alpha_hat.cwiseAbs().maxCoeff() % sigma_post.minCoeff();
@@ -3712,12 +3755,8 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             const float bar_halfwidth = std::max(0.08f, std::min(0.4f, 4.0f / per_page));
 
             float minVal = -1.2f, maxVal = 1.2f;
-            std::vector<float> norm_shift(nbins_coll, 0.0f), norm_sigma(nbins_coll, 0.0f);
             for(size_t i = 0; i < nbins_coll; ++i) {
-                double prior_sigma = std::sqrt(bin_prior_var(i));
-                if(!in_fit[i] || prior_sigma <= 0) continue;
-                norm_shift[i] = bin_shift(i) / prior_sigma;
-                norm_sigma[i] = std::sqrt(bin_post_var(i)) / prior_sigma;
+                if(!in_fit[i] || bin_prior_var(i) <= 0) continue;
                 minVal = std::min(minVal, norm_shift[i] - norm_sigma[i]);
                 maxVal = std::max(maxVal, norm_shift[i] + norm_sigma[i]);
             }
@@ -3814,6 +3853,38 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         }
         c->Print((filename+"]").c_str());
         delete c;
+
+        // Vertical companions in the profile spline-pull style: one row per
+        // mode / in-fit bin on a single tall page (the paginated horizontal
+        // file above stays the reference for very high entry counts).
+        std::string vert_base = filename;
+        if(vert_base.size() > 4 && vert_base.compare(vert_base.size() - 4, 4, ".pdf") == 0)
+            vert_base.resize(vert_base.size() - 4);
+        {
+            std::vector<std::string> mode_labels(k);
+            std::vector<float> mode_bf(k), mode_err(k);
+            for(size_t j = 0; j < k; ++j) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "mode %d (%.1f%%)", (int)j, 100.0 * L_shift.col(j).squaredNorm() / total_variance);
+                mode_labels[j] = buf;
+                mode_bf[j]  = (float)alpha_hat(j);
+                mode_err[j] = (float)sigma_post(j);
+            }
+            draw_vertical_pull_canvas(vert_base + "_vertical_modes.pdf", vert_base + "_vertical_modes",
+                    mode_labels, mode_bf, mode_err, mode_err, "Mode pull #hat{#alpha} (prior #sigma = 1)");
+        }
+        {
+            std::vector<std::string> bin_labels;
+            std::vector<float> bin_bf, bin_err;
+            for(size_t i = 0; i < nbins_coll; ++i) {
+                if(!in_fit[i] || bin_prior_var(i) <= 0) continue;
+                bin_labels.push_back("bin " + std::to_string(i));
+                bin_bf.push_back(norm_shift[i]);
+                bin_err.push_back(norm_sigma[i]);
+            }
+            draw_vertical_pull_canvas(vert_base + "_vertical_bins.pdf", vert_base + "_vertical_bins",
+                    bin_labels, bin_bf, bin_err, bin_err, "Bin shift / pre-fit #sigma_{bin}");
+        }
 
         if(drawn_objs) {
             // Full mode list (not capped at maxShow) for the ROOT file.

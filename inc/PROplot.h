@@ -452,7 +452,10 @@ namespace PROfit{
      * descending); then the per-bin conditional shift divided by the pre-fit bin
      * sigma, with the posterior/pre-fit width ratio as the bar height (bins outside the fit
      * — inactive or zero data — are hatched). Everything is evaluated analytically at the
-     * best fit, matching PROerrorbar::center_shift.
+     * best fit, matching PROerrorbar::center_shift. Alongside the paginated horizontal
+     * file, single-page vertical companions in the plot_profile_vertical_pulls style
+     * (dot + error bar per row, numeric column) are written to
+     * `<filename minus .pdf>_vertical_modes.pdf` and `..._vertical_bins.pdf`.
      * @param config     Analysis configuration.
      * @param prop       MC event store.
      * @param syst       Systematics (must have covariance-type entries to plot anything).
