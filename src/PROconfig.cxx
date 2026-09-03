@@ -1294,42 +1294,52 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
 
                 // Auto-inherit branches from MCFile entries by matching associated_subchannel.
-                // A subchannel may be filled by several branches/MCFiles; the DetVar
-                // template inherits variables/weights from the FIRST declaring one only
-                // (emitting one <branch> per match would double-fill the DetVar spectrum).
+                // A subchannel may be filled by several branches/MCFiles. Every DISTINCT
+                // branch definition (model_rule/weights incl. the additional_weight cut/
+                // variables) is emitted once, so a population assembled from differing
+                // selections is fully mirrored onto the DetVar sample; branches that are
+                // bitwise-identical after reconstruction (the same selection split across
+                // production MCFiles for statistics) are emitted only once — emitting each
+                // copy would double-fill the DetVar spectrum.
                 for(const auto& sc_name : section_subchannels) {
                     bool found_any = false;
-                    for(size_t fi = 0; fi < m_branch_variables.size() && !found_any; fi++) {
+                    std::set<std::string> emitted_branches;
+                    for(size_t fi = 0; fi < m_branch_variables.size(); fi++) {
                         for(size_t bi = 0; bi < m_branch_variables[fi].size(); bi++) {
-                            if(m_branch_variables[fi][bi]->associated_hist == sc_name) {
-                                found_any = true;
-                                log<LOG_INFO>(L"%1% || DetVar subchannel %2% inherits variables/weights from MCFile %3% (%4%)") % __func__ % sc_name.c_str() % fi % m_mcgen_file_name[fi].c_str();
-                                // Reconstruct <branch> XML from stored data
-                                dvXml << "\t<branch associated_subchannel=\"" << sc_name << "\"";
-                                if(m_branch_variables[fi][bi]->model_rule >= 0) {
-                                    dvXml << " model_rule=\"" << m_branch_variables[fi][bi]->model_rule << "\"";
-                                }
-                                if(m_mcgen_eventweight_branch_syst[fi][bi] == 0) {
-                                    dvXml << " incl_systematics=\"false\"";
-                                }
-                                // Weights (filtered by include_only_weights if set for this section)
-                                const std::vector<int>& sec_iow = m_detvar_include_only_weights_per_section[section_idx];
-                                int out_wi = 1;
-                                for(size_t wi = 0; wi < m_mcgen_weight_names[fi][bi].size(); wi++) {
-                                    if(!sec_iow.empty() && std::find(sec_iow.begin(), sec_iow.end(), (int)(wi+1)) == sec_iow.end()) continue;
-                                    dvXml << " weight_" << out_wi++ << "=\"" << m_mcgen_weight_names[fi][bi][wi] << "\"";
-                                }
-                                // Append extra weights defined only for this DetVarSection
-                                for(const auto& ew : m_detvar_extra_weights_per_section[section_idx]) {
-                                    dvXml << " weight_" << out_wi++ << "=\"" << ew << "\"";
-                                }
-                                dvXml << ">\n";
-                                // Variables
-                                for(const auto& vname : m_branch_variables[fi][bi]->variable_names) {
-                                    dvXml << "\t\t<variable>" << vname << "</variable>\n";
-                                }
-                                dvXml << "\t</branch>\n";
-                                break;
+                            if(m_branch_variables[fi][bi]->associated_hist != sc_name) continue;
+                            found_any = true;
+                            // Reconstruct <branch> XML from stored data
+                            std::ostringstream brXml;
+                            brXml << "\t<branch associated_subchannel=\"" << sc_name << "\"";
+                            if(m_branch_variables[fi][bi]->model_rule >= 0) {
+                                brXml << " model_rule=\"" << m_branch_variables[fi][bi]->model_rule << "\"";
+                            }
+                            if(m_mcgen_eventweight_branch_syst[fi][bi] == 0) {
+                                brXml << " incl_systematics=\"false\"";
+                            }
+                            // Weights (filtered by include_only_weights if set for this section)
+                            const std::vector<int>& sec_iow = m_detvar_include_only_weights_per_section[section_idx];
+                            int out_wi = 1;
+                            for(size_t wi = 0; wi < m_mcgen_weight_names[fi][bi].size(); wi++) {
+                                if(!sec_iow.empty() && std::find(sec_iow.begin(), sec_iow.end(), (int)(wi+1)) == sec_iow.end()) continue;
+                                brXml << " weight_" << out_wi++ << "=\"" << m_mcgen_weight_names[fi][bi][wi] << "\"";
+                            }
+                            // Append extra weights defined only for this DetVarSection
+                            for(const auto& ew : m_detvar_extra_weights_per_section[section_idx]) {
+                                brXml << " weight_" << out_wi++ << "=\"" << ew << "\"";
+                            }
+                            brXml << ">\n";
+                            // Variables
+                            for(const auto& vname : m_branch_variables[fi][bi]->variable_names) {
+                                brXml << "\t\t<variable>" << vname << "</variable>\n";
+                            }
+                            brXml << "\t</branch>\n";
+
+                            if(emitted_branches.insert(brXml.str()).second) {
+                                log<LOG_INFO>(L"%1% || DetVar subchannel %2% inherits a branch definition from MCFile %3% (%4%)") % __func__ % sc_name.c_str() % fi % m_mcgen_file_name[fi].c_str();
+                                dvXml << brXml.str();
+                            } else {
+                                log<LOG_DEBUG>(L"%1% || DetVar subchannel %2%: identical branch definition in MCFile %3% already inherited, skipping duplicate.") % __func__ % sc_name.c_str() % fi;
                             }
                         }
                     }
@@ -2445,123 +2455,50 @@ void PROconfig::remove_unused_channel(){
 
 void PROconfig::remove_unused_files(){
 
-
-    //ignore any files not associated with used channels 
-    //clean up branches not associated with used channels 
+    //Validate every <branch>'s associated_subchannel and report subchannel
+    //coverage. The old use="false" channel-disable mechanism is gone, so every
+    //parsed subchannel is in use and a branch matching no fullname is always a
+    //config error (typo) -- fatal, like the historic PROcess_CAFAna check.
+    //A subchannel may be claimed by more than one branch (in the same or
+    //different MCFiles): every claiming branch is kept and their contributions
+    //are POT-weighted and summed at fill time. Nothing is ever pruned, so all
+    //per-file m_mcgen_* vectors keep their parse-time indexing.
     size_t num_all_branches = 0;
     for(auto& br : m_branch_variables)
         num_all_branches += br.size();
 
-    log<LOG_DEBUG>(L"%1% || Deubg: BRANCH VARIABLE size: %2% ") % __func__ % m_branch_variables.size();;
-    log<LOG_DEBUG>(L"%1% || Check for any files associated with unused subchannels ....") % __func__;
     log<LOG_DEBUG>(L"%1% || Total number of %2% active subchannels..") % __func__ % m_fullnames.size();
     log<LOG_DEBUG>(L"%1% || Total number of %2% branches listed in the xml....") % __func__ % num_all_branches;
 
-    //update file info
-    //loop over all branches, and ignore ones not used. A subchannel may be
-    //claimed by more than one branch (in the same or different MCFiles):
-    //every claiming branch is kept and their contributions are POT-weighted
-    //and summed at fill time.
-    {
-        std::unordered_set<std::string> set_all_names(m_fullnames.begin(), m_fullnames.end());
-        std::unordered_map<std::string, int> claim_count;
+    std::unordered_set<std::string> set_all_names(m_fullnames.begin(), m_fullnames.end());
+    std::unordered_map<std::string, int> claim_count;
 
-        std::vector<std::string> temp_tree_name;
-        std::vector<std::string> temp_file_name;
-        std::vector<long int> temp_maxevents;
-        std::vector<float> temp_pot;
-        std::vector<float> temp_scale;
-        std::vector<float> temp_partial_load_frac;
-        std::vector<int> temp_numfriends;
-        std::vector<bool> temp_fake;
-        std::vector<std::vector<std::string>> temp_file_friend_map;
-        std::vector<std::vector<std::string>> temp_file_friend_treename_map;
-        std::vector<std::vector<std::vector<std::string>>> temp_weight_names;
-        std::vector<std::vector<int>> temp_num_weights;
-        std::vector<std::vector<std::shared_ptr<BranchVariable>>> temp_branch_variables;
-        std::vector<std::vector<std::string>> temp_eventweight_branch_names;
-        std::vector<std::vector<int>> temp_eventweight_branch_syst;
-
-        for(size_t i = 0; i != m_mcgen_file_name.size(); ++i){
-            log<LOG_DEBUG>(L"%1% || Check on @%2% th file: %3%...") % __func__ % i % m_mcgen_file_name[i].c_str();
-            bool this_file_needed = false;
-
-            std::vector<std::vector<std::string>> this_file_weight_names;
-            std::vector<int> this_file_num_weights;
-            std::vector<std::shared_ptr<BranchVariable>> this_file_branch_variables;
-            std::vector<std::string> this_file_eventweight_branch_names;
-            std::vector<int> this_file_eventweight_branch_syst;
-            for(size_t j = 0; j != m_branch_variables[i].size(); ++j){
-
-                if(set_all_names.find(m_branch_variables[i][j]->associated_hist) == set_all_names.end()){
-                    log<LOG_INFO>(L"%1% || Branch for subchannel %2% in file %3% does not match any active subchannel, dropping it.") % __func__ % m_branch_variables[i][j]->associated_hist.c_str() % m_mcgen_file_name[i].c_str();
-                }else{
-
-                    ++claim_count[m_branch_variables[i][j]->associated_hist];
-                    this_file_needed = true;
-
-                    this_file_weight_names.push_back(m_mcgen_weight_names[i][j]);
-                    this_file_num_weights.push_back(m_mcgen_num_weights[i][j]);
-                    this_file_branch_variables.push_back(m_branch_variables[i][j]);
-                    this_file_eventweight_branch_names.push_back(m_mcgen_eventweight_branch_names[i][j]);
-                    this_file_eventweight_branch_syst.push_back(m_mcgen_eventweight_branch_syst[i][j]);
-                }
+    for(size_t i = 0; i != m_mcgen_file_name.size(); ++i){
+        for(size_t j = 0; j != m_branch_variables[i].size(); ++j){
+            const std::string &assoc = m_branch_variables[i][j]->associated_hist;
+            if(set_all_names.find(assoc) == set_all_names.end()){
+                log<LOG_ERROR>(L"%1% || Branch associated_subchannel '%2%' in file %3% does not match any defined subchannel fullname!") % __func__ % assoc.c_str() % m_mcgen_file_name[i].c_str();
+                log<LOG_ERROR>(L"%1% || There is probably a typo somewhere in the xml!") % __func__;
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
             }
-
-            if(this_file_needed){
-                log<LOG_DEBUG>(L"%1% || This file is active, keep it!") % __func__ ;
-                temp_tree_name.push_back(m_mcgen_tree_name[i]);
-                temp_file_name.push_back(m_mcgen_file_name[i]);
-                temp_maxevents.push_back(m_mcgen_maxevents[i]);
-                temp_pot.push_back(m_mcgen_pot[i]);
-                temp_scale.push_back(m_mcgen_scale[i]);
-                temp_partial_load_frac.push_back(m_mcgen_partial_load_frac[i]);
-                temp_numfriends.push_back(m_mcgen_numfriends[i]);
-                temp_fake.push_back(m_mcgen_fake[i]);
-                temp_file_friend_map.push_back(m_mcgen_file_friend_map[i]);
-                temp_file_friend_treename_map.push_back(m_mcgen_file_friend_treename_map[i]);
-
-                temp_weight_names.push_back(this_file_weight_names);
-                temp_num_weights.push_back(this_file_num_weights);
-                temp_branch_variables.push_back(this_file_branch_variables);
-                temp_eventweight_branch_names.push_back(this_file_eventweight_branch_names);
-                temp_eventweight_branch_syst.push_back(this_file_eventweight_branch_syst);
-            }else{
-                log<LOG_INFO>(L"%1% || File %2% fills no active subchannels, dropping it.") % __func__ % m_mcgen_file_name[i].c_str();
-            }
+            ++claim_count[assoc];
         }
+    }
 
-        m_mcgen_file_name = temp_file_name;
-        m_mcgen_tree_name = temp_tree_name;
-        m_mcgen_maxevents = temp_maxevents;
-        m_mcgen_pot = temp_pot;
-        m_mcgen_scale = temp_scale;
-        m_mcgen_partial_load_frac = temp_partial_load_frac;
-        m_mcgen_numfriends = temp_numfriends;
-        m_mcgen_fake = temp_fake;
-        m_mcgen_file_friend_map =temp_file_friend_map;
-        m_mcgen_file_friend_treename_map = temp_file_friend_treename_map;
-        m_mcgen_weight_names = temp_weight_names;
-        m_mcgen_num_weights = temp_num_weights;
-        m_branch_variables = temp_branch_variables;
-        m_mcgen_eventweight_branch_names = temp_eventweight_branch_names;
-        m_mcgen_eventweight_branch_syst = temp_eventweight_branch_syst;
-
-        for(const auto& fullname : m_fullnames){
-            auto it = claim_count.find(fullname);
-            if(it == claim_count.end()){
-                if(m_quiet_unclaimed_subchannels)
-                    log<LOG_DEBUG>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty (expected for this child config).") % __func__ % fullname.c_str();
-                else
-                    log<LOG_WARNING>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty.") % __func__ % fullname.c_str();
-            }else if(it->second > 1){
-                log<LOG_INFO>(L"%1% || Subchannel %2% is filled by %3% branches across MCFiles; contributions are POT-weighted and summed.") % __func__ % fullname.c_str() % it->second;
-            }
+    for(const auto& fullname : m_fullnames){
+        auto it = claim_count.find(fullname);
+        if(it == claim_count.end()){
+            if(m_quiet_unclaimed_subchannels)
+                log<LOG_DEBUG>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty (expected for this child config).") % __func__ % fullname.c_str();
+            else
+                log<LOG_WARNING>(L"%1% || Subchannel %2% is not filled by any <branch> in any <MCFile>; its bins will be empty.") % __func__ % fullname.c_str();
+        }else if(it->second > 1){
+            log<LOG_INFO>(L"%1% || Subchannel %2% is filled by %3% branches across MCFiles; contributions are POT-weighted and summed.") % __func__ % fullname.c_str() % it->second;
         }
     }
 
     m_num_mcgen_files = m_mcgen_file_name.size();
-    log<LOG_DEBUG>(L"%1% || Finish cleaning up, total of %2% files left.") % __func__ % m_num_mcgen_files;
     return;
 }
 

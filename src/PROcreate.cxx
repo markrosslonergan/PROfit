@@ -458,7 +458,14 @@ namespace PROfit {
 
                         log<LOG_INFO>(L"%1% || %2% has %3% montecarlo variations in branch %4%") % __func__ % it.first.c_str() % it.second->size() % branch_variable->associated_hist.c_str();
 
+                        // Cross-file consistency: universes from every file sharing a
+                        // systematic land in the same SystStruct slots, so the counts must
+                        // agree. A zero-size vector here means this file's probe entry
+                        // carries no weights for the systematic — skip it rather than
+                        // record a misleading count (the fill-time size guard catches any
+                        // real per-event shortfall with a named error).
                         int nuniv = (int)it.second->size();
+                        if(nuniv == 0) continue;
                         auto prev = map_systematic_universe_source.find(it.first);
                         if(prev != map_systematic_universe_source.end() && prev->second.second != nuniv){
                             log<LOG_ERROR>(L"%1% || Systematic %2% has %3% universes in file %4% (%5%) but %6% in file %7% (%8%). Every MCFile whose subchannels are covered by a systematic must carry the same number of universes for it, or exempt itself via apply_to_subchannel= or incl_systematics=\"false\".") % __func__ % it.first.c_str() % prev->second.second % prev->second.first % inconfig.m_mcgen_file_name[prev->second.first].c_str() % nuniv % fid % inconfig.m_mcgen_file_name[fid].c_str();
@@ -466,14 +473,19 @@ namespace PROfit {
                             exit(EXIT_FAILURE);
                         }
                         map_systematic_universe_source.emplace(it.first, std::make_pair(fid, nuniv));
-                        map_systematic_num_universe[it.first] = std::max((int)map_systematic_num_universe[it.first], nuniv);
+                        map_systematic_num_universe[it.first] = nuniv;
                         if(f_knob.find(it.first+"_sigma") != std::end(f_knob)) {
                             const std::vector<eweight_type> &kv = *f_knob[it.first+"_sigma"];
                             auto kprev = map_systematic_knob_vals.find(it.first);
                             if(kprev == map_systematic_knob_vals.end()){
                                 map_systematic_knob_vals[it.first] = kv;
                             }else if(kprev->second != kv){
-                                log<LOG_WARNING>(L"%1% || Knob values for systematic %2% in file %3% (%4%) differ from an earlier file's; keeping the first file's values.") % __func__ % it.first.c_str() % fid % inconfig.m_mcgen_file_name[fid].c_str();
+                                // Same count but different sigma grid/order: file B's universes
+                                // would land on file A's knot positions — a silently scrambled
+                                // spline, the same corruption class as duplicate knobvals.
+                                log<LOG_ERROR>(L"%1% || Knob (sigma) values for systematic %2% in file %3% (%4%) differ from an earlier file's. Files sharing a systematic must store identical knob grids, or exempt themselves via apply_to_subchannel= or incl_systematics=\"false\".") % __func__ % it.first.c_str() % fid % inconfig.m_mcgen_file_name[fid].c_str();
+                                log<LOG_ERROR>(L"Terminating.");
+                                exit(EXIT_FAILURE);
                             }
                         }
                     }
@@ -882,6 +894,32 @@ namespace PROfit {
                 }
             }
 
+            // Systematics dilution for shared subchannels: a branch with
+            // incl_systematics="false" whose subchannel is ALSO filled by a
+            // systematics-carrying branch (in any MCFile) must still enter every
+            // SystStruct CV and universe at its CV weight. Otherwise the fractional
+            // response — built from the carrying file's events alone — is scaled by
+            // the full summed prediction at chi^2 time, overestimating the systematic
+            // by (total/carrying) in every shared bin. Routing such a branch through
+            // the fill with an all-zero applies mask reuses the apply_to_subchannel
+            // non-matching path (CV-weight fill, no weight branches read), which
+            // dilutes exactly. A subchannel with no systematics-carrying claimant
+            // keeps the historic skip, so single-source configs are unchanged.
+            const std::vector<char> zero_syst_applies(total_num_systematics, 0);
+            std::vector<char> branch_force_cv_fill(num_branch, 0);
+            for(int ib = 0; ib != num_branch; ++ib){
+                if(branches[ib]->GetIncludeSystematics()) continue;
+                bool shared_with_syst_branch = false;
+                for(const auto& file_branches : inconfig.m_branch_variables)
+                    for(const auto& other : file_branches)
+                        if(other->GetIncludeSystematics() && other->associated_hist == branches[ib]->associated_hist)
+                            shared_with_syst_branch = true;
+                if(shared_with_syst_branch){
+                    branch_force_cv_fill[ib] = 1;
+                    log<LOG_INFO>(L"%1% || Subchannel %2% mixes incl_systematics=\"false\" and systematics-carrying branches: this branch's events fill all universes at CV weight so the shared fractional systematics are correctly diluted.") % __func__ % branches[ib]->associated_hist.c_str();
+                }
+            }
+
 
             // Prune unused branches: disable everything, then re-enable only what our
             // formulas and eventweight maps actually need.  This prevents loading large
@@ -999,7 +1037,7 @@ namespace PROfit {
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
                     const size_t prop_size_before = inprop.NEvent();
-                    process_cafana_event(inconfig, branches[ib], f_event_weights[fid][0], inconfig.m_mcgen_pot[fid]  / inconfig.m_mcgen_scale[fid] * inconfig.m_mcgen_partial_load_frac[fid], subchannel_index[ib], syst_vector, sys_weight_value, branch_syst_applies[ib], inprop);
+                    process_cafana_event(inconfig, branches[ib], f_event_weights[fid][0], inconfig.m_mcgen_pot[fid]  / inconfig.m_mcgen_scale[fid] * inconfig.m_mcgen_partial_load_frac[fid], subchannel_index[ib], syst_vector, sys_weight_value, branch_force_cv_fill[ib] ? zero_syst_applies : branch_syst_applies[ib], inprop, (bool)branch_force_cv_fill[ib]);
                     // Store matching vars only if process_cafana_event actually added an entry
                     // (it skips zero-weight events without pushing to added_weights).
                     if(has_matching_vars && inprop.NEvent() > prop_size_before) {
@@ -1253,14 +1291,14 @@ namespace PROfit {
     }
 
 
-    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop){
+    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill){
 
 
 
         int total_num_sys = syst_vector[0].size(); 
         std::vector<BranchVariable::Value> vars = branch->GetVariables();
 
-        int run_syst = branch->GetIncludeSystematics();
+        int run_syst = branch->GetIncludeSystematics() || force_syst_cv_fill;
 
         // Compute individual weight values for potential use with include_only_weights
         int num_weights = branch->NumWeights();
@@ -1332,6 +1370,17 @@ namespace PROfit {
                 log<LOG_ERROR>(L"%1% || ERROR: systematic '%2%' (mode %3%) has no entry in the event weight map. "
                                L"Check that the variation name matches a weight branch in the input files.")
                     % __func__ % var_syst_objs.front()->GetSysName().c_str() % sys_mode.c_str();
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+            // Per-event universe-count guard: the setup-time check reads one probe
+            // entry per MCFile, which cannot see mixed universe counts inside a
+            // TChain wildcard or per-event variation. Fail here with names instead
+            // of a bare std::out_of_range from the ->at() calls below.
+            if(needs_weights && applies && (int)map_iter->second->size() < var_syst_objs.front()->GetNUniverse()){
+                log<LOG_ERROR>(L"%1% || ERROR: systematic '%2%' has only %3% universe weights in the current event but %4% are expected. "
+                               L"Mixed universe counts across the files of one <MCFile> (TChain wildcard/filelist)?")
+                    % __func__ % var_syst_objs.front()->GetSysName().c_str() % map_iter->second->size() % var_syst_objs.front()->GetNUniverse();
                 log<LOG_ERROR>(L"Terminating.");
                 exit(EXIT_FAILURE);
             }
