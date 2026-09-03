@@ -28,12 +28,28 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
     // Decay models compute counts directly in get_counts and leave model_functions empty;
     // for those, the number of components comes from prob_types instead.
     size_t J    = model_functions.empty() ? prob_types.size() : model_functions.size();
-    hists.resize(nvar);
     H_combined.resize(nvar);
+
+    // This pre-bins the WHOLE MC event store into the dense binned-eval
+    // response matrices for every variable, and is the silent chunk of model
+    // construction — announce the size up front so a long stall here is
+    // labeled (it scales with subchannel count via the uncollapsed reco bins).
+    {
+        size_t total_floats = 0;
+        for(size_t v = 0; v < nvar; ++v)
+            total_floats += prop.variable_mc_stat_err[v].size() * (size_t)n_phys_bins * J;
+        log<LOG_INFO>(L"%1% || Pre-binning %2% MC events into response matrices: %3% variables x %4% components x %5% physics-grid bins (~%6% MB). This runs once per model construction.")
+            % __func__ % prop.NEvent() % nvar % J % n_phys_bins
+            % (total_floats * sizeof(float) / (1024.0 * 1024.0));
+    }
 
     for(size_t v = 0; v < nvar; ++v) {
         size_t n_reco_v = prop.variable_mc_stat_err[v].size();
-        hists[v].assign(J, Eigen::MatrixXf::Zero(n_reco_v, n_phys_bins));
+        // Fill events directly into component m's column block
+        // [m*n_phys_bins, (m+1)*n_phys_bins) of H_combined[v] — no per-component
+        // staging copy (nothing read the old `hists` member, and the duplicate
+        // doubled peak memory plus a full zero+copy pass).
+        H_combined[v] = Eigen::MatrixXf::Zero(n_reco_v, n_phys_bins * J);
         for(size_t i = 0; i < prop.NEvent(); ++i) {
             int rbin = prop.VariableBinIndex(v, i);
             if(rbin < 0) continue;
@@ -57,13 +73,8 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
             }
             if(!valid) continue;
 
-            hists[v][col](rbin, flat_phys) += prop.added_weights[i];
+            H_combined[v](rbin, (long int)col * n_phys_bins + flat_phys) += prop.added_weights[i];
         }
-        // Build H_combined[v] = [hists[v][0] | hists[v][1] | ... | hists[v][J-1]]
-        // shape: (n_reco_v, n_phys_bins * J)
-        H_combined[v].resize(n_reco_v, n_phys_bins * J);
-        for(size_t m = 0; m < J; ++m)
-            H_combined[v].block(0, m * n_phys_bins, n_reco_v, n_phys_bins) = hists[v][m];
     }
 
     // Store per-ivar bin counts for downstream use (e.g. decay redistribution).

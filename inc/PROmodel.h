@@ -72,11 +72,11 @@ public:
     /// for physics parameters @p phys and kinematic variable value @p x.
     std::vector<std::function<float(const Eigen::VectorXf&, float)>> model_functions;
     std::function<int(const Eigen::VectorXf&)> model_constraint; ///< Optional parameter constraint function.
-    /// Pre-binned histograms: hists[v][m] has shape (n_reco_v, n_phys_bins).
-    /// v = reco variable index, m = probability-type index.  Transposed for cache efficiency.
-    std::vector<std::vector<Eigen::MatrixXf>> hists;
-    /// Combined histograms H_combined[v] = horizontal concatenation of hists[v][0..J-1],
-    /// shape (n_reco_v, n_phys_bins * J).  Enables a single GEMV in FillSpectra.
+    /// Pre-binned event histograms, one matrix per reco variable v of shape
+    /// (n_reco_v, n_phys_bins * J): component m's block is columns
+    /// [m*n_phys_bins, (m+1)*n_phys_bins). Enables a single GEMV in FillSpectra.
+    /// (Events are filled directly into these blocks; there is no separate
+    /// per-component staging copy.)
     std::vector<Eigen::MatrixXf> H_combined;
 
     std::vector<size_t> prob_types; ///< Probability-type indices, matching model_functions indices.
@@ -94,7 +94,7 @@ public:
     bool is_trivial = false;
 
     /**
-     * @brief Build hists and H_combined from PROpeller event data.
+     * @brief Build H_combined from PROpeller event data.
      * @details Must be called after ivars and model_functions are set.  Iterates over all
      * events in @p prop, distributes them onto the flat physics grid, and constructs the
      * concatenated H_combined matrices used by FillSpectra.
