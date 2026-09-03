@@ -318,8 +318,12 @@ namespace PROfit{
              *                     A value >= 0 wins over the XML; it is what --fit-variable
              *                     passes, and what BuildDataConfig()/BuildDetVarConfig() pass so
              *                     that child configs always fit the same variable as their parent.
+             * @param quiet_unclaimed_subchannels Log subchannels with no filling <branch> at
+             *                     DEBUG instead of WARNING. Passed as true by BuildDetVarConfig():
+             *                     DetVar child configs only carry branches for the section's
+             *                     subchannels, so the emptiness is by design, not a config error.
              */
-            PROconfig(const std::string &xmlname,bool rate_only=false,int fit_variable=-1);
+            PROconfig(const std::string &xmlname,bool rate_only=false,int fit_variable=-1,bool quiet_unclaimed_subchannels=false);
 
             /*
              * Function: Use TinyXML2 to load XML */
@@ -399,6 +403,11 @@ namespace PROfit{
 
             /// Constructor-supplied override for i_prime; -1 = "resolve from the XML". See PROconfig().
             int m_requested_fit_variable = -1;
+
+            /// Demote the "subchannel not filled by any <branch>" coverage WARNING to DEBUG.
+            /// Set (via the constructor) for DetVar child configs, whose generated MCFile
+            /// template deliberately carries branches only for the section's subchannels.
+            bool m_quiet_unclaimed_subchannels = false;
 
             // New
             std::vector<bool> m_channel_variable_plot_bool;
