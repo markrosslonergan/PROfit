@@ -349,6 +349,7 @@ The five main `type`s:
 | `norm` | you, in the XML (`pattern:fraction`) | ONE spline parameter giving a flat ±fraction normalisation on every subchannel whose fullname contains the pattern — 100% correlated inside the match, uncorrelated outside | yes (a spline; fraction must be < 0.333) |
 | `flat` | you, in the XML (`pattern:fraction`) | diagonal-only covariance — the error is uncorrelated bin-by-bin | no |
 | `binned_unconstrained` | you, in the XML (a name; scope via `apply_to_subchannel`) | ONE free, un-pulled normalisation parameter **per bin** of the `binning` variable, shared by every matched subchannel — the bins float independently inside `scale_range` (default ×0 to ×10) with a uniform prior | yes, N of them, named `<name>_bin0..<name>_bin(N-1)`, in units of (scale − 1) |
+| `covariance_to_spline_uniform` | the SUM of the `covariance` entries matched by `sources="regex"` (which are then not built on their own) | the `num_decomp_knobs` leading eigenmodes of the fractional covariance become **free, un-pulled** linear splines inside `restrict` (default ±10σ of the mode); the remaining modes stay a Gaussian residual covariance (`include_resid_cov`, default on) | yes, N of them, named `<name>_decomp_knob_0..(N-1)`, in σ units of each mode |
 
 `mcstat` you will almost always want on (finite MC statistics IS a
 systematic on the prediction); `norm` is the right tool for flux
@@ -435,6 +436,47 @@ its box is `[lo−1, hi−1]`, and there is **no Gaussian pull** (it is a
 * `prior=`, `center=`, `prior_type=`, `restrict=` and `<correlation>` are
   refused for these entries; FC/Brazil throws share the uniform-spline
   caveat above (truncated Gaussian, not uniform).
+
+### Freeing the leading modes of a covariance: `covariance_to_spline_uniform`
+
+```xml
+<!-- the 13 flux multisims stay declared as usual ... -->
+<allowlist type="covariance" tag="Flux" plotname="piplus">multisim_piplus_Flux</allowlist>
+...
+<!-- ... and this entry sums their covariances and frees the 5 leading modes of the sum -->
+<allowlist type="covariance_to_spline_uniform" num_decomp_knobs="5" sources="multisim_.*_Flux"
+           tag="FreeFluxModes" plotname="Flux mode">flux_modes</allowlist>
+```
+
+The same eigen-decomposition as `covariance_to_spline`, applied to the
+**sum** of the `type="covariance"` entries whose names match `sources`
+(unanchored regex, like every other pattern site; anchor it, e.g.
+`sources="^multisim_piplus_Flux$"`, to decompose a single entry). The
+retained knobs `<name>_decomp_knob_0..(N-1)` carry **no Gaussian pull**:
+each floats freely inside `restrict="lo, hi"` (σ units of its mode; default
+±10σ). The un-kept modes are folded into `<name>_resid_cov` as usual
+(`include_resid_cov="false"` drops them). This asks "what if the shape of
+the existing uncertainty were right but its size were unknown" — the middle
+ground between trusting the covariance as a prior and freeing every bin
+independently (`binned_unconstrained`).
+
+The source entries are what gets read from the files (so `scale=`,
+`inflate=` and `apply_to_subchannel=` belong on them); they are then **not**
+built as covariances of their own — their variance lives only in the modes
+plus the residual covariance, so nothing is counted twice. The sum is formed
+in the fitting variable's bin space, so the modes are exactly the ones the χ²
+sees. Notes:
+
+* `sources` and `num_decomp_knobs` are both **mandatory** (freeing *all*
+  modes of a reco-space matrix is almost never what you want);
+* `prior=`, `center=`, `prior_type=`, `binning=` and `<correlation>` are
+  refused for this entry;
+* the parent name expands to its children in `--syst-list`/`--exclude-systs`
+  (this now also holds for plain `covariance_to_spline`); `--fix` and
+  `--inject-systs` take the `_decomp_knob_<k>` names; a consumed source entry
+  is no longer a fit object, so its own name resolves nowhere;
+* the usual uniform-spline caveats: PROplot's pre-fit band throws a truncated
+  Gaussian for these knobs (not meaningful), and so do FC/Brazil throws.
 
 ### Asymmetric errors from histogram sources: `<HistVarFiles>`
 

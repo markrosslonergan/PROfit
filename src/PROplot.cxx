@@ -3927,6 +3927,14 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             const int nbins = static_cast<int>(dbg.original_frac_cov.rows());
             const int K = static_cast<int>(dbg.kept_indices.size());
             const int n_eig = static_cast<int>(dbg.eigenvalues.size());
+            // The nbins x nbins matrix pages (2 and 2b) are vector graphics with nbins^2 cells each;
+            // for large matrices (e.g. a 2400-bin multi-channel fit) they make the PDF unopenable.
+            // Skip them above this size; every other page is O(nbins) and stays.
+            constexpr int kMaxMatrixBinsToDraw = 200;
+            const bool draw_matrices = nbins <= kMaxMatrixBinsToDraw;
+            if(!draw_matrices)
+                log<LOG_INFO>(L"%1% || %2%: %3% bins > %4%, skipping the covariance-matrix pages of the covariance_to_spline checks PDF (summary numbers are still on page 1).")
+                    % __func__ % systname.c_str() % nbins % kMaxMatrixBinsToDraw;
 
             // ---- Reconstructed covariance and residual (rank-K approximation) ----
             Eigen::MatrixXf recon = Eigen::MatrixXf::Zero(nbins, nbins);
@@ -3974,6 +3982,14 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 pt.AddText(Form("Pre-symmetrization asymmetry (||C - C^T||_F): %.4g", dbg.pre_symm_asymmetry));
                 pt.AddText(Form("Difference ||C_orig - C_recon||_F: %.4g   (relative: %.4g)", diff_frob, orig_frob > 0 ? diff_frob/orig_frob : 0.0f));
                 pt.AddText(Form("Max |difference element|: %.4g", diff_max_abs));
+                if(dbg.has_residual) {
+                    const float closure_frob = (dbg.original_frac_cov - (recon + dbg.residual_cov)).norm();
+                    pt.AddText(Form("Closure ||C_orig - (C_recon + C_resid_cov)||_F: %.4g   (should be ~0)", closure_frob));
+                }
+                if(!draw_matrices) {
+                    TText *st = pt.AddText(Form("Matrix pages skipped: %d bins > %d (they would make this PDF unopenable).", nbins, kMaxMatrixBinsToDraw));
+                    if(st) st->SetTextColor(kOrange + 7);
+                }
                 pt.AddText("");
                 if(dbg.has_residual) {
                     const float resid_cov_frob = dbg.residual_cov.norm();
@@ -4008,7 +4024,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 h->SetMinimum(-m);
                 return h;
             };
-            {
+            if(draw_matrices) {
                 auto h_orig  = fill_th2(dbg.original_frac_cov, "h_cov_orig_"+systname,  (display+" original frac cov;Bin index;Bin index").c_str());
                 auto h_recon = fill_th2(recon,                  "h_cov_recon_"+systname, (display+Form(" reconstructed (rank %d);Bin index;Bin index", K)).c_str());
                 auto h_diff  = fill_th2(difference,             "h_cov_diff_"+systname,  (display+" difference = orig - recon;Bin index;Bin index").c_str());
@@ -4026,7 +4042,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             // Compare the original against the actual model used in the fit (K splines + residual
             // covariance). Their difference should be ~0 (only negative-eigenvalue noise remains),
             // which is the meaningful check now that the un-kept eigenpairs are retained.
-            if(dbg.has_residual) {
+            if(dbg.has_residual && draw_matrices) {
                 const Eigen::MatrixXf full_model = recon + dbg.residual_cov;
                 const Eigen::MatrixXf closure = dbg.original_frac_cov - full_model;
                 const float closure_frob = closure.norm();
@@ -4044,17 +4060,60 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 c.Print(filename.c_str(), "pdf");
             }
 
-            // ---- Page 3: sqrt(diag) per bin, original vs reconstructed (+ splines+resid when on) ----
+            // ---- Bin views for the reco-bin-space pages: the full binning, plus (when it differs)
+            //      a compressed view that skips bins with zero original uncertainty (empty
+            //      subchannels, e.g. detector/subchannel combinations that carry no events). ----
+            struct BinView { std::vector<int> bins; std::vector<ChannelSpan> spans; std::string suffix, xlabel, tag; };
+            std::vector<BinView> views;
             {
-                auto h_d_orig  = std::make_unique<TH1D>(("h_diag_orig_"+systname).c_str(), (display+" fractional uncertainty per bin;Bin index;#sqrt{diag}").c_str(), nbins, 0, nbins);
-                auto h_d_recon = std::make_unique<TH1D>(("h_diag_recon_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_d_sum   = std::make_unique<TH1D>(("h_diag_sum_"+systname).c_str(), "", nbins, 0, nbins);
+                BinView full;
+                full.bins.resize(nbins);
+                for(int b = 0; b < nbins; ++b) full.bins[b] = b;
+                full.spans = spans; full.suffix = ""; full.xlabel = "Bin index"; full.tag = "";
+                BinView nz;
+                for(int b = 0; b < nbins; ++b)
+                    if(dbg.original_frac_cov(b,b) > 0.0f) nz.bins.push_back(b);
+                if(!nz.bins.empty() && (int)nz.bins.size() < nbins) {
+                    // Remap the subchannel spans onto the compressed axis; spans with no
+                    // non-empty bin disappear (their neighbours' divider takes their place).
+                    std::vector<int> n_before(nbins + 1, 0);
+                    for(int b = 0; b < nbins; ++b) n_before[b+1] = n_before[b] + (dbg.original_frac_cov(b,b) > 0.0f ? 1 : 0);
+                    for(const ChannelSpan &sp : spans) {
+                        const size_t lo = std::min<size_t>(sp.start_bin, nbins), hi = std::min<size_t>(sp.start_bin + sp.nbins, nbins);
+                        const int n_active = n_before[hi] - n_before[lo];
+                        if(n_active <= 0) continue;
+                        ChannelSpan c2; c2.label = sp.label; c2.start_bin = n_before[lo]; c2.nbins = n_active;
+                        nz.spans.push_back(c2);
+                    }
+                    nz.suffix = " (bins with zero uncertainty removed)";
+                    nz.xlabel = Form("Non-empty bin index (%d of %d bins)", (int)nz.bins.size(), nbins);
+                    nz.tag = "_nz";
+                    log<LOG_INFO>(L"%1% || %2%: %3% of %4% bins have non-zero original uncertainty; adding compressed versions of the per-bin pages.")
+                        % __func__ % systname.c_str() % (int)nz.bins.size() % nbins;
+                }
+                views.push_back(std::move(full));
+                if(!nz.bins.empty() && (int)nz.bins.size() < nbins) views.push_back(std::move(nz));
+            }
+            const Eigen::VectorXf cv_full = cv.Spec();
+            const bool cv_size_ok = (cv_full.size() == nbins);
+            if(!cv_size_ok) {
+                log<LOG_WARNING>(L"%1% || CV spectrum size %2% != covariance size %3% for systematic %4%; skipping CV-band pages.")
+                    % __func__ % static_cast<int>(cv_full.size()) % nbins % systname.c_str();
+            }
+
+            for(const BinView &view : views) {
+            const int nb = (int)view.bins.size();
+            // ---- Page 3 (per view): sqrt(diag) per bin, original vs reconstructed (+ splines+resid when on) ----
+            {
+                auto h_d_orig  = std::make_unique<TH1D>(("h_diag_orig_"+systname+view.tag).c_str(), (display+" fractional uncertainty per bin"+view.suffix+";"+view.xlabel+";#sqrt{diag}").c_str(), nb, 0, nb);
+                auto h_d_recon = std::make_unique<TH1D>(("h_diag_recon_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_d_sum   = std::make_unique<TH1D>(("h_diag_sum_"+systname+view.tag).c_str(), "", nb, 0, nb);
                 h_d_orig->SetDirectory(nullptr); h_d_recon->SetDirectory(nullptr); h_d_sum->SetDirectory(nullptr);
-                for(int b = 0; b < nbins; ++b) {
-                    h_d_orig ->SetBinContent(b+1, std::sqrt(std::max(0.0f, dbg.original_frac_cov(b,b))));
-                    h_d_recon->SetBinContent(b+1, std::sqrt(std::max(0.0f, recon(b,b))));
+                for(int b = 0; b < nb; ++b) { const int fb = view.bins[b];
+                    h_d_orig ->SetBinContent(b+1, std::sqrt(std::max(0.0f, dbg.original_frac_cov(fb,fb))));
+                    h_d_recon->SetBinContent(b+1, std::sqrt(std::max(0.0f, recon(fb,fb))));
                     if(dbg.has_residual)
-                        h_d_sum->SetBinContent(b+1, std::sqrt(std::max(0.0f, recon(b,b) + dbg.residual_cov(b,b))));
+                        h_d_sum->SetBinContent(b+1, std::sqrt(std::max(0.0f, recon(fb,fb) + dbg.residual_cov(fb,fb))));
                 }
                 h_d_orig->SetLineColor(kBlack);
                 h_d_orig->SetLineWidth(2);
@@ -4072,7 +4131,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 h_d_orig->Draw("hist");
                 h_d_recon->Draw("hist same");
                 if(dbg.has_residual) h_d_sum->Draw("hist same");
-                draw_channel_dividers_1d(spans, 0.0, ymax);
+                draw_channel_dividers_1d(view.spans, 0.0, ymax);
                 auto *leg = new TLegend(0.62, 0.74, 0.92, 0.9);
                 leg->SetBorderSize(0);
                 leg->SetFillStyle(0);
@@ -4082,6 +4141,8 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 leg->Draw();
                 draw_version_stamp();
                 c.Print(filename.c_str(), "pdf");
+            }
+
             }
 
             // ---- Page 4: scree plot (eigenvalues sorted descending, log y) ----
@@ -4162,16 +4223,18 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 c.Print(filename.c_str(), "pdf");
             }
 
+            for(const BinView &view : views) {
+            const int nb = (int)view.bins.size();
             // ---- Page 6: eigenvector heatmap (kept modes only), entries = sqrt(λ_k) * v_k[b] ----
             if(K > 0) {
-                auto h_ev = std::make_unique<TH2D>(("h_eigvec_"+systname).c_str(), (display + " eigenvectors (rows = kept knobs);Bin index;Knob k").c_str(), nbins, 0, nbins, K, 0, K);
+                auto h_ev = std::make_unique<TH2D>(("h_eigvec_"+systname+view.tag).c_str(), (display + " eigenvectors (rows = kept knobs)"+view.suffix+";"+view.xlabel+";Knob k").c_str(), nb, 0, nb, K, 0, K);
                 h_ev->SetDirectory(nullptr);
                 for(int k = 0; k < K; ++k) {
                     const int idx = dbg.kept_indices[k];
                     const float s = std::sqrt(std::max(0.0f, dbg.eigenvalues(idx)));
                     const Eigen::VectorXf v = dbg.eigenvectors.col(idx);
-                    for(int b = 0; b < nbins; ++b) {
-                        h_ev->SetBinContent(b+1, k+1, s * v(b));
+                    for(int b = 0; b < nb; ++b) { const int fb = view.bins[b];
+                        h_ev->SetBinContent(b+1, k+1, s * v(fb));
                     }
                 }
                 const float m_ev = std::max(std::fabs(h_ev->GetMaximum()), std::fabs(h_ev->GetMinimum()));
@@ -4182,8 +4245,8 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 gPad->SetTopMargin(0.13);
                 h_ev->Draw("colz");
                 // Vertical channel dividers
-                for(size_t s = 1; s < spans.size(); ++s) {
-                    const double x = static_cast<double>(spans[s].start_bin);
+                for(size_t s = 1; s < view.spans.size(); ++s) {
+                    const double x = static_cast<double>(view.spans[s].start_bin);
                     auto *ln = new TLine(x, 0, x, K);
                     ln->SetLineColor(kGray+2); ln->SetLineStyle(2); ln->Draw();
                 }
@@ -4200,11 +4263,11 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                     const int idx = dbg.kept_indices[k];
                     const float s = std::sqrt(std::max(0.0f, dbg.eigenvalues(idx)));
                     const Eigen::VectorXf v = dbg.eigenvectors.col(idx);
-                    auto h = std::make_unique<TH1D>(Form("h_knob_resp_%s_%d", systname.c_str(), k), Form("%s knob %d   #lambda = %.3g   (+1 #sigma response);Bin index;#sqrt{#lambda} #upoint v_{k}[b]", display.c_str(), k, dbg.eigenvalues(idx)), nbins, 0, nbins);
+                    auto h = std::make_unique<TH1D>(Form("h_knob_resp_%s_%d%s", systname.c_str(), k, view.tag.c_str()), Form("%s knob %d   #lambda = %.3g   (+1 #sigma response)%s;%s;#sqrt{#lambda} #upoint v_{k}[b]", display.c_str(), k, dbg.eigenvalues(idx), view.suffix.c_str(), view.xlabel.c_str()), nb, 0, nb);
                     h->SetDirectory(nullptr);
                     double yabs = 0;
-                    for(int b = 0; b < nbins; ++b) {
-                        const double y = s * v(b);
+                    for(int b = 0; b < nb; ++b) { const int fb = view.bins[b];
+                        const double y = s * v(fb);
                         h->SetBinContent(b+1, y);
                         yabs = std::max(yabs, std::fabs(y));
                     }
@@ -4215,8 +4278,8 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                     c.cd(kk + 1);
                     gPad->SetTopMargin(0.13);
                     h->DrawCopy("hist");
-                    draw_channel_dividers_1d(spans, h->GetMinimum(), h->GetMaximum());
-                    auto *zero = new TLine(0, 0, nbins, 0);
+                    draw_channel_dividers_1d(view.spans, h->GetMinimum(), h->GetMaximum());
+                    auto *zero = new TLine(0, 0, nb, 0);
                     zero->SetLineColor(kBlack); zero->Draw();
                 }
                 c.cd(0);
@@ -4225,8 +4288,6 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             }
 
             // ---- Per-knob CV ± 1σ band (linear knob: response = 1 ± alpha_b), 4 per page ----
-            const Eigen::VectorXf cv_full = cv.Spec();
-            const bool cv_size_ok = (cv_full.size() == nbins);
             if(cv_size_ok) {
                 for(int k0 = 0; k0 < K; k0 += 4) {
                     c.Clear();
@@ -4236,14 +4297,14 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                         const int idx = dbg.kept_indices[k];
                         const float s = std::sqrt(std::max(0.0f, dbg.eigenvalues(idx)));
                         const Eigen::VectorXf v = dbg.eigenvectors.col(idx);
-                        auto h_cv = std::make_unique<TH1D>(Form("h_cv_%s_%d", systname.c_str(), k), Form("%s knob %d   CV #pm 1 #sigma;Bin index;Events", display.c_str(), k), nbins, 0, nbins);
-                        auto h_up = std::make_unique<TH1D>(Form("h_up_%s_%d", systname.c_str(), k), "", nbins, 0, nbins);
-                        auto h_dn = std::make_unique<TH1D>(Form("h_dn_%s_%d", systname.c_str(), k), "", nbins, 0, nbins);
+                        auto h_cv = std::make_unique<TH1D>(Form("h_cv_%s_%d%s", systname.c_str(), k, view.tag.c_str()), Form("%s knob %d   CV #pm 1 #sigma%s;%s;Events", display.c_str(), k, view.suffix.c_str(), view.xlabel.c_str()), nb, 0, nb);
+                        auto h_up = std::make_unique<TH1D>(Form("h_up_%s_%d%s", systname.c_str(), k, view.tag.c_str()), "", nb, 0, nb);
+                        auto h_dn = std::make_unique<TH1D>(Form("h_dn_%s_%d%s", systname.c_str(), k, view.tag.c_str()), "", nb, 0, nb);
                         h_cv->SetDirectory(nullptr); h_up->SetDirectory(nullptr); h_dn->SetDirectory(nullptr);
                         double ymax = 0;
-                        for(int b = 0; b < nbins; ++b) {
-                            const double alpha = s * v(b);
-                            const double y0 = cv_full(b);
+                        for(int b = 0; b < nb; ++b) { const int fb = view.bins[b];
+                            const double alpha = s * v(fb);
+                            const double y0 = cv_full(fb);
                             h_cv->SetBinContent(b+1, y0);
                             h_up->SetBinContent(b+1, y0 * (1.0 + alpha));
                             h_dn->SetBinContent(b+1, y0 * (1.0 - alpha));
@@ -4262,35 +4323,32 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                         h_cv->DrawCopy("hist");
                         h_up->DrawCopy("hist same");
                         h_dn->DrawCopy("hist same");
-                        draw_channel_dividers_1d(spans, 0.0, 1.15 * ymax);
+                        draw_channel_dividers_1d(view.spans, 0.0, 1.15 * ymax);
                     }
                     c.cd(0);
                     draw_version_stamp();
                     c.Print(filename.c_str(), "pdf");
                 }
-            } else {
-                log<LOG_WARNING>(L"%1% || CV spectrum size %2% != covariance size %3% for systematic %4%; skipping CV-band pages.")
-                    % __func__ % static_cast<int>(cv_full.size()) % nbins % systname.c_str();
             }
 
             // ---- Aggregate band: CV ± from original cov vs ± from rank-K sum-of-knobs ----
             if(cv_size_ok) {
-                auto h_cv  = std::make_unique<TH1D>(("h_aggcv_"+systname).c_str(), (display + " aggregate CV #pm 1 #sigma;Bin index;Events").c_str(), nbins, 0, nbins);
-                auto h_oup = std::make_unique<TH1D>(("h_aggoup_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_odn = std::make_unique<TH1D>(("h_aggodn_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_kup = std::make_unique<TH1D>(("h_aggkup_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_kdn = std::make_unique<TH1D>(("h_aggkdn_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_sup = std::make_unique<TH1D>(("h_aggsup_"+systname).c_str(), "", nbins, 0, nbins);
-                auto h_sdn = std::make_unique<TH1D>(("h_aggsdn_"+systname).c_str(), "", nbins, 0, nbins);
+                auto h_cv  = std::make_unique<TH1D>(("h_aggcv_"+systname+view.tag).c_str(), (display + " aggregate CV #pm 1 #sigma"+view.suffix+";"+view.xlabel+";Events").c_str(), nb, 0, nb);
+                auto h_oup = std::make_unique<TH1D>(("h_aggoup_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_odn = std::make_unique<TH1D>(("h_aggodn_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_kup = std::make_unique<TH1D>(("h_aggkup_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_kdn = std::make_unique<TH1D>(("h_aggkdn_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_sup = std::make_unique<TH1D>(("h_aggsup_"+systname+view.tag).c_str(), "", nb, 0, nb);
+                auto h_sdn = std::make_unique<TH1D>(("h_aggsdn_"+systname+view.tag).c_str(), "", nb, 0, nb);
                 h_cv->SetDirectory(nullptr); h_oup->SetDirectory(nullptr); h_odn->SetDirectory(nullptr);
                 h_kup->SetDirectory(nullptr); h_kdn->SetDirectory(nullptr); h_sup->SetDirectory(nullptr); h_sdn->SetDirectory(nullptr);
                 double ymax = 0;
-                for(int b = 0; b < nbins; ++b) {
-                    const double y0 = cv_full(b);
-                    const double sigma_orig  = std::sqrt(std::max(0.0f, dbg.original_frac_cov(b,b))) * y0;
-                    const double sigma_recon = std::sqrt(std::max(0.0f, recon(b,b))) * y0;
+                for(int b = 0; b < nb; ++b) { const int fb = view.bins[b];
+                    const double y0 = cv_full(fb);
+                    const double sigma_orig  = std::sqrt(std::max(0.0f, dbg.original_frac_cov(fb,fb))) * y0;
+                    const double sigma_recon = std::sqrt(std::max(0.0f, recon(fb,fb))) * y0;
                     // Combined model = K splines (in quadrature) + residual covariance diagonal.
-                    const double var_comb = recon(b,b) + (dbg.has_residual ? dbg.residual_cov(b,b) : 0.0f);
+                    const double var_comb = recon(fb,fb) + (dbg.has_residual ? dbg.residual_cov(fb,fb) : 0.0f);
                     const double sigma_comb = std::sqrt(std::max(0.0, var_comb)) * y0;
                     h_cv->SetBinContent(b+1, y0);
                     h_oup->SetBinContent(b+1, y0 + sigma_orig);
@@ -4322,7 +4380,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 if(dbg.has_residual) { h_sup->Draw("hist same"); h_sdn->Draw("hist same"); }
                 h_oup->Draw("hist same");
                 h_odn->Draw("hist same");
-                draw_channel_dividers_1d(spans, 0.0, 1.15 * ymax);
+                draw_channel_dividers_1d(view.spans, 0.0, 1.15 * ymax);
                 auto *leg = new TLegend(0.6, 0.72, 0.92, 0.9);
                 leg->SetBorderSize(0); leg->SetFillStyle(0);
                 leg->AddEntry(h_cv.get(),  "CV", "l");
@@ -4333,6 +4391,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
                 draw_version_stamp();
                 c.Print(filename.c_str(), "pdf");
             }
+            } // views
         }
 
         c.Print((filename + "]").c_str(), "pdf");

@@ -333,6 +333,11 @@ namespace PROfit{
              * per-channel binnings, so it runs after CalcTotalBins() and before CalcHash(). */
             void RegisterBinnedUnconstrainedChildren();
 
+            /* Function: resolve every covariance_to_spline_uniform sources= pattern against the variation
+             * list, filling m_mcgen_variation_source_parent (each matched entry must be type="covariance"
+             * and may be claimed by one pattern only). */
+            void ResolveCovarianceToSplineUniformSources();
+
             SplinePriorType GetSplinePriorType(const std::string &systematic) const {
                 auto it = m_mcgen_variation_prior_types.find(systematic);
                 return it == m_mcgen_variation_prior_types.end()
@@ -537,8 +542,9 @@ namespace PROfit{
             std::map<std::string, bool> m_mcgen_variation_include_resid_cov; //map of covariance_to_spline systematics to whether the un-kept eigenpairs are retained as a residual covariance (missing = true)
             std::map<std::string, std::string> m_mcgen_variation_apply_to_subchannel; //map of systematics with apply_to_subchannel="<wildcard>" (unanchored regex against subchannel fullnames; plain substrings work as-is): the systematic is only applied to matching subchannels, and its weight branch is only required in MCFiles that fill a matching subchannel
             std::map<std::string, std::pair<float,float>> m_mcgen_variation_scale_range; //binned_unconstrained only: allowed multiplicative scale [lo, hi] of every free bin (default [0, 10]); the fit parameter is scale-1 so the CV sits at 0
-            std::map<std::string, std::vector<std::string>> m_mcgen_variation_children; //binned_unconstrained parent XML name -> the per-bin spline names ("<parent>_bin<j>") it expands to in PROsyst
-            std::map<std::string, std::string> m_mcgen_variation_parent; //per-bin spline name -> its binned_unconstrained parent XML name
+            std::map<std::string, std::vector<std::string>> m_mcgen_variation_children; //parent XML name -> the derived PROsyst names it expands to: "<parent>_bin<j>" (binned_unconstrained, filled at parse time) or "<parent>_decomp_knob_<k>"/"<parent>_resid_cov" (covariance_to_spline[_uniform], filled when PROsyst is built)
+            std::map<std::string, std::string> m_mcgen_variation_sources; //covariance_to_spline_uniform: sources="<regex>" (unanchored) selecting the type="covariance" entries whose fractional matrices are summed and decomposed
+            std::map<std::string, std::string> m_mcgen_variation_source_parent; //type="covariance" entry name -> the covariance_to_spline_uniform entry that decomposes it (such an entry is never built as a covariance of its own)
 
             //FIX skepic
             std::vector<std::string> systematic_name;

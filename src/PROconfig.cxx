@@ -1447,7 +1447,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 }
 
                 //check for known attributes
-                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel", "scale_range"};
+                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel", "scale_range", "sources"};
                 for (const tinyxml2::XMLAttribute* attr = pAllowList->FirstAttribute(); attr; attr = attr->Next()) {
                     std::string name = attr->Name();
                     if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -1479,6 +1479,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 const char *weights = pAllowList->Attribute("weights");
                 const char *apply_to_subchannel = pAllowList->Attribute("apply_to_subchannel");
                 const char *scale_range = pAllowList->Attribute("scale_range");
+                const char *sources = pAllowList->Attribute("sources");
 
                 if(!variation_type) {
                     throw std::invalid_argument(std::string("<allowlist>/<systematic> entry '") + wt + "' has no type= attribute");
@@ -1525,6 +1526,44 @@ int PROconfig::LoadFromXML(const std::string &filename){
                     }
                     m_mcgen_variation_scale_range[wt] = {slo, shi};
                     log<LOG_INFO>(L"%1% || Parsed scale_range=[%2%, %3%] for binned_unconstrained systematic %4%") % __func__ % slo % shi % wt.c_str();
+                }
+                if(std::string(variation_type) == "covariance_to_spline_uniform") {
+                    // The sum of the type="covariance" entries matched by sources= is eigen-decomposed;
+                    // the num_decomp_knobs leading modes float freely (uniform prior, no pull) inside
+                    // restrict="lo, hi" (sigma units of the mode, default [-10, 10]); the rest stay a
+                    // Gaussian residual covariance. Built entirely in PROsyst from those entries, so
+                    // this entry reads no weights of its own.
+                    if(!sources) {
+                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                            "' requires sources=\"<regex>\" naming the type=\"covariance\" entries to sum and decompose");
+                    }
+                    if(!num_decomp_knobs || atoi(num_decomp_knobs) <= 0) {
+                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                            "' requires num_decomp_knobs=\"N\" (N>0): the number of leading eigenmodes to free");
+                    }
+                    if(prior || center || prior_type) {
+                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                            "' cannot specify prior=, center= or prior_type= (its eigenmode knobs always float freely with a uniform prior)");
+                    }
+                    if(binning || knobs || filename || xvar || yvar || mirrored || weights || force_0_cv || include_only_weights_str || scale || inflate || apply_to_subchannel) {
+                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                            "' only supports the attributes type, plotname, tag, num_decomp_knobs, include_resid_cov, restrict and sources (put scale=/inflate=/apply_to_subchannel= on the source entries)");
+                    }
+                    std::string pattern = sources;
+                    size_t b = pattern.find_first_not_of(" \t");
+                    size_t e = pattern.find_last_not_of(" \t");
+                    pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
+                    if(pattern.empty()) {
+                        throw std::invalid_argument(std::string("sources attribute for systematic '") + wt + "' is empty");
+                    }
+                    m_mcgen_variation_sources[wt] = pattern;
+                    m_mcgen_variation_prior_types[wt] = SplinePriorType::Uniform;
+                    if(!restrict_str) m_mcgen_variation_restrict[wt] = {-10.0f, 10.0f};
+                    log<LOG_INFO>(L"%1% || covariance_to_spline_uniform systematic %2%: sources='%3%', %4% free eigenmodes, knob box [%5%, %6%]")
+                        % __func__ % wt.c_str() % pattern.c_str() % atoi(num_decomp_knobs) % m_mcgen_variation_restrict[wt].first % m_mcgen_variation_restrict[wt].second;
+                } else if(sources) {
+                    throw std::invalid_argument(std::string("sources is only supported for type='covariance_to_spline_uniform' systematics; got type '") +
+                        variation_type + "' for '" + wt + "'");
                 }
                 if(prior_type) {
                     const std::string parsed_prior_type(prior_type);
@@ -2105,6 +2144,8 @@ int PROconfig::LoadFromXML(const std::string &filename){
             m_num_variation_type_explicit+=1;
         } else if(m_mcgen_variation_type[i] == "binned_unconstrained"){
             m_num_variation_type_binned_unconstrained+=1;
+        } else if(m_mcgen_variation_type[i] == "covariance_to_spline_uniform"){
+            // Built in PROsyst from its source covariance entries; nothing to count here.
         } else {
             log<LOG_ERROR>(L"%1% || Unrecognized variation type %2%") % __func__ % m_mcgen_variation_type[i].c_str();
         }
@@ -2138,6 +2179,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
 
     // Needs the subchannel fullnames and per-channel binnings that CalcTotalBins just built.
     this->RegisterBinnedUnconstrainedChildren();
+    this->ResolveCovarianceToSplineUniformSources();
 
     log<LOG_INFO>(L"%1% || Checking number of Mode/Detector/Channel/Subchannels and BINs") % __func__;
     log<LOG_INFO>(L"%1% || num_modes: %2% ") % __func__ % m_num_modes;
@@ -2784,7 +2826,6 @@ int PROconfig::HexToROOTColor(const std::string& hexColor) const{
 
 void PROconfig::RegisterBinnedUnconstrainedChildren(){
     m_mcgen_variation_children.clear();
-    m_mcgen_variation_parent.clear();
     for(size_t i = 0; i < m_mcgen_variation_allowlist.size(); ++i){
         if(m_mcgen_variation_type[i] != "binned_unconstrained") continue;
         const std::string parent = m_mcgen_variation_allowlist[i];
@@ -2842,7 +2883,6 @@ void PROconfig::RegisterBinnedUnconstrainedChildren(){
                 exit(EXIT_FAILURE);
             }
             children.push_back(child);
-            m_mcgen_variation_parent[child] = parent;
             m_mcgen_variation_plotname_map[child] = parent_plotname + " bin " + std::to_string(j);
             if(tags_it != m_mcgen_variation_tags.end()) m_mcgen_variation_tags[child] = tags_it->second;
             m_mcgen_variation_binning_map[child] = binning;
@@ -2868,6 +2908,39 @@ void PROconfig::RegisterBinnedUnconstrainedChildren(){
 
         log<LOG_INFO>(L"%1% || binned_unconstrained systematic '%2%' -> %3% free per-bin parameters (%4%_bin0..%4%_bin%5%) in binning %6%, scale range [%7%, %8%], shared across subchannels %9%")
             % __func__ % parent.c_str() % nlocal % parent.c_str() % (nlocal - 1) % binning % range.first % range.second % names;
+    }
+
+}
+
+void PROconfig::ResolveCovarianceToSplineUniformSources(){
+    m_mcgen_variation_source_parent.clear();
+    for(const auto &[parent, pattern] : m_mcgen_variation_sources){
+        std::regex re = CompilePattern(pattern, "sources of covariance_to_spline_uniform systematic " + parent);
+        std::vector<std::string> matched;
+        for(size_t i = 0; i < m_mcgen_variation_allowlist.size(); ++i){
+            const std::string &name = m_mcgen_variation_allowlist[i];
+            if(name == parent || !PatternMatches(name, re)) continue;
+            if(m_mcgen_variation_type[i] != "covariance"){
+                log<LOG_ERROR>(L"%1% || ERROR: sources='%2%' of covariance_to_spline_uniform systematic '%3%' matches '%4%' which has type '%5%'; only type=\"covariance\" entries can be summed.")
+                    % __func__ % pattern.c_str() % parent.c_str() % name.c_str() % m_mcgen_variation_type[i].c_str();
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+            auto prev = m_mcgen_variation_source_parent.find(name);
+            if(prev != m_mcgen_variation_source_parent.end()){
+                log<LOG_ERROR>(L"%1% || ERROR: covariance entry '%2%' is claimed by both '%3%' and '%4%' (sources= patterns overlap).") % __func__ % name.c_str() % prev->second.c_str() % parent.c_str();
+                log<LOG_ERROR>(L"Terminating.");
+                exit(EXIT_FAILURE);
+            }
+            m_mcgen_variation_source_parent[name] = parent;
+            matched.push_back(name);
+        }
+        if(matched.empty()){
+            log<LOG_ERROR>(L"%1% || ERROR: sources='%2%' of covariance_to_spline_uniform systematic '%3%' matches NO type=\"covariance\" entry in the variation list.") % __func__ % pattern.c_str() % parent.c_str();
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+        log<LOG_INFO>(L"%1% || covariance_to_spline_uniform systematic '%2%' will decompose the sum of %3% covariance entries: %4%") % __func__ % parent.c_str() % matched.size() % matched;
     }
 }
 
@@ -2912,6 +2985,12 @@ uint32_t PROconfig::CalcHash() const{
         unique_string << sysname << "~" << range.first << "," << range.second;
     for (const auto& [sysname, children] : m_mcgen_variation_children)
         unique_string << sysname << "#" << children.size() << "@" << m_mcgen_variation_binning_map.at(sysname);
+    // scale= multiplies the universe weights at fill time and inflate= is stored in the
+    // cached SystStruct, so editing either must invalidate _syst.bin. Empty maps append nothing.
+    for (const auto& [sysname, s] : m_mcgen_variation_scale)
+        unique_string << sysname << "*" << s;
+    for (const auto& [sysname, f] : m_mcgen_variation_inflate)
+        unique_string << sysname << "^" << f;
 
     for(const auto& vec: m_branch_variables){
         for(const auto& br: vec){

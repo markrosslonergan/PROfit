@@ -252,7 +252,16 @@ namespace PROfit {
              * linear spline per retained eigenpair (the shared core of FillSplinesFromCovariance). Used
              * by both "covariance_to_spline" (matrix from MC universes) and "external_covariance_to_spline"
              * (matrix loaded from an external TMatrixD). */
-            void FillSplinesFromCovarianceMatrix(Eigen::MatrixXf frac_cov, const SystStruct& syst);
+            void FillSplinesFromCovarianceMatrix(Eigen::MatrixXf frac_cov, const SystStruct& syst,
+                                                 SplinePriorType prior = SplinePriorType::Gaussian,
+                                                 float knob_lo = -3.0f, float knob_hi = 3.0f);
+
+            /* Function: after a parent systematic has been expanded into derived splines/covariances
+             * (indices [n_spl_before, n_splines) and [n_cov_before, covar_names.size())), copy the
+             * parent's tag list and plotname (with the derived suffix) onto every derived name and
+             * record them as the parent's children, so --fix/--syst-list/--exclude-systs, PROplot and
+             * PROsurf can all resolve the names. Writes into the (nominally const) PROconfig. */
+            void PropagateDerivedNames(const PROconfig& config, const std::string& parent, size_t n_spl_before, size_t n_cov_before);
 
             /* Function: Get weight for bin for a given shift using spline */
             float GetSplineShift(int syst_num, float shift, int bin) const;
