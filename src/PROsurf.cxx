@@ -542,7 +542,7 @@ std::vector<profOut> PROfile::PROfilePointHelper(const PROsyst *systs, const PRO
 
 
 
-std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, std::atomic<int> *point_counter, uint32_t seed, const Eigen::VectorXf &seed_pt, MultiPROgressBar* progressbar){
+std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, std::atomic<int> *point_counter, uint32_t seed, const std::vector<Eigen::VectorXf> &seed_pts, MultiPROgressBar* progressbar){
 
     std::vector<surfOut> outs;
     const int total = (int)multi_physics_params.size();
@@ -599,13 +599,15 @@ std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std:
         local_metric->setBounds(lb,ub);
 
         PROfitter fitter(ub, lb, fitconfig, seed+(uint32_t)i);
-        // Warm-start: seed from the CLOSEST point in (x, y) grid space that this
-        // thread has already fitted, not the most recently pulled one — with
-        // dynamic dispatch the previous pull can be far across the surface,
-        // while the nearest explored point is the best predictor of the local
-        // minimum. Distance is Euclidean in the grid's own coordinates (log10
-        // values on log axes), i.e. the fit's parameter space. The thread's
-        // first point seeds from the global best fit (seed_pt) when available.
+        // Warm-start: every fit gets ALL caller-supplied seeds (global best fit +
+        // harmonic freq_seed_points, mirroring PROfile's per-scan-fit seeding)
+        // plus the CLOSEST point in (x, y) grid space that this thread has
+        // already fitted — not the most recently pulled one: with dynamic
+        // dispatch the previous pull can be far across the surface, while the
+        // nearest explored point is the best predictor of the local minimum.
+        // Distance is Euclidean in the grid's own coordinates (log10 values on
+        // log axes), i.e. the fit's parameter space.
+        std::vector<Eigen::VectorXf> seeds = seed_pts;
         if(!outs.empty()){
             size_t nearest = 0;
             float best_d2 = std::numeric_limits<float>::max();
@@ -615,12 +617,9 @@ std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std:
                 const float d2 = dx*dx + dy*dy;
                 if(d2 < best_d2){ best_d2 = d2; nearest = k; }
             }
-            output.chi = fitter.Fit(*local_metric, outs[nearest].best_fit);
-        }else if(seed_pt.size() > 0){
-            output.chi = fitter.Fit(*local_metric, seed_pt);
-        }else{
-            output.chi = fitter.Fit(*local_metric);
+            seeds.push_back(outs[nearest].best_fit);
         }
+        output.chi = seeds.empty() ? fitter.Fit(*local_metric) : fitter.Fit(*local_metric, seeds);
         output.best_fit = fitter.best_fit;
         outs.push_back(output);
         if (progressbar) progressbar->increment_bar(0);
@@ -632,7 +631,7 @@ std::vector<surfOut> PROsurf::PointHelper(const PROfitterConfig &fitconfig, std:
 }
 
 
-void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, float min_chi, const Eigen::VectorXf &seed_pt, int nThreads) {
+void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed &proseed, float min_chi, const std::vector<Eigen::VectorXf> &seed_pts, int nThreads) {
     std::ofstream chi_file;
     if(!filename.empty()){
         chi_file.open(filename);
@@ -673,7 +672,7 @@ void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename
 
     for (int t = 0; t < nThreads; ++t) {
         futures.emplace_back(std::async(std::launch::async, [&, t]() {
-                    return this->PointHelper(fitconfig, grid, &point_counter, proseed.getThreadSeeds()->at(t), seed_pt, surf_pb_ptr);
+                    return this->PointHelper(fitconfig, grid, &point_counter, proseed.getThreadSeeds()->at(t), seed_pts, surf_pb_ptr);
                     }));
     }
 
@@ -719,7 +718,7 @@ void PROsurf::FillSurface(const PROfitterConfig &fitconfig, std::string filename
 
 
 
-std::vector<surfOut> PROsurf::FillCurve(const PROfitterConfig &fitconfig, PROseed &proseed, float min_chi, const Eigen::VectorXf &seed_pt, int nThreads, std::vector<float> &A, std::vector<float> &B, size_t n_points) {
+std::vector<surfOut> PROsurf::FillCurve(const PROfitterConfig &fitconfig, PROseed &proseed, float min_chi, const std::vector<Eigen::VectorXf> &seed_pts, int nThreads, std::vector<float> &A, std::vector<float> &B, size_t n_points) {
 
 
     std::vector<surfOut> grid;
@@ -757,7 +756,7 @@ std::vector<surfOut> PROsurf::FillCurve(const PROfitterConfig &fitconfig, PROsee
 
     for (int t = 0; t < nThreads; ++t) {
         futures.emplace_back(std::async(std::launch::async, [&, t]() {
-                    return this->PointHelper(fitconfig, grid, &point_counter, proseed.getThreadSeeds()->at(t), seed_pt, curve_pb_ptr);
+                    return this->PointHelper(fitconfig, grid, &point_counter, proseed.getThreadSeeds()->at(t), seed_pts, curve_pb_ptr);
                     }));
     }
 

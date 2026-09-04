@@ -3,7 +3,7 @@ cmake_minimum_required (VERSION 3.19)
 
 project (
     PROfit
-    VERSION 3.0.0
+    VERSION 3.0.1
     DESCRIPTION "A PROfessional PROfitable PROtractable Fitter"
     LANGUAGES CXX)
 
@@ -52,13 +52,14 @@ endif()
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.25")
     FetchContent_Declare(
         eigen
+        SYSTEM
         URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
     )
     FetchContent_Declare(
         lbfgspp
         SYSTEM
         GIT_REPOSITORY https://github.com/markrosslonergan/LBFGSpp
-        GIT_TAG        253e837bbff0460bddd84cd9883715c18aa19426
+        GIT_TAG        53c9c044c0d44f956b5dd2d90c6b598d2a17a8c9
         )
 else()
     FetchContent_Declare(

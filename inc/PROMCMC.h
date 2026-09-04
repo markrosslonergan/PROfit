@@ -29,6 +29,12 @@ namespace PROfit {
                 std::uniform_real_distribution<float> uniform;
                 uint32_t seed;
                 bool save_chain;
+                // Cached target(current). 'current' only changes on an accepted step, so
+                // the log-density from that acceptance is reused instead of re-evaluating
+                // the (expensive) target on every proposal. Anyone assigning to the public
+                // 'current' directly must set current_logp_valid = false.
+                float current_logp = 0.0f;
+                bool current_logp_valid = false;
 
             public:
                 Target_FN target;
@@ -45,14 +51,25 @@ namespace PROfit {
 
                 bool step() {
                     Eigen::VectorXf p = proposal(current);
-                    float acceptance;
-                    // Targets return log-density (e.g. -0.5*chi^2); subtract before exp to avoid float32 underflow when chi^2 is large.
-                    acceptance = proposal.within_bound(p) ? std::min(1.0f, std::exp(target(p) - target(current)) * proposal.P(current, p)/proposal.P(p, current)) : 0;
+                    float acceptance = 0;
+                    float proposed_logp = 0;
+                    bool in_bound = proposal.within_bound(p);
+                    if(in_bound) {
+                        if(!current_logp_valid) {
+                            current_logp = target(current);
+                            current_logp_valid = true;
+                        }
+                        proposed_logp = target(p);
+                        // Targets return log-density (e.g. -0.5*chi^2); subtract before exp to avoid float32 underflow when chi^2 is large.
+                        acceptance = std::min(1.0f, std::exp(proposed_logp - current_logp) * proposal.P(current, p)/proposal.P(p, current));
+                    }
+                    // Drawn unconditionally (even out-of-bounds) to keep the RNG stream identical to the pre-cache implementation.
                     float u = uniform(rng);
 
                     if(u <= acceptance) {
                         //                      log<LOG_DEBUG>(L"%1% || APPROVED acc %2%, rng %3% and proposal: %4%  ") % __func__ % acceptance % u %p;
                         current = p;
+                        current_logp = proposed_logp;
                         naccept += 1;
                         return true;
                     }else{

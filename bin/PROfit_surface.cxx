@@ -4,16 +4,25 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
 
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
 
+    // Warm-start seeds for every surface/curve fit: the harmonic
+    // freq_seed_points from the pre-pass global fit (the list already contains
+    // the global best fit), matching PROfile's per-scan-fit seeding. In a
+    // chained invocation (global fit already run upstream) only the best-fit
+    // point reaches run_surface, so fall back to that alone.
+    std::vector<Eigen::VectorXf> surface_seeds;
     if(global_fit_chi2 < 0) {
         GlobalFitOptions opt = GlobalFitOptions::Default;
         if(options.progress_bar) opt |= GlobalFitOptions::Progress;
         opt |= GlobalFitOptions::FreqSeedPts;
         PROspec cv = FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), CVParams , true ,config.i_prime);
         // Should we pass in global fixed here? This mostly gets used with syst_only which would not make sense for a surface.
-        GlobalFitResult fitres = run_global_fit(config, prop, data, metric, ub, lb, fitConfig, CVParams, cv, fixed, opt); 
+        GlobalFitResult fitres = run_global_fit(config, prop, data, metric, ub, lb, fitConfig, CVParams, cv, fixed, opt);
         global_fit_chi2 = fitres.chi2;
         global_fit_result = fitres.fitter.best_fit;
+        surface_seeds = fitres.fitter.freq_seed_points;
     }
+    if(surface_seeds.empty() && global_fit_result.size() > 0)
+        surface_seeds.push_back(global_fit_result);
 
     if (options.grid_size.empty()) {
         options.grid_size = {40, 40};
@@ -78,7 +87,7 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
         log<LOG_INFO>(L"%1% || Running a PROcurve from %2% to point %3% with %4% points") % __func__ % A% B %Ncurvep;
         
         if(options.progress_bar) fitConfig.progress_bar = true;
-        std::vector<surfOut> cpoints = surface.FillCurve(fitConfig, myseed, global_fit_chi2, global_fit_result, options.nthread, A, B, Ncurvep);
+        std::vector<surfOut> cpoints = surface.FillCurve(fitConfig, myseed, global_fit_chi2, surface_seeds, options.nthread, A, B, Ncurvep);
         surface.PlotCurve(config, metric.GetModel(), metric.GetSysts(), cpoints,options.final_output_tag,options.logx,options.logy,xaxis_idx,yaxis_idx,A, B, Ncurvep); 
         exit(0);
     }
@@ -101,25 +110,22 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
             opts.dense_ny       = (int)surface.nbinsy;
             opts.produce_dense  = true;
             if (!options.amr_contour_levels.empty()) opts.contour_levels = options.amr_contour_levels;
-            // Use the global-fit best fit (from project-SBN-dev's run_global_fit
-            // pre-pass) as a warm-start seed for AMR's initial level-0 grid.
-            // Subsequent level fits still get cell-corner best_fits from
-            // PROmesh::run_amr.
-            std::vector<Eigen::VectorXf> caller_seeds;
-            if (global_fit_result.size() > 0)
-                caller_seeds.push_back(global_fit_result);
+            // Warm-start AMR's initial level-0 grid (and any point with no
+            // fitted neighbours) with the full harmonic seed list from the
+            // global-fit pre-pass. Subsequent level fits still get cell-corner
+            // best_fits from PROmesh::run_amr.
             PROmesh::AMRResult amr_result = surface.FillSurfaceAMR(
                 scanFitConfig,
                 options.final_output_tag+"_surface_amr.txt",
                 myseed, options.nthread,
-                caller_seeds,
+                surface_seeds,
                 opts);
             // Mesh visualisation: cells coloured by refinement level + the
             // contour polylines overlaid in red. Saved next to the heatmap.
             surface.PlotAMRMesh(amr_result, metric.GetModel(), options.final_output_tag,
                                 options.logx, options.logy, xaxis_idx, yaxis_idx);
         } else {
-            surface.FillSurface(scanFitConfig, options.final_output_tag+"_surface.txt",myseed, global_fit_chi2, global_fit_result, options.nthread);
+            surface.FillSurface(scanFitConfig, options.final_output_tag+"_surface.txt",myseed, global_fit_chi2, surface_seeds, options.nthread);
         }
     }
 
@@ -238,8 +244,14 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
 
             if(options.statonly)
                 brazil_band_surfaces.back().FillSurfaceStat(config, scanFitConfig, "", CVParams, dseed(myseed.global_rng));
-            else
-                brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, fitres.chi2, fitres.fitter.best_fit, options.nthread);
+            else {
+                // Per-universe harmonic seeds from this throw's own global fit
+                // (the list already contains its best fit).
+                std::vector<Eigen::VectorXf> throw_seeds = fitres.fitter.freq_seed_points;
+                if(throw_seeds.empty() && fitres.fitter.best_fit.size() > 0)
+                    throw_seeds.push_back(fitres.fitter.best_fit);
+                brazil_band_surfaces.back().FillSurface(scanFitConfig, "", myseed, fitres.chi2, throw_seeds, options.nthread);
+            }
 
             TH2D surf("surf", (";"+options.xlabel+";"+options.ylabel).c_str(), surface.nbinsx, binedges_x.data(), surface.nbinsy, binedges_y.data());
 
