@@ -199,10 +199,14 @@ namespace PROfit {
 
             PROsurf(PROmetric &metric, size_t x_idx, size_t y_idx, size_t nbinsx, LogLin llx, float x_lo, float x_hi, size_t nbinsy, LogLin lly, float y_lo, float y_hi);
 
-            std::vector<surfOut> PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, std::atomic<int> *point_counter, uint32_t seed, const Eigen::VectorXf &seed_pt, MultiPROgressBar* progressbar = nullptr);
+            /// @param seed_pts Warm-start seeds tried at EVERY grid fit (in addition to the
+            /// nearest-already-fitted point) — typically the global best fit plus the harmonic
+            /// freq_seed_points, mirroring PROfile's per-scan-fit seeding. Each seed costs one
+            /// LBFGSB pass per grid point.
+            std::vector<surfOut> PointHelper(const PROfitterConfig &fitconfig, std::vector<surfOut> multi_physics_params, std::atomic<int> *point_counter, uint32_t seed, const std::vector<Eigen::VectorXf> &seed_pts, MultiPROgressBar* progressbar = nullptr);
 
             void FillSurfaceStat(const PROconfig &config, const PROfitterConfig &fitconfig, std::string filename, const Eigen::VectorXf &cv_params, uint32_t seed);
-            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, float min_chi, const Eigen::VectorXf &seed_pt, int nthreads = 1);
+            void FillSurface(const PROfitterConfig &fitconfig, std::string filename, PROseed & proseed, float min_chi, const std::vector<Eigen::VectorXf> &seed_pts, int nthreads = 1);
 
             /**
              * @brief Adaptive-mesh-refinement surface scan.
@@ -238,7 +242,7 @@ namespace PROfit {
                              bool logx, bool logy,
                              size_t xaxis_idx, size_t yaxis_idx);
 
-            std::vector<surfOut> FillCurve(const PROfitterConfig &fitconfig, PROseed &proseed, float min_chi, const Eigen::VectorXf &seed_pt, int nThreads, std::vector<float> &A, std::vector<float> &B, size_t n_points);
+            std::vector<surfOut> FillCurve(const PROfitterConfig &fitconfig, PROseed &proseed, float min_chi, const std::vector<Eigen::VectorXf> &seed_pts, int nThreads, std::vector<float> &A, std::vector<float> &B, size_t n_points);
             void PlotCurve(const PROconfig &config, const PROmodel &model, const PROsyst &syst, const std::vector<surfOut> & cpoints, std::string final_output_tag, bool logx, bool logy,size_t xaxis_idx,size_t yaxis_idx,std::vector<float> &A, std::vector<float> &B, size_t n_points);
 
     };
