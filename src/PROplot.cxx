@@ -921,7 +921,12 @@ namespace PROfit{
                             snprintf(buf, sizeof(buf), " (%.1f)", hist->Integral());
                             label += buf;
                         }
-                        leg->AddEntry(hist, label.c_str(), "f");
+						if (hist->Integral() > 0.0){
+                            leg->AddEntry(hist, label.c_str(), "f");
+						}
+						else{
+							log<LOG_INFO>(L"%1% || Not including empty subchannel %2% in legend for channel %3%") % __func__ % label.c_str() % hist_titles.c_str();
+						}
                     }
                     sc = sc + 1;
                 }
