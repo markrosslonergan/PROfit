@@ -3278,13 +3278,16 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
     void plot_profile_vertical_pulls(const std::string &filename, const PROconfig &config, const PROsyst &systs, const PROmodel &model, const Eigen::VectorXf &best_fit, const std::vector<float> &values1_down, const std::vector<float> &values1_up, bool with_osc, bool sort_by_pull) {
         const std::string suffix  = sort_by_pull ? "_vertical_pullordered" : "_vertical_xmlorder";
         const std::string outname = filename + suffix + ".pdf";
+        // values1_* are splines-only when with_osc=false (PROfile skips physics);
+        // best_fit is always the full fitter vector with physics first.
         const size_t offset = with_osc ? model.nparams : 0;
         const int n = (int)systs.GetNSplines();
+        const size_t bf_offset = (size_t)best_fit.size() == model.nparams + (size_t)n ? model.nparams : offset;
         if(n == 0) {
             log<LOG_WARNING>(L"%1% || No spline parameters to plot, skipping %2%") % __func__ % outname.c_str();
             return;
         }
-        if(values1_down.size() < offset + n || values1_up.size() < offset + n || (size_t)best_fit.size() < offset + n) {
+        if(values1_down.size() < offset + n || values1_up.size() < offset + n || (size_t)best_fit.size() < bf_offset + n) {
             log<LOG_WARNING>(L"%1% || Profile 1sigma vectors too short (down %2%, up %3%, best_fit %4%, need %5%); skipping %6%")
                 % __func__ % values1_down.size() % values1_up.size() % best_fit.size() % (offset + n) % outname.c_str();
             return;
@@ -3295,7 +3298,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         std::vector<float> bf(n), elo(n), ehi(n);
         std::vector<std::string> labels(n);
         for(int i = 0; i < n; ++i) {
-            bf[i] = best_fit(offset + i);
+            bf[i] = best_fit(bf_offset + i);
             const float lo = values1_down[offset + i], hi = values1_up[offset + i];
             if(bf[i] < lo || bf[i] > hi)
                 log<LOG_WARNING>(L"%1% || Spline %2% best fit %3% outside its profile 1sigma crossings [%4%, %5%]; clamping that error side to 0.")
