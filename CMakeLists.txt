@@ -3,14 +3,14 @@ cmake_minimum_required (VERSION 3.19)
 
 project (
     PROfit
-    VERSION 3.0.3
+    VERSION 3.0.2
     DESCRIPTION "A PROfessional PROfitable PROtractable Fitter"
     LANGUAGES CXX)
 
 # Pre-release suffix: "-dev" on develop; set to "" on release branches.
 # Release flow: strip suffix -> tag vX.Y.Z -> bump VERSION above and restore "-dev".
 # (project(VERSION) only accepts numeric components, so the suffix lives here.)
-set(PROFIT_VERSION_SUFFIX "-dev")
+#set(PROFIT_VERSION_SUFFIX "-dev")
 set(PROFIT_FULL_VERSION "${PROJECT_VERSION}${PROFIT_VERSION_SUFFIX}")
 message(STATUS "Building PROfit version: ${PROFIT_FULL_VERSION}")
 
