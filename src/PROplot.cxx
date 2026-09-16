@@ -2098,7 +2098,7 @@ namespace PROfit{
                             // cv_hist is assembled from getCV1DHists output, which is
                             // already width-scaled when BinWidthScaled: normalise by
                             // the RAW integral (sum of counts), never by the sum of densities.
-                            const double integral = applyDrawScaling(&cv_hist, opt, /*already_width_scaled=*/true);
+                            const double integral = applyDrawScaling(&cv_hist, opt, /*already_width_scaled=*/bool(opt & PlotOptions::BinWidthScaled));
                             if(bool(opt&PlotOptions::CVasStack)) {
                                 TList *stlists = (TList*)cvstack->GetHists();
                                 for(const auto&& obj: *stlists){
