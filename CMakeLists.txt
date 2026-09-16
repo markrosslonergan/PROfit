@@ -3,7 +3,7 @@ cmake_minimum_required (VERSION 3.19)
 
 project (
     PROfit
-    VERSION 3.0.2
+    VERSION 3.0.3
     DESCRIPTION "A PROfessional PROfitable PROtractable Fitter"
     LANGUAGES CXX)
 
