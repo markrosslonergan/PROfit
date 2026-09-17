@@ -553,6 +553,22 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     return value;
 }
 
+std::vector<Eigen::Index> PROcovariance::contributingBins() const {
+    const Eigen::VectorXf &d = data.Spec();
+    // Same predicate as operator(): variance > 0 AND active. The data stands in for the
+    // prediction; for the prediction-valued (pearson) variance every bin is floored positive,
+    // so the set is exactly the active bins. Shape-only rescales the prediction, never the
+    // data, so the same predicate applies there.
+    const Eigen::VectorXf var = statisticalVariancesDependOnPrediction()
+        ? Eigen::VectorXf::Ones(d.size())
+        : statisticalVariances(d, d, nullptr);
+    std::vector<Eigen::Index> idx;
+    idx.reserve((size_t)d.size());
+    for(Eigen::Index i = 0; i < d.size(); ++i)
+        if(var(i) > 0 && binActive(i)) idx.push_back(i);
+    return idx;
+}
+
 float PROcovariance::getSingleChannelChi(size_t global_channel_index, const PROspec &cv, size_t var_index, const Eigen::MatrixXf &projection) {
 
     size_t nbin = config.m_channel_variable_bins[config.GetLocalChannelIndexFromGlobalChannelIndex(global_channel_index)][var_index].NBins();

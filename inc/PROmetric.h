@@ -22,9 +22,37 @@
 #include <Eigen/Eigen>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <string>
+#include <vector>
 
 namespace PROfit {
+
+    /**
+     * @brief Degrees-of-freedom breakdown for a chi-squared minimum, from PROmetric::GetNdof().
+     * @details ndf = bins entering the chi2 sum
+     *              - free physics parameters
+     *              - free spline parameters with a uniform prior (no pull term)
+     *              - one per channel block in shape-only mode (per-channel area normalisation).
+     * Gaussian-prior splines (XML prior, XML correlations, PROjector external prior) net
+     * zero: the pull term is one pseudo-measurement that cancels the parameter. Covariance-mode
+     * systematics are marginalised inside M and count zero. A parameter is "fixed" when
+     * PROmetric::is_fixed says so OR its bounds have zero width (--fix, --syst-only, scan pins).
+     */
+    struct PROndof {
+        long n_bins = 0;              ///< Bins entering the chi2 sum (active AND positive statistical variance).
+        long n_free_physics = 0;      ///< Physics parameters not pinned.
+        long n_free_uniform = 0;      ///< Uniform-prior splines not pinned (no pull => genuine free parameter).
+        long n_shape_constraints = 0; ///< Shape-only: one per channel block with contributing bins.
+        /** @brief The degrees of freedom. May be <= 0 for pathological setups; callers should guard. */
+        long value() const { return n_bins - n_free_physics - n_free_uniform - n_shape_constraints; }
+        /** @brief One-line human-readable breakdown, e.g. "ndf = 100 bins - 2 phys - 0 uniform - 0 shape = 98". */
+        std::string describe() const {
+            return "ndf = " + std::to_string(n_bins) + " bins - " + std::to_string(n_free_physics) + " phys - "
+                 + std::to_string(n_free_uniform) + " uniform - " + std::to_string(n_shape_constraints)
+                 + " shape = " + std::to_string(value());
+        }
+    };
 
     /**
      * @brief Abstract base class for PROfit chi-squared metrics passed to the optimiser.
@@ -184,6 +212,72 @@ namespace PROfit {
              * @return nparams from the model plus the number of spline systematics.
              */
             size_t nParams() const {return GetModel().nparams + GetSysts().GetNSplines();}
+
+            /** @brief Return the analysis configuration this metric was built against. */
+            virtual const PROconfig &GetConfig() const = 0;
+
+            /**
+             * @brief Collapsed bin indices (fitting variable) that enter this metric's chi2 sum.
+             * @details Base default: every bin in the fit region (active-bins mask). Metrics that
+             * additionally drop bins on a variance criterion (PROcovariance: Neyman's variance is
+             * the data, so zero-data bins fall out) override this to reproduce their own reduction.
+             */
+            virtual std::vector<Eigen::Index> contributingBins() const {
+                std::vector<Eigen::Index> idx;
+                const Eigen::Index n = data.Spec().size();
+                idx.reserve((size_t)n);
+                for(Eigen::Index i = 0; i < n; ++i)
+                    if(binActive(i)) idx.push_back(i);
+                return idx;
+            }
+
+            /**
+             * @brief Degrees of freedom of a chi2 minimum evaluated with this metric.
+             * @details See PROndof for the counting rule. "Fixed" is read from is_fixed when it
+             * has been populated (setBounds) OR from zero-width bounds: lb/ub when set, else
+             * LowerBound()/UpperBound() (which already reflect --fix / --syst-only, since those
+             * mutate the model and spline bounds). Zero-width test uses setBounds' tolerance.
+             */
+            PROndof GetNdof() const {
+                PROndof out;
+                const std::vector<Eigen::Index> bins = contributingBins();
+                out.n_bins = (long)bins.size();
+
+                const size_t nphys = GetModel().nparams;
+                const size_t ntot = nParams();
+                const Eigen::VectorXf lo = ((size_t)lb.size() == ntot) ? lb : LowerBound();
+                const Eigen::VectorXf hi = ((size_t)ub.size() == ntot) ? ub : UpperBound();
+                auto fixed = [&](size_t i) {
+                    if(is_fixed.size() > i && is_fixed[i]) return true;
+                    return std::abs(hi((Eigen::Index)i) - lo((Eigen::Index)i)) < 1e-10;
+                };
+                for(size_t i = 0; i < nphys; ++i)
+                    if(!fixed(i)) ++out.n_free_physics;
+                for(size_t i = nphys; i < ntot; ++i) {
+                    const size_t s = i - nphys;
+                    const bool uniform = s < syst->spline_prior_types.size()
+                                      && syst->spline_prior_types[s] == SplinePriorType::Uniform;
+                    if(uniform && !fixed(i)) ++out.n_free_uniform;
+                }
+
+                if(shape_only) {
+                    // Shape-only rescales the prediction onto the data integral per channel
+                    // block, so each block with at least one contributing bin loses one dof.
+                    const PROconfig &c = GetConfig();
+                    std::vector<char> contributing(data.Spec().size(), 0);
+                    for(Eigen::Index i : bins) contributing[(size_t)i] = 1;
+                    const size_t nblocks = c.m_num_modes * c.m_num_detectors * c.m_num_channels;
+                    for(size_t gc = 0; gc < nblocks; ++gc) {
+                        const size_t start = c.GetCollapsedGlobalVariableBinStart(gc, c.i_prime);
+                        const size_t nbin = c.GetChannelVariableBins(gc, c.i_prime).NBins();
+                        bool any = false;
+                        for(size_t b = start; b < start + nbin && b < contributing.size(); ++b)
+                            if(contributing[b]) { any = true; break; }
+                        if(any) ++out.n_shape_constraints;
+                    }
+                }
+                return out;
+            }
 
             PROmetric(const PROmetric &other)
                 : model_tag(other.model_tag), syst(other.syst), model(other.model), data(other.data),

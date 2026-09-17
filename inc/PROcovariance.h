@@ -138,6 +138,17 @@ namespace PROfit{
                 fs_cache.invalidate();
             }
 
+            /** @brief The analysis configuration (also public as `config`). */
+            const PROconfig &GetConfig() const override { return config; }
+
+            /**
+             * @brief Bins entering the chi2 sum: active AND statisticalVariances() > 0.
+             * @details Reproduces operator()'s reduction predicate with the observed data as the
+             * prediction stand-in: Neyman's variance IS the data (zero-data bins drop), CNP and
+             * pearson floor theirs so every active bin stays. Used by PROmetric::GetNdof().
+             */
+            std::vector<Eigen::Index> contributingBins() const override;
+
             /**
              * @brief Compute the chi-squared contribution from a single analysis channel.
              * @param global_channel_index  Global channel index.

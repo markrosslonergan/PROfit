@@ -1704,6 +1704,8 @@ namespace PROfit{
                     auto chi_label = [&](const Eigen::MatrixXf &projection) {
                         if(!chi_metric || !chi_spec || projection.rows() == 0) return std::string();
                         const float chi2 = chi_metric->getSingleChannelChi(global_channel_index, *chi_spec, other_index, projection);
+                        // Per-channel fixed-point comparison (no pull, no free-parameter accounting):
+                        // labelled nbins, not ndf. The global chi2/ndf comes from PROmetric::GetNdof().
                         return std::string("#chi^{2}/nbins = ") + chi2LabelValue(chi2) + "/" + std::to_string(projection.rows());
                     };
                     auto draw_chi_label = [&](const std::string &label) {
@@ -2209,13 +2211,16 @@ namespace PROfit{
 
                     std::string chi_label_text;
                     log<LOG_DEBUG>(L"%1% || projected_x_chi_label : %2%") % __func__ % projected_x_chi_label.c_str();
-                    if(config.m_channel_variable_dims[channel][other_index] == 2 && !projected_x_chi_label.empty()) {
-                        chi_label_text = projected_x_chi_label;
+                    // A single entry in `texts` is the global post-fit chi2/ndf label from
+                    // draw_fit_result (PROmetric::GetNdof); post-fit pages show ONLY that, not the
+                    // per-channel chi2/nbins projection label. Per-channel `texts` (the plot
+                    // subcommand's prefit labels) remain a fallback behind the projection label.
+                    if(texts.size() == 1) {
+                        if(TText *line = (TText*)texts.front().GetListOfLines()->First()) chi_label_text = line->GetTitle();
                     } else if(!projected_x_chi_label.empty()) {
                         chi_label_text = projected_x_chi_label;
                     } else if(texts.size()!=0) {
-                        TPaveText &box = texts.size() == 1 ? texts.front() : texts.at(global_channel_index);
-                        if(TText *line = (TText*)box.GetListOfLines()->First()) chi_label_text = line->GetTitle();
+                        if(TText *line = (TText*)texts.at(global_channel_index).GetListOfLines()->First()) chi_label_text = line->GetTitle();
                         log<LOG_DEBUG>(L"%1% || alternative chi2 text used : %2%") % __func__ % chi_label_text.c_str();
                     }
                     // should probably be switching this to a more clear boolean...

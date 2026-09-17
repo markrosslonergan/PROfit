@@ -66,6 +66,9 @@ namespace PROfit{
                 fs_cache.invalidate();
             }
 
+            /** @brief The analysis configuration (also public as `config`). */
+            const PROconfig &GetConfig() const override { return config; }
+
             /**
              * @brief Compute the Poisson log-likelihood ratio for a single analysis channel.
              * @param channel_index  Global channel index.
