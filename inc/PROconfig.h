@@ -303,6 +303,12 @@ namespace PROfit{
              */
             void ValidateFitVariable() const;
 
+            /**
+             * @brief Code to fill PROconfig object with systematic element in xml.
+             * @details Called from within LoadFromXML.
+             */
+            std::string ProcessSystematic(tinyxml2::XMLElement *syst);
+
 
         public:
 
@@ -527,6 +533,7 @@ namespace PROfit{
             std::vector<std::string> m_mcgen_variation_type;
             std::set<std::string> m_mcgen_variation_unmirrored;
             std::map<std::string, std::vector<double>> m_mcgen_explicit_weights;
+            std::map<std::string, std::vector<std::string>> m_mcgen_multisyst_map;
             std::map<std::string, std::string> m_mcgen_variation_external_filename_map;
             std::map<std::string, std::array<int, 2>> m_mcgen_variation_histaxisvars_map;
             std::map<std::string, std::vector<TH1*>> m_mcgen_variation_hist1d_map;
