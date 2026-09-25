@@ -117,7 +117,14 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
                     break;
                 }
                 std::map<double, size_t> syst_files;
-                auto find_fn = [&name](const PROconfig::DetVarFile &dvf) { return dvf.name == name; };
+                // Only gather files from this entry's own section: a name shared by several
+                // sections (one knob across detectors/channels) must not pull in another
+                // section's variation, which would overwrite this one at the same knobval and
+                // leave detvar_specs with fewer entries than DetVar files (skipping the plots).
+                const size_t sec_of_idv = config.m_detvar_files[idv].section_index;
+                auto find_fn = [&name, sec_of_idv](const PROconfig::DetVarFile &dvf) {
+                    return dvf.name == name && dvf.section_index == sec_of_idv;
+                };
                 auto it = config.m_detvar_files.begin() + idv;
                 while((it = std::find_if(it, config.m_detvar_files.end(), find_fn))
                         != std::end(config.m_detvar_files)) {

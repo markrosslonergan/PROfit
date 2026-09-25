@@ -1,4 +1,6 @@
 #include "PROfit_common.h"
+#include <optional>
+#include <set>
 #include <iomanip>
 #include <sstream>
 #include <cmath>
@@ -201,64 +203,76 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
 
         // Build DetVar SystStructs in memory from dvprops (not stored in syst.bin —
         // they live in the DetVar binary so either binary can be regenerated independently).
+        //
+        // One SystStruct is built per variation NAME. A name may appear in several
+        // <DetVarSection>s, e.g. one knob shared by several detectors or by several channels
+        // whose selections need their own trees. Each section is processed on its own (its
+        // own CV, only its own variation files, its own event matching and POT handling) and
+        // the per-section CV and variation spectra are then summed. A section only fills the
+        // subchannels it lists, so the summed spectra reproduce each section's CV->variation
+        // shift in its own bins, all under a single knob. Previously the variation files of a
+        // name were gathered across sections into one knob-keyed map, so a section with the
+        // same knob value overwrote the others and sections were paired with the wrong CV.
         log<LOG_INFO>(L"%1% || Building DetVar SystStructs from DetVar props...") % __func__;
         PROsyst emptySyst;
+        using knob_t = decltype(PROconfig::DetVarFile::knobval);
 
-        for(size_t isec = 0; isec < config.GetNumDetVarSections(); ++isec) {
+        // CV file index for each section
+        std::map<size_t, size_t> cv_idx_by_section;
+        for(size_t i = 0; i < config.m_detvar_files.size(); ++i) {
+            if(config.m_detvar_files[i].is_cv)
+                cv_idx_by_section[config.m_detvar_files[i].section_index] = i;
+        }
 
-            // Find CV index for this section
-            size_t cv_idx = SIZE_MAX;
-            for(size_t i = 0; i < config.m_detvar_files.size(); ++i) {
-                if(config.m_detvar_files[i].is_cv && config.m_detvar_files[i].section_index == isec) {
-                    cv_idx = i; break;
-                }
-            }
-            if(cv_idx == SIZE_MAX) {
-                log<LOG_ERROR>(L"%1% || ERROR: No CV file found for DetVar section %2%") % __func__ % isec;
+        // Variation names in order of first appearance
+        std::vector<std::string> detvar_names_ordered;
+        for(const auto &dvf : config.m_detvar_files) {
+            if(!dvf.is_cv && std::find(detvar_names_ordered.begin(), detvar_names_ordered.end(), dvf.name) == detvar_names_ordered.end())
+                detvar_names_ordered.push_back(dvf.name);
+        }
+
+        for(const std::string &varName : detvar_names_ordered) {
+            if(config.m_mcgen_variation_type_map.count(varName) == 0) {
+                log<LOG_WARNING>(L"%1% || Skipping DetVar '%2%' -- no <systematic>/<allowlist> entry with this name, so it is NOT used.") % __func__ % varName.c_str();
                 continue;
             }
+            const std::string& systType = config.m_mcgen_variation_type_map.at(varName);
+            int binningIndex = config.m_mcgen_variation_binning_map.count(varName) ? config.m_mcgen_variation_binning_map.at(varName) : config.i_prime;
+            if(binningIndex < 0 || binningIndex >= (int)config.m_num_variables)
+                binningIndex = config.i_prime;
 
-            PROpeller& cvprop = dvprops.at(DetVarKey(config, cv_idx));
-            PROconfig cvconfig = config.BuildDetVarConfig(cv_idx);
-            NullModel cvmodel(cvprop);
-            Eigen::VectorXf cvparams = Eigen::VectorXf::Constant(cvmodel.nparams, 0);
-            int cv_binning = cvconfig.i_prime;
-            if(cv_binning < 0 || cv_binning >= (int)config.m_num_variables)
-                cv_binning = config.i_prime;
-            PROspec cvSpec = FillSpectra(cvconfig, cvprop, emptySyst, cvmodel, cvparams, true, cv_binning);
+            // section -> (knob value -> DetVar file index), for this name only
+            std::map<size_t, std::map<knob_t, size_t>> files_by_section;
+            std::set<knob_t> all_knobs;
+            for(size_t i = 0; i < config.m_detvar_files.size(); ++i) {
+                const auto &dvf = config.m_detvar_files[i];
+                if(dvf.is_cv || dvf.name != varName) continue;
+                // (duplicate knobvals within one section are already rejected when the XML is parsed)
+                files_by_section[dvf.section_index][dvf.knobval] = i;
+                all_knobs.insert(dvf.knobval);
+            }
 
-            std::vector<size_t> skip;
-            for(size_t idv = 0; idv < config.m_detvar_files.size(); ++idv) {
-                if(skip.size() && std::find(skip.begin(), skip.end(), idv) != skip.end()) continue;
-                if(config.m_detvar_files[idv].section_index != isec) continue;
-                if(config.m_detvar_files[idv].is_cv) continue;
+            std::optional<PROspec> totalCv;
+            std::map<knob_t, PROspec> totalVar;
+            size_t n_sections_used = 0;
 
-                const std::string& varName = config.m_detvar_files[idv].name;
-
-                if(config.m_mcgen_variation_type_map.count(varName) == 0) {
-                    log<LOG_WARNING>(L"%1% || Skipping DetVar '%2%' -- no <systematic>/<allowlist> entry with this name, so it is NOT used.") % __func__ % varName.c_str();
+            for(const auto &[isec, knob_files] : files_by_section) {
+                auto cv_it = cv_idx_by_section.find(isec);
+                if(cv_it == cv_idx_by_section.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR: No CV file found for DetVar section %2%") % __func__ % isec;
                     continue;
                 }
-                std::map<double, size_t> syst_files;
-                auto find_fn = [&varName](const PROconfig::DetVarFile &dvf) { return dvf.name == varName; };
-                auto it = config.m_detvar_files.begin() + idv;
-                while((it = std::find_if(it, config.m_detvar_files.end(), find_fn))
-                        != std::end(config.m_detvar_files)) {
-                    size_t i = std::distance(config.m_detvar_files.begin(), it);
-                    syst_files[it->knobval] = i;
-                    skip.push_back(i);
-                    it++;
-                }
+                const size_t cv_idx = cv_it->second;
 
-                const std::string& systType = config.m_mcgen_variation_type_map.at(varName);
-                int binningIndex = config.m_mcgen_variation_binning_map.count(varName) ? config.m_mcgen_variation_binning_map.at(varName) : config.i_prime;
-                if(binningIndex < 0 || binningIndex >= (int)config.m_num_variables)
-                    binningIndex = config.i_prime;
-
+                PROpeller& cvprop = dvprops.at(DetVarKey(config, cv_idx));
+                PROconfig cvconfig = config.BuildDetVarConfig(cv_idx);
+                NullModel cvmodel(cvprop);
+                Eigen::VectorXf cvparams = Eigen::VectorXf::Constant(cvmodel.nparams, 0);
                 PROspec cvSpec = FillSpectra(cvconfig, cvprop, emptySyst, cvmodel, cvparams, true, binningIndex);
-                std::map<double, PROspec> specs;
-                std::map<double, const PROpeller*> props;
-                for(const auto &[k, i] : syst_files) {
+
+                std::map<knob_t, PROspec> specs;
+                std::map<knob_t, const PROpeller*> props;
+                for(const auto &[k, i] : knob_files) {
                     PROpeller& dvprop = dvprops.at(DetVarKey(config, i));
                     PROconfig dvconfig = config.BuildDetVarConfig(i);
                     NullModel dvmodel(dvprop);
@@ -274,7 +288,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                     cvprop, props, binningIndex, (int)config.m_num_variable_bins_total[binningIndex],
                     matchedCvSpec, specs);
                 if(matched) {
-                    log<LOG_INFO>(L"%1% || DetVar '%2%': using event-matched spectra for spline building") % __func__ % varName.c_str();
+                    log<LOG_INFO>(L"%1% || DetVar '%2%' (section %3%): using event-matched spectra for spline building") % __func__ % varName.c_str() % isec;
                     // When cv_variation_matching_vars is used, undo the POT scaling that was
                     // applied during propeller filling so both CV and variation matched spectra
                     // are in raw event-weight units. The spline ratio then reflects only detector
@@ -285,7 +299,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                         const float cv_unscale = (float)(cv_pot_dv / det_pot);
                         matchedCvSpec.Spec() *= cv_unscale;
                         matchedCvSpec.Error() *= cv_unscale;
-                        for(const auto &[kv, var_file_idx] : syst_files) {
+                        for(const auto &[kv, var_file_idx] : knob_files) {
                             const double var_pot_dv = config.m_detvar_files[var_file_idx].pot;
                             if(var_pot_dv > 0.0) {
                                 const float var_unscale = (float)(var_pot_dv / det_pot);
@@ -295,7 +309,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                         }
                     }
                 } else {
-                    log<LOG_INFO>(L"%1% || DetVar '%2%': no matching vars stored, using full spectra") % __func__ % varName.c_str();
+                    log<LOG_INFO>(L"%1% || DetVar '%2%' (section %3%): no matching vars stored, using full spectra") % __func__ % varName.c_str() % isec;
                 }
 
                 {
@@ -307,33 +321,65 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                     }
                 }
 
-                {
-                    std::vector<eweight_type> knobvals;
-                    std::transform(specs.begin(), specs.end(), std::back_inserter(knobvals),
-                            [](const auto &p){ return p.first; });
-                    std::sort(knobvals.begin(), knobvals.end());
-                    SystStruct ss(varName, specs.size(), systType, "1",
-                                  knobvals, knobvals, 0);
-                    ss.binning = binningIndex;
-                    // apply_to_subchannel: carry the XML pattern so PROsyst scopes this DetVar
-                    // systematic exactly like a weight-based one (CV outside the match).
-                    auto apply_it = config.m_mcgen_variation_apply_to_subchannel.find(varName);
-                    if(apply_it != config.m_mcgen_variation_apply_to_subchannel.end()) {
-                        ss.apply_to_subchannel = apply_it->second;
-                        ss.apply_to_subchannel_names = MatchNames(config.m_fullnames, apply_it->second, "apply_to_subchannel of DetVar systematic " + varName);
-                        log<LOG_INFO>(L"%1% || DetVar '%2%' restricted by apply_to_subchannel='%3%' to %4% subchannel(s).") % __func__ % varName.c_str() % apply_it->second.c_str() % ss.apply_to_subchannel_names.size();
+                // A knob value provided by another section but not by this one means
+                // "no shift here": this section contributes its CV at that knob.
+                for(const knob_t k : all_knobs) {
+                    if(specs.count(k) == 0) {
+                        log<LOG_INFO>(L"%1% || DetVar '%2%': section %3% has no variation at knobval %4%, using its CV there (no shift)") % __func__ % varName.c_str() % isec % FormatKnobVal(k).c_str();
+                        specs[k] = matchedCvSpec;
                     }
-                    ss.CreateSpecs(matchedCvSpec.Spec().size());
-                    ss.p_cv = std::make_shared<PROspec>(matchedCvSpec);
-                    for(const auto &[kv, spec] : specs) {
-                        size_t idx = std::distance(knobvals.begin(), std::find(knobvals.begin(), knobvals.end(), kv));
-                        ss.p_multi_spec[idx] = std::make_shared<PROspec>(specs[kv]);
-                    }
-                    ss.SetHash(config.hash);
-                    for(auto &ssv : systsstructs) ssv.push_back(ss);
                 }
-                log<LOG_INFO>(L"%1% || Added DetVar SystStruct '%2%' (section %3%, binning=%4%, mode=%5%)") % __func__ % varName.c_str() % isec % binningIndex % systType.c_str();
+
+                if(!totalCv) totalCv = matchedCvSpec;
+                else *totalCv += matchedCvSpec;
+                for(auto &[k, spec] : specs) {
+                    auto tot_it = totalVar.find(k);
+                    if(tot_it == totalVar.end()) totalVar.emplace(k, spec);
+                    else tot_it->second += spec;
+                }
+                ++n_sections_used;
             }
+
+            if(!totalCv) {
+                log<LOG_ERROR>(L"%1% || ERROR: DetVar '%2%' could not be built from any section.") % __func__ % varName.c_str();
+                continue;
+            }
+
+            {
+                std::vector<eweight_type> knobvals;
+                std::transform(totalVar.begin(), totalVar.end(), std::back_inserter(knobvals),
+                        [](const auto &p){ return p.first; });
+                std::sort(knobvals.begin(), knobvals.end());
+                SystStruct ss(varName, totalVar.size(), systType, "1",
+                              knobvals, knobvals, 0);
+                ss.binning = binningIndex;
+                // apply_to_subchannel: carry the XML pattern so PROsyst scopes this DetVar
+                // systematic exactly like a weight-based one (CV outside the match).
+                auto apply_it = config.m_mcgen_variation_apply_to_subchannel.find(varName);
+                if(apply_it != config.m_mcgen_variation_apply_to_subchannel.end()) {
+                    ss.apply_to_subchannel = apply_it->second;
+                    ss.apply_to_subchannel_names = MatchNames(config.m_fullnames, apply_it->second, "apply_to_subchannel of DetVar systematic " + varName);
+                    log<LOG_INFO>(L"%1% || DetVar '%2%' restricted by apply_to_subchannel='%3%' to %4% subchannel(s).") % __func__ % varName.c_str() % apply_it->second.c_str() % ss.apply_to_subchannel_names.size();
+                }
+                // inflate: scale this systematic's shifts from the CV about 1
+                // (spline: ratio -> 1 + inflate*(ratio - 1); covariance: x inflate^2), exactly as for
+                // weight-based systematics. PROcreate copies it onto those SystStructs; DetVar
+                // SystStructs are built here instead, so without this it would be parsed but ignored.
+                auto inflate_it = config.m_mcgen_variation_inflate.find(varName);
+                if(inflate_it != config.m_mcgen_variation_inflate.end()) {
+                    ss.inflate = inflate_it->second;
+                    log<LOG_INFO>(L"%1% || DetVar '%2%': inflate=%3% (shifts from the CV are scaled by this factor)") % __func__ % varName.c_str() % ss.inflate;
+                }
+                ss.CreateSpecs(totalCv->Spec().size());
+                ss.p_cv = std::make_shared<PROspec>(*totalCv);
+                for(const auto &[kv, spec] : totalVar) {
+                    size_t idx = std::distance(knobvals.begin(), std::find(knobvals.begin(), knobvals.end(), kv));
+                    ss.p_multi_spec[idx] = std::make_shared<PROspec>(spec);
+                }
+                ss.SetHash(config.hash);
+                for(auto &ssv : systsstructs) ssv.push_back(ss);
+            }
+            log<LOG_INFO>(L"%1% || Added DetVar SystStruct '%2%' (%3% section(s), binning=%4%, mode=%5%)") % __func__ % varName.c_str() % n_sections_used % binningIndex % systType.c_str();
         }
     }
 
