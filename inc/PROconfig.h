@@ -48,6 +48,7 @@
 #include "TTreeFormula.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TH3.h"
 #include "TColor.h"
 
 
@@ -496,6 +497,7 @@ namespace PROfit{
             int m_num_variation_type_norm_to_covariance = 0;
             int m_num_variation_type_hist1d = 0;
             int m_num_variation_type_hist2d = 0;
+            int m_num_variation_type_hist3d = 0;
             int m_num_variation_type_explicit = 0;
             int m_num_variation_type_binned_unconstrained = 0;
 
@@ -538,6 +540,7 @@ namespace PROfit{
             std::map<std::string, std::array<int, 2>> m_mcgen_variation_histaxisvars_map;
             std::map<std::string, std::vector<TH1*>> m_mcgen_variation_hist1d_map;
             std::map<std::string, std::vector<TH2*>> m_mcgen_variation_hist2d_map;
+            std::map<std::string, std::vector<TH3*>> m_mcgen_variation_hist3d_map;
             std::map<std::string, std::vector<std::pair<std::string, std::string>>> m_histvar_files_map; // map of histvar name to vector of (filename, histname) pairs
             std::map<std::string, std::vector<double>> m_histvar_knobvals_map; // map of histvar name to vector of knob values
             std::map<std::string, std::set<std::string>> m_histvar_subchannels_map; // map of histvar name to set of subchannels
