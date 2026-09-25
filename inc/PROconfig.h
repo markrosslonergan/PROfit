@@ -48,6 +48,7 @@
 #include "TTreeFormula.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TH3.h"
 #include "TColor.h"
 
 
@@ -303,6 +304,12 @@ namespace PROfit{
              */
             void ValidateFitVariable() const;
 
+            /**
+             * @brief Code to fill PROconfig object with systematic element in xml.
+             * @details Called from within LoadFromXML.
+             */
+            std::string ProcessSystematic(tinyxml2::XMLElement *syst);
+
 
         public:
 
@@ -490,6 +497,7 @@ namespace PROfit{
             int m_num_variation_type_norm_to_covariance = 0;
             int m_num_variation_type_hist1d = 0;
             int m_num_variation_type_hist2d = 0;
+            int m_num_variation_type_hist3d = 0;
             int m_num_variation_type_explicit = 0;
             int m_num_variation_type_binned_unconstrained = 0;
 
@@ -527,10 +535,12 @@ namespace PROfit{
             std::vector<std::string> m_mcgen_variation_type;
             std::set<std::string> m_mcgen_variation_unmirrored;
             std::map<std::string, std::vector<double>> m_mcgen_explicit_weights;
+            std::map<std::string, std::vector<std::string>> m_mcgen_multisyst_map;
             std::map<std::string, std::string> m_mcgen_variation_external_filename_map;
             std::map<std::string, std::array<int, 2>> m_mcgen_variation_histaxisvars_map;
             std::map<std::string, std::vector<TH1*>> m_mcgen_variation_hist1d_map;
             std::map<std::string, std::vector<TH2*>> m_mcgen_variation_hist2d_map;
+            std::map<std::string, std::vector<TH3*>> m_mcgen_variation_hist3d_map;
             std::map<std::string, std::vector<std::pair<std::string, std::string>>> m_histvar_files_map; // map of histvar name to vector of (filename, histname) pairs
             std::map<std::string, std::vector<double>> m_histvar_knobvals_map; // map of histvar name to vector of knob values
             std::map<std::string, std::set<std::string>> m_histvar_subchannels_map; // map of histvar name to set of subchannels

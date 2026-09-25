@@ -310,7 +310,7 @@ namespace PROfit{
     /// branch (pass an all-zero syst_applies with it). Used when the branch's subchannel is
     /// also filled by a systematics-carrying branch: its events must enter every SystStruct
     /// CV and universe at the CV weight so the fractional response is correctly diluted.
-    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill = false);
+    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, const std::map<std::string, std::vector<std::vector<double>>> &multisyst_knob_indices, PROpeller& inprop, bool force_syst_cv_fill = false);
 
     /**
      * @brief Convert a local or EOS file path to an XRootD URL.

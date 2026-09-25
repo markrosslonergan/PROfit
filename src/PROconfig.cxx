@@ -1494,390 +1494,8 @@ int PROconfig::LoadFromXML(const std::string &filename){
             tinyxml2::XMLElement *pAllowList = pList->FirstChildElement("allowlist");
             if(!pAllowList) pAllowList = pList->FirstChildElement("systematic");
             while(pAllowList){
-                const char *text = pAllowList->GetText();
-                std::string wt = "null";
-                if(text) {
-                    wt = std::string(text);
-                } else {
-                    // Support name attribute as fallback (e.g. <allowlist name="Recomb2" ... />)
-                    const char *name_attr = pAllowList->Attribute("name");
-                    if(name_attr) wt = std::string(name_attr);
-                }
+                ProcessSystematic(pAllowList);
 
-                //check for known attributes
-                const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel", "scale_range", "sources"};
-                for (const tinyxml2::XMLAttribute* attr = pAllowList->FirstAttribute(); attr; attr = attr->Next()) {
-                    std::string name = attr->Name();
-                    if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
-                        log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <allowlist>/<systematic> element is not expected.") % __func__ % name.c_str()  ;
-                        log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
-                        throw std::invalid_argument(std::string("<allowlist>/<systematic> attribute not allowed : ") + name);
-                    }
-                }
-
-                const char *variation_type = pAllowList->Attribute("type");
-                const char *plot_name = pAllowList->Attribute("plotname");
-                const char *binning = pAllowList->Attribute("binning");
-                const char *knobs = pAllowList->Attribute("knobvals");
-                const char *tags = pAllowList->Attribute("tag");
-                const char *prior = pAllowList->Attribute("prior");
-                const char *center = pAllowList->Attribute("center");
-                const char *prior_type = pAllowList->Attribute("prior_type");
-                const char *force_0_cv = pAllowList->Attribute("force_0_cv");
-                const char *include_only_weights_str = pAllowList->Attribute("include_only_weights");
-                const char *restrict_str = pAllowList->Attribute("restrict");
-                const char *scale = pAllowList->Attribute("scale");
-                const char *inflate = pAllowList->Attribute("inflate");
-                const char *filename = pAllowList->Attribute("filename");
-                const char *xvar = pAllowList->Attribute("xvar");
-                const char *yvar = pAllowList->Attribute("yvar");
-                const char *mirrored = pAllowList->Attribute("mirror");
-                const char *num_decomp_knobs = pAllowList->Attribute("num_decomp_knobs");
-                const char *include_resid_cov = pAllowList->Attribute("include_resid_cov");
-                const char *weights = pAllowList->Attribute("weights");
-                const char *apply_to_subchannel = pAllowList->Attribute("apply_to_subchannel");
-                const char *scale_range = pAllowList->Attribute("scale_range");
-                const char *sources = pAllowList->Attribute("sources");
-
-                if(!variation_type) {
-                    throw std::invalid_argument(std::string("<allowlist>/<systematic> entry '") + wt + "' has no type= attribute");
-                }
-                m_mcgen_variation_type.push_back(variation_type);
-                m_mcgen_variation_type_map[wt] = variation_type;
-                const bool is_binned_unconstrained = std::string(variation_type) == "binned_unconstrained";
-                if(is_binned_unconstrained) {
-                    // One XML entry -> one free, un-pulled normalization parameter per bin of the
-                    // binning variable (see RegisterBinnedUnconstrainedChildren). The prior is
-                    // implicitly uniform and the fit range comes from scale_range, so the
-                    // Gaussian-prior / restrict attributes make no sense here.
-                    if(prior || center || prior_type) {
-                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
-                            "' cannot specify prior=, center= or prior_type= (its per-bin parameters always float freely with a uniform prior)");
-                    }
-                    if(restrict_str) {
-                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
-                            "' takes its range from scale_range=\"lo, hi\" (multiplicative scale units), not restrict=");
-                    }
-                    if(knobs || filename || xvar || yvar || mirrored || num_decomp_knobs || include_resid_cov || weights || force_0_cv || include_only_weights_str || scale || inflate) {
-                        throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
-                            "' only supports the attributes type, plotname, tag, binning, apply_to_subchannel and scale_range");
-                    }
-                    m_mcgen_variation_scale_range[wt] = {0.0f, 10.0f};
-                }
-                if(scale_range) {
-                    if(!is_binned_unconstrained) {
-                        throw std::invalid_argument(std::string("scale_range is only supported for type='binned_unconstrained' systematics; got type '") +
-                            variation_type + "' for '" + wt + "'");
-                    }
-                    char *end;
-                    float slo = std::strtof(scale_range, &end);
-                    if(end == scale_range)
-                        throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
-                    while(*end == ' ' || *end == ',') ++end;
-                    char *end2;
-                    float shi = std::strtof(end, &end2);
-                    if(end2 == end)
-                        throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
-                    if(!(slo < 1.0f && shi > 1.0f)) {
-                        throw std::invalid_argument(std::string("scale_range for systematic '") + wt + "' must strictly contain the CV scale of 1 (lo < 1 < hi), got [" +
-                            std::to_string(slo) + ", " + std::to_string(shi) + "]");
-                    }
-                    m_mcgen_variation_scale_range[wt] = {slo, shi};
-                    log<LOG_INFO>(L"%1% || Parsed scale_range=[%2%, %3%] for binned_unconstrained systematic %4%") % __func__ % slo % shi % wt.c_str();
-                }
-                if(std::string(variation_type) == "covariance_to_spline_uniform") {
-                    // The sum of the type="covariance" entries matched by sources= is eigen-decomposed;
-                    // the num_decomp_knobs leading modes float freely (uniform prior, no pull) inside
-                    // restrict="lo, hi" (sigma units of the mode, default [-10, 10]); the rest stay a
-                    // Gaussian residual covariance. Built entirely in PROsyst from those entries, so
-                    // this entry reads no weights of its own.
-                    if(!sources) {
-                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
-                            "' requires sources=\"<regex>\" naming the type=\"covariance\" entries to sum and decompose");
-                    }
-                    if(!num_decomp_knobs || atoi(num_decomp_knobs) <= 0) {
-                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
-                            "' requires num_decomp_knobs=\"N\" (N>0): the number of leading eigenmodes to free");
-                    }
-                    if(prior || center || prior_type) {
-                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
-                            "' cannot specify prior=, center= or prior_type= (its eigenmode knobs always float freely with a uniform prior)");
-                    }
-                    if(binning || knobs || filename || xvar || yvar || mirrored || weights || force_0_cv || include_only_weights_str || scale || inflate || apply_to_subchannel) {
-                        throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
-                            "' only supports the attributes type, plotname, tag, num_decomp_knobs, include_resid_cov, restrict and sources (put scale=/inflate=/apply_to_subchannel= on the source entries)");
-                    }
-                    std::string pattern = sources;
-                    size_t b = pattern.find_first_not_of(" \t");
-                    size_t e = pattern.find_last_not_of(" \t");
-                    pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
-                    if(pattern.empty()) {
-                        throw std::invalid_argument(std::string("sources attribute for systematic '") + wt + "' is empty");
-                    }
-                    m_mcgen_variation_sources[wt] = pattern;
-                    m_mcgen_variation_prior_types[wt] = SplinePriorType::Uniform;
-                    if(!restrict_str) m_mcgen_variation_restrict[wt] = {-10.0f, 10.0f};
-                    log<LOG_INFO>(L"%1% || covariance_to_spline_uniform systematic %2%: sources='%3%', %4% free eigenmodes, knob box [%5%, %6%]")
-                        % __func__ % wt.c_str() % pattern.c_str() % atoi(num_decomp_knobs) % m_mcgen_variation_restrict[wt].first % m_mcgen_variation_restrict[wt].second;
-                } else if(sources) {
-                    throw std::invalid_argument(std::string("sources is only supported for type='covariance_to_spline_uniform' systematics; got type '") +
-                        variation_type + "' for '" + wt + "'");
-                }
-                if(prior_type) {
-                    const std::string parsed_prior_type(prior_type);
-                    static const std::map<std::string, SplinePriorType> supported_prior_types = {
-                        {"gaussian", SplinePriorType::Gaussian},
-                        {"uniform", SplinePriorType::Uniform}
-                    };
-                    auto parsed = supported_prior_types.find(parsed_prior_type);
-                    if(parsed == supported_prior_types.end()) {
-                        throw std::invalid_argument(
-                            std::string("Systematic '") + wt +
-                            "' has unsupported prior_type='" + parsed_prior_type +
-                            "' (expected 'gaussian' or 'uniform')"
-                        );
-                    }
-                    if(!variation_type || std::string(variation_type) != "spline") {
-                        throw std::invalid_argument(
-                            std::string("prior_type is only supported for type='spline' systematics; got '") +
-                            (variation_type ? variation_type : "unspecified") + "' for '" + wt + "'"
-                        );
-                    }
-                    if(parsed->second == SplinePriorType::Uniform) {
-                        if(!restrict_str) {
-                            throw std::invalid_argument(
-                                std::string("Uniform-prior spline '") + wt +
-                                "' requires a finite restrict='lo, hi' range"
-                            );
-                        }
-                        if(prior || center) {
-                            throw std::invalid_argument(
-                                std::string("Uniform-prior spline '") + wt +
-                                "' cannot also specify Gaussian prior= or center= attributes"
-                            );
-                        }
-                    }
-                    m_mcgen_variation_prior_types[wt] = parsed->second;
-                }
-                // mcstat's covariance is registered in PROsyst under the systematic's name; remember
-                // that name here so the covariance key matches the tag/plotname maps (both keyed by wt).
-                if(variation_type && std::string(variation_type) == "mcstat") m_mcstat_systname = wt;
-
-                // DetVar variations are handled separately (not weight branches in MC files),
-                // so don't add them to the allowlist that PROcess_CAFAna uses.
-                bool is_detvar = m_detvar_variation_names.count(wt) > 0;
-                if(!is_detvar) {
-                    m_mcgen_variation_allowlist.push_back(wt);
-                } else {
-                    log<LOG_INFO>(L"%1% || Systematic '%2%' matches a DetVar variation; skipping weight-branch allowlist.") % __func__ % wt.c_str();
-                }
-                if(prior) m_mcgen_variation_prior[wt] = std::strtof(prior, NULL);
-                if(center) m_mcgen_variation_prior_centers[wt] = std::strtof(center, NULL);
-                if(filename) m_mcgen_variation_external_filename_map[wt] = filename;
-                m_mcgen_variation_plotname_map[wt] = plot_name ? plot_name : wt;
-                if(variation_type && (strcmp(variation_type, "hist1d") == 0 || strcmp(variation_type, "hist2d") == 0)) {
-                    if(!xvar) {
-                        log<LOG_ERROR>(L"%1% || Expected xvar attribute for %2% systematic.")
-                            % __func__ % variation_type;
-                        exit(EXIT_FAILURE);
-                    }
-                    int v = atoi(xvar+3);
-                    m_mcgen_variation_histaxisvars_map[wt][0] = v;
-
-                    auto hv_it = m_histvar_files_map.find(wt);
-                    if(hv_it != m_histvar_files_map.end()) {
-                        // Multi-universe (asymmetric) case: this name matches a
-                        // <HistVarSection>, so read every declared <variation> instead
-                        // of the single filename attribute below.
-                        if(hv_it->second.size() > 1 &&
-                           !(mirrored && (strcmp(mirrored, "false") == 0 || strcmp(mirrored, "no") == 0 || strcmp(mirrored, "0") == 0))) {
-                            log<LOG_ERROR>(L"%1% || Systematic '%2%' resolves against a HistVarSection with %3% independently measured "
-                                           L"universes; mirror=\"false\" must be set explicitly (mirroring a multi-universe input is "
-                                           L"contradictory - each universe is already an independent measurement, not one to be reflected).")
-                                % __func__ % wt.c_str() % hv_it->second.size();
-                            exit(EXIT_FAILURE);
-                        }
-                        for(const auto& file_hist : hv_it->second) {
-                            TFile hv_fin(file_hist.first.c_str());
-                            if(strcmp(variation_type, "hist1d") == 0) {
-                                TH1* h = (TH1*)hv_fin.Get<TH1>(file_hist.second.c_str())->Clone();
-                                h->SetDirectory(0);
-                                m_mcgen_variation_hist1d_map[wt].push_back(h);
-                            } else {
-                                TH2* h = (TH2*)hv_fin.Get<TH2>(file_hist.second.c_str())->Clone();
-                                h->SetDirectory(0);
-                                m_mcgen_variation_hist2d_map[wt].push_back(h);
-                            }
-                        }
-                        log<LOG_INFO>(L"%1% || Systematic '%2%' resolved against HistVarSection: %3% universes")
-                            % __func__ % wt.c_str() % hv_it->second.size();
-                    } else {
-                        // Single-universe (symmetric) case: unchanged from before.
-                        TFile fin(filename);
-                        if(strcmp(variation_type, "hist1d") == 0) {
-                            TH1* h = (TH1*)fin.Get<TH1>(wt.c_str())->Clone();
-                            h->SetDirectory(0);
-                            m_mcgen_variation_hist1d_map[wt].push_back(h);
-                        } else {
-                            TH2* h = (TH2*)fin.Get<TH2>(wt.c_str())->Clone();
-                            h->SetDirectory(0);
-                            m_mcgen_variation_hist2d_map[wt].push_back(h);
-                        }
-                    }
-                }
-                if(variation_type && strcmp(variation_type, "hist2d") == 0) {
-                    if(!yvar) {
-                        log<LOG_ERROR>(L"%1% || Expected yvar attribute for hist2d systematic.")
-                            % __func__;
-                        exit(EXIT_FAILURE);
-                    }
-                    int v = atoi(yvar+3);
-                    m_mcgen_variation_histaxisvars_map[wt][1] = v;
-                }
-                if(!binning || strcmp(binning, "reco") == 0) {
-                    m_mcgen_variation_binning_map[wt] = i_prime;
-                } else if(strncmp(binning, "var", 3) == 0) {
-                    size_t l = strlen(binning);
-                    bool all_numbers = true;
-                    for(size_t i = 3; i < l; ++i) {
-                        if(!isdigit(binning[i])) {
-                            all_numbers = false;
-                            break;
-                        }
-                    }
-                    if(all_numbers) {
-                        int binning_num;
-                        sscanf(binning, "var%i", &binning_num);
-                        m_mcgen_variation_binning_map[wt] = binning_num;
-                    } else {
-                        log<LOG_WARNING>(L"%1% || Unrecognized binning '%2%' for systematic %3%. Defaulting to reco bins.") 
-                            % __func__ % binning % wt.c_str();
-                        m_mcgen_variation_binning_map[wt] = i_prime;
-                    }
-                } else {
-                    log<LOG_WARNING>(L"%1% || Unrecognized binning '%2%' for systematic %3%. Defaulting to reco bins.") 
-                        % __func__ % binning % wt.c_str();
-                    m_mcgen_variation_binning_map[wt] = i_prime;
-                }
-                if(knobs) {
-                    std::vector<double> knobs_vec;
-                    const char *c = knobs, *begin = NULL;
-                    while(*c) {
-                        if(begin && isspace(*c)) {
-                            knobs_vec.push_back(strtod(begin, NULL));
-                            begin = NULL;
-                        } else if(!begin && !isspace(*c)) begin = c;
-                        ++c;
-                    }
-                    knobs_vec.push_back(strtod(begin, NULL));
-                    m_mcgen_variation_knobval_override[wt] = knobs_vec;
-                }
-                if(weights) {
-                    std::vector<double> weights_vec;
-                    const char *c = weights, *begin = NULL;
-                    while(*c) {
-                        if(begin && isspace(*c)) {
-                            weights_vec.push_back(strtod(begin, NULL));
-                            begin = NULL;
-                        } else if(!begin && !isspace(*c)) begin = c;
-                        ++c;
-                    }
-                    weights_vec.push_back(strtod(begin, NULL));
-                    m_mcgen_explicit_weights[wt] = weights_vec;
-                }
-                if(tags) {
-                    std::vector<std::string> tags_vec;
-                    const char *c = tags, *begin = NULL;
-                    while(*c) {
-                        if(begin && *c == ',') {
-                            tags_vec.push_back(std::string(begin, c));
-                            begin = NULL;
-                        } else if(!begin && !isspace(*c)) begin = c;
-                        ++c;
-                    }
-                    if(begin) tags_vec.push_back(std::string(begin, c));
-                    m_mcgen_variation_tags[wt] = tags_vec;
-                }
-                if(force_0_cv && strcmp(force_0_cv, "true") == 0) {
-                    m_mcgen_variation_force_0_cv[wt] = true;
-                    log<LOG_INFO>(L"%1% || Parsed force_0_cv=true for systematic %2%") % __func__ % wt.c_str();
-                }
-                if(include_only_weights_str) {
-                    std::vector<int> iow_vec;
-                    const char *c = include_only_weights_str, *begin = NULL;
-                    while(*c) {
-                        if(begin && (isspace(*c) || *c == ',')) {
-                            iow_vec.push_back(atoi(begin));
-                            begin = NULL;
-                        } else if(!begin && !isspace(*c) && *c != ',') begin = c;
-                        ++c;
-                    }
-                    if(begin) iow_vec.push_back(atoi(begin));
-                    m_mcgen_variation_include_only_weights[wt] = iow_vec;
-                    log<LOG_INFO>(L"%1% || Parsed include_only_weights for systematic %2%: %3% entries") % __func__ % wt.c_str() % iow_vec.size();
-                }
-                if(restrict_str) {
-                    char *end;
-                    float rlo = std::strtof(restrict_str, &end);
-                    if(end == restrict_str)
-                        throw std::invalid_argument(std::string("restrict attribute for systematic '") + wt + "' must be two numbers, e.g. restrict=\"-1, 1\"");
-                    while(*end == ' ' || *end == ',') ++end;
-                    float rhi = std::strtof(end, nullptr);
-                    if(rlo > rhi) {
-                        log<LOG_WARNING>(L"%1% || restrict for systematic %2% given as [%3%, %4%] with lo>hi; swapping. "
-                                         L"An inverted range would otherwise hang rejection-sampling (pseudo-experiments).")
-                            % __func__ % wt.c_str() % rlo % rhi;
-                        const float t = rlo; rlo = rhi; rhi = t;
-                    }
-                    m_mcgen_variation_restrict[wt] = {rlo, rhi};
-                    log<LOG_INFO>(L"%1% || Parsed restrict=[%2%, %3%] for systematic %4%") % __func__ % rlo % rhi % wt.c_str();
-                }
-                if(scale) {
-                    m_mcgen_variation_scale[wt] = std::strtof(scale, NULL);
-                    log<LOG_INFO>(L"%1% || Parsed scale=%2% for systematic %3%") % __func__ % m_mcgen_variation_scale[wt] % wt.c_str();
-                }
-                if(inflate) {
-                    char *end;
-                    float inflate_val = std::strtof(inflate, &end);
-                    if(end == inflate || inflate_val <= 0) {
-                        log<LOG_ERROR>(L"%1% || ERROR! inflate attribute for systematic %2% must be a positive number, got '%3%'") % __func__ % wt.c_str() % inflate;
-                        throw std::invalid_argument(std::string("inflate attribute for systematic '") + wt + "' must be a positive number");
-                    }
-                    m_mcgen_variation_inflate[wt] = inflate_val;
-                    log<LOG_INFO>(L"%1% || Parsed inflate=%2% for systematic %3%") % __func__ % inflate_val % wt.c_str();
-                    const std::vector<std::string> inflatable_types = {"spline", "spline_to_covariance", "covariance", "external_covariance", "norm", "norm_to_covariance", "hist1d", "hist2d"};
-                    if(!variation_type || std::find(inflatable_types.begin(), inflatable_types.end(), variation_type) == inflatable_types.end()) {
-                        log<LOG_WARNING>(L"%1% || inflate is not supported for systematic %2% (type %3%); it will have no effect.")
-                            % __func__ % wt.c_str() % (variation_type ? variation_type : "unspecified");
-                    }
-                }
-                if(mirrored) {
-                    if(strcmp(mirrored, "false") == 0 || strcmp(mirrored, "no") == 0 || strcmp(mirrored, "0") == 0)
-                        m_mcgen_variation_unmirrored.insert(wt);
-                }
-                if(num_decomp_knobs) {
-                    m_mcgen_variation_num_decomp_knobs[wt] = atoi(num_decomp_knobs);
-                    log<LOG_INFO>(L"%1% || Parsed num_decomp_knobs=%2% for systematic %3%") % __func__ % m_mcgen_variation_num_decomp_knobs[wt] % wt.c_str();
-                }
-                if(include_resid_cov) {
-                    bool keep_resid = !(strcmp(include_resid_cov, "false") == 0 || strcmp(include_resid_cov, "no") == 0 || strcmp(include_resid_cov, "0") == 0);
-                    m_mcgen_variation_include_resid_cov[wt] = keep_resid;
-                    log<LOG_INFO>(L"%1% || Parsed include_resid_cov=%2% for systematic %3%") % __func__ % keep_resid % wt.c_str();
-                }
-                if(apply_to_subchannel) {
-                    std::string pattern = apply_to_subchannel;
-                    // trim leading/trailing whitespace so apply_to_subchannel="nu_SBND " behaves
-                    size_t b = pattern.find_first_not_of(" \t");
-                    size_t e = pattern.find_last_not_of(" \t");
-                    pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
-                    if(pattern.empty()) {
-                        log<LOG_ERROR>(L"%1% || ERROR! apply_to_subchannel attribute for systematic %2% is empty.") % __func__ % wt.c_str();
-                        throw std::invalid_argument(std::string("apply_to_subchannel attribute for systematic '") + wt + "' is empty");
-                    }
-                    m_mcgen_variation_apply_to_subchannel[wt] = pattern;
-                    log<LOG_INFO>(L"%1% || Parsed apply_to_subchannel='%2%' for systematic %3% (unanchored regex against subchannel fullnames; plain substrings work as-is)") % __func__ % pattern.c_str() % wt.c_str();
-                }
-                log<LOG_DEBUG>(L"%1% || Allowlisting variations: %2%") % __func__ % wt.c_str() ;
                 tinyxml2::XMLElement *pNext = pAllowList->NextSiblingElement("allowlist");
                 if(!pNext) pNext = pAllowList->NextSiblingElement("systematic");
                 pAllowList = pNext;
@@ -3437,4 +3055,401 @@ std::vector<std::string> PROfit::MatchNames(const std::vector<std::string> &name
     for(const auto &name : names)
         if(PatternMatches(name, re)) out.push_back(name);
     return out;
+}
+
+std::string PROfit::PROconfig::ProcessSystematic(tinyxml2::XMLElement *syst) {
+    const char *text = syst->GetText();
+    std::string wt = "null";
+    if(text) {
+        wt = std::string(text);
+    } else {
+        // Support name attribute as fallback (e.g. <allowlist name="Recomb2" ... />)
+        const char *name_attr = syst->Attribute("name");
+        if(name_attr) wt = std::string(name_attr);
+    }
+
+    //check for known attributes
+    const std::vector<std::string> expected_attrs = {"name", "type", "plotname", "binning", "knobvals", "tag", "prior", "center", "prior_type", "force_0_cv", "include_only_weights", "scale","filename", "xvar", "yvar", "restrict", "mirror", "num_decomp_knobs", "include_resid_cov", "inflate", "weights", "apply_to_subchannel", "scale_range", "sources"};
+    for (const tinyxml2::XMLAttribute* attr = syst->FirstAttribute(); attr; attr = attr->Next()) {
+        std::string name = attr->Name();
+        if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
+            log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <allowlist>/<systematic> element is not expected.") % __func__ % name.c_str()  ;
+            log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2%") % __func__ % expected_attrs ;
+            throw std::invalid_argument(std::string("<allowlist>/<systematic> attribute not allowed : ") + name);
+        }
+    }
+
+    const char *variation_type = syst->Attribute("type");
+    const char *plot_name = syst->Attribute("plotname");
+    const char *binning = syst->Attribute("binning");
+    const char *knobs = syst->Attribute("knobvals");
+    const char *tags = syst->Attribute("tag");
+    const char *prior = syst->Attribute("prior");
+    const char *center = syst->Attribute("center");
+    const char *prior_type = syst->Attribute("prior_type");
+    const char *force_0_cv = syst->Attribute("force_0_cv");
+    const char *include_only_weights_str = syst->Attribute("include_only_weights");
+    const char *restrict_str = syst->Attribute("restrict");
+    const char *scale = syst->Attribute("scale");
+    const char *inflate = syst->Attribute("inflate");
+    const char *filename = syst->Attribute("filename");
+    const char *xvar = syst->Attribute("xvar");
+    const char *yvar = syst->Attribute("yvar");
+    const char *mirrored = syst->Attribute("mirror");
+    const char *num_decomp_knobs = syst->Attribute("num_decomp_knobs");
+    const char *include_resid_cov = syst->Attribute("include_resid_cov");
+    const char *weights = syst->Attribute("weights");
+    const char *apply_to_subchannel = syst->Attribute("apply_to_subchannel");
+    const char *scale_range = syst->Attribute("scale_range");
+    const char *sources = syst->Attribute("sources");
+
+    if(!variation_type) {
+        throw std::invalid_argument(std::string("<allowlist>/<systematic> entry '") + wt + "' has no type= attribute");
+    }
+    m_mcgen_variation_type.push_back(variation_type);
+    m_mcgen_variation_type_map[wt] = variation_type;
+    const bool is_binned_unconstrained = std::string(variation_type) == "binned_unconstrained";
+    if(is_binned_unconstrained) {
+        // One XML entry -> one free, un-pulled normalization parameter per bin of the
+        // binning variable (see RegisterBinnedUnconstrainedChildren). The prior is
+        // implicitly uniform and the fit range comes from scale_range, so the
+        // Gaussian-prior / restrict attributes make no sense here.
+        if(prior || center || prior_type) {
+            throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                "' cannot specify prior=, center= or prior_type= (its per-bin parameters always float freely with a uniform prior)");
+        }
+        if(restrict_str) {
+            throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                "' takes its range from scale_range=\"lo, hi\" (multiplicative scale units), not restrict=");
+        }
+        if(knobs || filename || xvar || yvar || mirrored || num_decomp_knobs || include_resid_cov || weights || force_0_cv || include_only_weights_str || scale || inflate) {
+            throw std::invalid_argument(std::string("binned_unconstrained systematic '") + wt +
+                "' only supports the attributes type, plotname, tag, binning, apply_to_subchannel and scale_range");
+        }
+        m_mcgen_variation_scale_range[wt] = {0.0f, 10.0f};
+    }
+    if(strcmp(variation_type, "multisyst") == 0) {
+        tinyxml2::XMLElement *inner = syst->FirstChildElement("allowlist");
+        if(!inner) inner = syst->FirstChildElement("systematic");
+        while(inner) {
+            m_mcgen_multisyst_map[wt].push_back(ProcessSystematic(inner));
+            inner = inner->NextSiblingElement("allowlist");
+            if(!inner) inner = inner->NextSiblingElement("systematic");
+        }
+    }
+    if(scale_range) {
+        if(!is_binned_unconstrained) {
+            throw std::invalid_argument(std::string("scale_range is only supported for type='binned_unconstrained' systematics; got type '") +
+                variation_type + "' for '" + wt + "'");
+        }
+        char *end;
+        float slo = std::strtof(scale_range, &end);
+        if(end == scale_range)
+            throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
+        while(*end == ' ' || *end == ',') ++end;
+        char *end2;
+        float shi = std::strtof(end, &end2);
+        if(end2 == end)
+            throw std::invalid_argument(std::string("scale_range attribute for systematic '") + wt + "' must be two numbers, e.g. scale_range=\"0, 10\"");
+        if(!(slo < 1.0f && shi > 1.0f)) {
+            throw std::invalid_argument(std::string("scale_range for systematic '") + wt + "' must strictly contain the CV scale of 1 (lo < 1 < hi), got [" +
+                std::to_string(slo) + ", " + std::to_string(shi) + "]");
+        }
+        m_mcgen_variation_scale_range[wt] = {slo, shi};
+        log<LOG_INFO>(L"%1% || Parsed scale_range=[%2%, %3%] for binned_unconstrained systematic %4%") % __func__ % slo % shi % wt.c_str();
+    }
+    if(std::string(variation_type) == "covariance_to_spline_uniform") {
+        // The sum of the type="covariance" entries matched by sources= is eigen-decomposed;
+        // the num_decomp_knobs leading modes float freely (uniform prior, no pull) inside
+        // restrict="lo, hi" (sigma units of the mode, default [-10, 10]); the rest stay a
+        // Gaussian residual covariance. Built entirely in PROsyst from those entries, so
+        // this entry reads no weights of its own.
+        if(!sources) {
+            throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                "' requires sources=\"<regex>\" naming the type=\"covariance\" entries to sum and decompose");
+        }
+        if(!num_decomp_knobs || atoi(num_decomp_knobs) <= 0) {
+            throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                "' requires num_decomp_knobs=\"N\" (N>0): the number of leading eigenmodes to free");
+        }
+        if(prior || center || prior_type) {
+            throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                "' cannot specify prior=, center= or prior_type= (its eigenmode knobs always float freely with a uniform prior)");
+        }
+        if(binning || knobs || filename || xvar || yvar || mirrored || weights || force_0_cv || include_only_weights_str || scale || inflate || apply_to_subchannel) {
+            throw std::invalid_argument(std::string("covariance_to_spline_uniform systematic '") + wt +
+                "' only supports the attributes type, plotname, tag, num_decomp_knobs, include_resid_cov, restrict and sources (put scale=/inflate=/apply_to_subchannel= on the source entries)");
+        }
+        std::string pattern = sources;
+        size_t b = pattern.find_first_not_of(" \t");
+        size_t e = pattern.find_last_not_of(" \t");
+        pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
+        if(pattern.empty()) {
+            throw std::invalid_argument(std::string("sources attribute for systematic '") + wt + "' is empty");
+        }
+        m_mcgen_variation_sources[wt] = pattern;
+        m_mcgen_variation_prior_types[wt] = SplinePriorType::Uniform;
+        if(!restrict_str) m_mcgen_variation_restrict[wt] = {-10.0f, 10.0f};
+        log<LOG_INFO>(L"%1% || covariance_to_spline_uniform systematic %2%: sources='%3%', %4% free eigenmodes, knob box [%5%, %6%]")
+            % __func__ % wt.c_str() % pattern.c_str() % atoi(num_decomp_knobs) % m_mcgen_variation_restrict[wt].first % m_mcgen_variation_restrict[wt].second;
+    } else if(sources) {
+        throw std::invalid_argument(std::string("sources is only supported for type='covariance_to_spline_uniform' systematics; got type '") +
+            variation_type + "' for '" + wt + "'");
+    }
+    if(prior_type) {
+        const std::string parsed_prior_type(prior_type);
+        static const std::map<std::string, SplinePriorType> supported_prior_types = {
+            {"gaussian", SplinePriorType::Gaussian},
+            {"uniform", SplinePriorType::Uniform}
+        };
+        auto parsed = supported_prior_types.find(parsed_prior_type);
+        if(parsed == supported_prior_types.end()) {
+            throw std::invalid_argument(
+                std::string("Systematic '") + wt +
+                "' has unsupported prior_type='" + parsed_prior_type +
+                "' (expected 'gaussian' or 'uniform')"
+            );
+        }
+        if(!variation_type || std::string(variation_type) != "spline") {
+            throw std::invalid_argument(
+                std::string("prior_type is only supported for type='spline' systematics; got '") +
+                (variation_type ? variation_type : "unspecified") + "' for '" + wt + "'"
+            );
+        }
+        if(parsed->second == SplinePriorType::Uniform) {
+            if(!restrict_str) {
+                throw std::invalid_argument(
+                    std::string("Uniform-prior spline '") + wt +
+                    "' requires a finite restrict='lo, hi' range"
+                );
+            }
+            if(prior || center) {
+                throw std::invalid_argument(
+                    std::string("Uniform-prior spline '") + wt +
+                    "' cannot also specify Gaussian prior= or center= attributes"
+                );
+            }
+        }
+        m_mcgen_variation_prior_types[wt] = parsed->second;
+    }
+    // mcstat's covariance is registered in PROsyst under the systematic's name; remember
+    // that name here so the covariance key matches the tag/plotname maps (both keyed by wt).
+    if(variation_type && std::string(variation_type) == "mcstat") m_mcstat_systname = wt;
+
+    // DetVar variations are handled separately (not weight branches in MC files),
+    // so don't add them to the allowlist that PROcess_CAFAna uses.
+    bool is_detvar = m_detvar_variation_names.count(wt) > 0;
+    if(!is_detvar) {
+        m_mcgen_variation_allowlist.push_back(wt);
+    } else {
+        log<LOG_INFO>(L"%1% || Systematic '%2%' matches a DetVar variation; skipping weight-branch allowlist.") % __func__ % wt.c_str();
+    }
+    if(prior) m_mcgen_variation_prior[wt] = std::strtof(prior, NULL);
+    if(center) m_mcgen_variation_prior_centers[wt] = std::strtof(center, NULL);
+    if(filename) m_mcgen_variation_external_filename_map[wt] = filename;
+    m_mcgen_variation_plotname_map[wt] = plot_name ? plot_name : wt;
+    if(variation_type && (strcmp(variation_type, "hist1d") == 0 || strcmp(variation_type, "hist2d") == 0)) {
+        if(!xvar) {
+            log<LOG_ERROR>(L"%1% || Expected xvar attribute for %2% systematic.")
+                % __func__ % variation_type;
+            exit(EXIT_FAILURE);
+        }
+        int v = atoi(xvar+3);
+        m_mcgen_variation_histaxisvars_map[wt][0] = v;
+
+        auto hv_it = m_histvar_files_map.find(wt);
+        if(hv_it != m_histvar_files_map.end()) {
+            // Multi-universe (asymmetric) case: this name matches a
+            // <HistVarSection>, so read every declared <variation> instead
+            // of the single filename attribute below.
+            if(hv_it->second.size() > 1 &&
+               !(mirrored && (strcmp(mirrored, "false") == 0 || strcmp(mirrored, "no") == 0 || strcmp(mirrored, "0") == 0))) {
+                log<LOG_ERROR>(L"%1% || Systematic '%2%' resolves against a HistVarSection with %3% independently measured "
+                               L"universes; mirror=\"false\" must be set explicitly (mirroring a multi-universe input is "
+                               L"contradictory - each universe is already an independent measurement, not one to be reflected).")
+                    % __func__ % wt.c_str() % hv_it->second.size();
+                exit(EXIT_FAILURE);
+            }
+            for(const auto& file_hist : hv_it->second) {
+                TFile hv_fin(file_hist.first.c_str());
+                if(strcmp(variation_type, "hist1d") == 0) {
+                    TH1* h = (TH1*)hv_fin.Get<TH1>(file_hist.second.c_str())->Clone();
+                    h->SetDirectory(0);
+                    m_mcgen_variation_hist1d_map[wt].push_back(h);
+                } else {
+                    TH2* h = (TH2*)hv_fin.Get<TH2>(file_hist.second.c_str())->Clone();
+                    h->SetDirectory(0);
+                    m_mcgen_variation_hist2d_map[wt].push_back(h);
+                }
+            }
+            log<LOG_INFO>(L"%1% || Systematic '%2%' resolved against HistVarSection: %3% universes")
+                % __func__ % wt.c_str() % hv_it->second.size();
+        } else {
+            // Single-universe (symmetric) case: unchanged from before.
+            TFile fin(filename);
+            if(strcmp(variation_type, "hist1d") == 0) {
+                TH1* h = (TH1*)fin.Get<TH1>(wt.c_str())->Clone();
+                h->SetDirectory(0);
+                m_mcgen_variation_hist1d_map[wt].push_back(h);
+            } else {
+                TH2* h = (TH2*)fin.Get<TH2>(wt.c_str())->Clone();
+                h->SetDirectory(0);
+                m_mcgen_variation_hist2d_map[wt].push_back(h);
+            }
+        }
+    }
+    if(variation_type && strcmp(variation_type, "hist2d") == 0) {
+        if(!yvar) {
+            log<LOG_ERROR>(L"%1% || Expected yvar attribute for hist2d systematic.")
+                % __func__;
+            exit(EXIT_FAILURE);
+        }
+        int v = atoi(yvar+3);
+        m_mcgen_variation_histaxisvars_map[wt][1] = v;
+    }
+    if(!binning || strcmp(binning, "reco") == 0) {
+        m_mcgen_variation_binning_map[wt] = i_prime;
+    } else if(strncmp(binning, "var", 3) == 0) {
+        size_t l = strlen(binning);
+        bool all_numbers = true;
+        for(size_t i = 3; i < l; ++i) {
+            if(!isdigit(binning[i])) {
+                all_numbers = false;
+                break;
+            }
+        }
+        if(all_numbers) {
+            int binning_num;
+            sscanf(binning, "var%i", &binning_num);
+            m_mcgen_variation_binning_map[wt] = binning_num;
+        } else {
+            log<LOG_WARNING>(L"%1% || Unrecognized binning '%2%' for systematic %3%. Defaulting to reco bins.") 
+                % __func__ % binning % wt.c_str();
+            m_mcgen_variation_binning_map[wt] = i_prime;
+        }
+    } else {
+        log<LOG_WARNING>(L"%1% || Unrecognized binning '%2%' for systematic %3%. Defaulting to reco bins.") 
+            % __func__ % binning % wt.c_str();
+        m_mcgen_variation_binning_map[wt] = i_prime;
+    }
+    if(knobs) {
+        std::vector<double> knobs_vec;
+        const char *c = knobs, *begin = NULL;
+        while(*c) {
+            if(begin && isspace(*c)) {
+                knobs_vec.push_back(strtod(begin, NULL));
+                begin = NULL;
+            } else if(!begin && !isspace(*c)) begin = c;
+            ++c;
+        }
+        knobs_vec.push_back(strtod(begin, NULL));
+        m_mcgen_variation_knobval_override[wt] = knobs_vec;
+    }
+    if(weights) {
+        std::vector<double> weights_vec;
+        const char *c = weights, *begin = NULL;
+        while(*c) {
+            if(begin && isspace(*c)) {
+                weights_vec.push_back(strtod(begin, NULL));
+                begin = NULL;
+            } else if(!begin && !isspace(*c)) begin = c;
+            ++c;
+        }
+        weights_vec.push_back(strtod(begin, NULL));
+        m_mcgen_explicit_weights[wt] = weights_vec;
+    }
+    if(tags) {
+        std::vector<std::string> tags_vec;
+        const char *c = tags, *begin = NULL;
+        while(*c) {
+            if(begin && *c == ',') {
+                tags_vec.push_back(std::string(begin, c));
+                begin = NULL;
+            } else if(!begin && !isspace(*c)) begin = c;
+            ++c;
+        }
+        if(begin) tags_vec.push_back(std::string(begin, c));
+        m_mcgen_variation_tags[wt] = tags_vec;
+    }
+    if(force_0_cv && strcmp(force_0_cv, "true") == 0) {
+        m_mcgen_variation_force_0_cv[wt] = true;
+        log<LOG_INFO>(L"%1% || Parsed force_0_cv=true for systematic %2%") % __func__ % wt.c_str();
+    }
+    if(include_only_weights_str) {
+        std::vector<int> iow_vec;
+        const char *c = include_only_weights_str, *begin = NULL;
+        while(*c) {
+            if(begin && (isspace(*c) || *c == ',')) {
+                iow_vec.push_back(atoi(begin));
+                begin = NULL;
+            } else if(!begin && !isspace(*c) && *c != ',') begin = c;
+            ++c;
+        }
+        if(begin) iow_vec.push_back(atoi(begin));
+        m_mcgen_variation_include_only_weights[wt] = iow_vec;
+        log<LOG_INFO>(L"%1% || Parsed include_only_weights for systematic %2%: %3% entries") % __func__ % wt.c_str() % iow_vec.size();
+    }
+    if(restrict_str) {
+        char *end;
+        float rlo = std::strtof(restrict_str, &end);
+        if(end == restrict_str)
+            throw std::invalid_argument(std::string("restrict attribute for systematic '") + wt + "' must be two numbers, e.g. restrict=\"-1, 1\"");
+        while(*end == ' ' || *end == ',') ++end;
+        float rhi = std::strtof(end, nullptr);
+        if(rlo > rhi) {
+            log<LOG_WARNING>(L"%1% || restrict for systematic %2% given as [%3%, %4%] with lo>hi; swapping. "
+                             L"An inverted range would otherwise hang rejection-sampling (pseudo-experiments).")
+                % __func__ % wt.c_str() % rlo % rhi;
+            const float t = rlo; rlo = rhi; rhi = t;
+        }
+        m_mcgen_variation_restrict[wt] = {rlo, rhi};
+        log<LOG_INFO>(L"%1% || Parsed restrict=[%2%, %3%] for systematic %4%") % __func__ % rlo % rhi % wt.c_str();
+    }
+    if(scale) {
+        m_mcgen_variation_scale[wt] = std::strtof(scale, NULL);
+        log<LOG_INFO>(L"%1% || Parsed scale=%2% for systematic %3%") % __func__ % m_mcgen_variation_scale[wt] % wt.c_str();
+    }
+    if(inflate) {
+        char *end;
+        float inflate_val = std::strtof(inflate, &end);
+        if(end == inflate || inflate_val <= 0) {
+            log<LOG_ERROR>(L"%1% || ERROR! inflate attribute for systematic %2% must be a positive number, got '%3%'") % __func__ % wt.c_str() % inflate;
+            throw std::invalid_argument(std::string("inflate attribute for systematic '") + wt + "' must be a positive number");
+        }
+        m_mcgen_variation_inflate[wt] = inflate_val;
+        log<LOG_INFO>(L"%1% || Parsed inflate=%2% for systematic %3%") % __func__ % inflate_val % wt.c_str();
+        const std::vector<std::string> inflatable_types = {"spline", "spline_to_covariance", "covariance", "external_covariance", "norm", "norm_to_covariance", "hist1d", "hist2d"};
+        if(!variation_type || std::find(inflatable_types.begin(), inflatable_types.end(), variation_type) == inflatable_types.end()) {
+            log<LOG_WARNING>(L"%1% || inflate is not supported for systematic %2% (type %3%); it will have no effect.")
+                % __func__ % wt.c_str() % (variation_type ? variation_type : "unspecified");
+        }
+    }
+    if(mirrored) {
+        if(strcmp(mirrored, "false") == 0 || strcmp(mirrored, "no") == 0 || strcmp(mirrored, "0") == 0)
+            m_mcgen_variation_unmirrored.insert(wt);
+    }
+    if(num_decomp_knobs) {
+        m_mcgen_variation_num_decomp_knobs[wt] = atoi(num_decomp_knobs);
+        log<LOG_INFO>(L"%1% || Parsed num_decomp_knobs=%2% for systematic %3%") % __func__ % m_mcgen_variation_num_decomp_knobs[wt] % wt.c_str();
+    }
+    if(include_resid_cov) {
+        bool keep_resid = !(strcmp(include_resid_cov, "false") == 0 || strcmp(include_resid_cov, "no") == 0 || strcmp(include_resid_cov, "0") == 0);
+        m_mcgen_variation_include_resid_cov[wt] = keep_resid;
+        log<LOG_INFO>(L"%1% || Parsed include_resid_cov=%2% for systematic %3%") % __func__ % keep_resid % wt.c_str();
+    }
+    if(apply_to_subchannel) {
+        std::string pattern = apply_to_subchannel;
+        // trim leading/trailing whitespace so apply_to_subchannel="nu_SBND " behaves
+        size_t b = pattern.find_first_not_of(" \t");
+        size_t e = pattern.find_last_not_of(" \t");
+        pattern = (b == std::string::npos) ? "" : pattern.substr(b, e - b + 1);
+        if(pattern.empty()) {
+            log<LOG_ERROR>(L"%1% || ERROR! apply_to_subchannel attribute for systematic %2% is empty.") % __func__ % wt.c_str();
+            throw std::invalid_argument(std::string("apply_to_subchannel attribute for systematic '") + wt + "' is empty");
+        }
+        m_mcgen_variation_apply_to_subchannel[wt] = pattern;
+        log<LOG_INFO>(L"%1% || Parsed apply_to_subchannel='%2%' for systematic %3% (unanchored regex against subchannel fullnames; plain substrings work as-is)") % __func__ % pattern.c_str() % wt.c_str();
+    }
+    log<LOG_DEBUG>(L"%1% || Allowlisting variations: %2%") % __func__ % wt.c_str() ;
+    return wt;
 }
