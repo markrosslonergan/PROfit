@@ -210,7 +210,8 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
         // own CV, only its own variation files, its own event matching and POT handling) and
         // the per-section CV and variation spectra are then summed. A section only fills the
         // subchannels it lists, so the summed spectra reproduce each section's CV->variation
-        // shift in its own bins, all under a single knob. Previously the variation files of a
+        // shift in its own bins, all under a single knob. All sections sharing a name must
+        // provide the same knob values (checked below). Previously the variation files of a
         // name were gathered across sections into one knob-keyed map, so a section with the
         // same knob value overwrote the others and sections were paired with the wrong CV.
         log<LOG_INFO>(L"%1% || Building DetVar SystStructs from DetVar props...") % __func__;
@@ -243,13 +244,34 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
 
             // section -> (knob value -> DetVar file index), for this name only
             std::map<size_t, std::map<knob_t, size_t>> files_by_section;
-            std::set<knob_t> all_knobs;
             for(size_t i = 0; i < config.m_detvar_files.size(); ++i) {
                 const auto &dvf = config.m_detvar_files[i];
                 if(dvf.is_cv || dvf.name != varName) continue;
                 // (duplicate knobvals within one section are already rejected when the XML is parsed)
                 files_by_section[dvf.section_index][dvf.knobval] = i;
-                all_knobs.insert(dvf.knobval);
+            }
+
+            // Every section sharing this name must provide exactly the same variation knob
+            // values (each section's CV is its knob-0 point). The summed systematic has a single
+            // set of spline knots, and there is no neutral way to invent a missing knot for one
+            // section, so a mismatch (e.g. a forgotten -1 file) is a configuration error.
+            {
+                auto knob_set_str = [](const std::map<knob_t, size_t> &knob_files) {
+                    std::string out = "{";
+                    for(const auto &[k, _] : knob_files) out += (out.size() > 1 ? ", " : "") + FormatKnobVal(k);
+                    return out + "}";
+                };
+                const auto &[ref_sec, ref_files] = *files_by_section.begin();
+                for(const auto &[isec, knob_files] : files_by_section) {
+                    bool same = knob_files.size() == ref_files.size();
+                    for(auto a = knob_files.begin(), b = ref_files.begin(); same && a != knob_files.end(); ++a, ++b)
+                        same = (a->first == b->first);
+                    if(!same) {
+                        log<LOG_ERROR>(L"%1% || ERROR: DetVar '%2%' is defined in several <DetVarSection>s with different knob values: section %3% has knobval(s) %4% but section %5% has %6%. Every section sharing a variation name must provide the same variations.")
+                            % __func__ % varName.c_str() % ref_sec % knob_set_str(ref_files).c_str() % isec % knob_set_str(knob_files).c_str();
+                        exit(EXIT_FAILURE);
+                    }
+                }
             }
 
             std::optional<PROspec> totalCv;
@@ -318,15 +340,6 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                     for(auto &[_, spec] : specs) {
                         spec.Spec() = spec.Spec().array() * mask;
                         spec.Error() = spec.Error().array() * mask;
-                    }
-                }
-
-                // A knob value provided by another section but not by this one means
-                // "no shift here": this section contributes its CV at that knob.
-                for(const knob_t k : all_knobs) {
-                    if(specs.count(k) == 0) {
-                        log<LOG_INFO>(L"%1% || DetVar '%2%': section %3% has no variation at knobval %4%, using its CV there (no shift)") % __func__ % varName.c_str() % isec % FormatKnobVal(k).c_str();
-                        specs[k] = matchedCvSpec;
                     }
                 }
 
