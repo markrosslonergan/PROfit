@@ -961,7 +961,7 @@ namespace PROfit {
                 error_reciprocal_matrix(i,i) = 1.0/temp;
             }
             else
-                error_reciprocal_matrix(i,i) = 1.0;
+                error_reciprocal_matrix(i,i) = 0.0;
         }
 
 
