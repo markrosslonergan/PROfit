@@ -7,6 +7,9 @@
 #include "PROtocall.h"
 #include <Eigen/Eigen>
 #include <mutex>
+#include <atomic>
+#include <thread>
+#include <algorithm>
 #include <random>
 #include <set>
 
@@ -281,8 +284,8 @@ namespace PROfit {
                 }
 
                 log<LOG_INFO>(L"%1% || Converting spline '%2%' to covariance matrix using spline2cov") % __func__ % syst.systname.c_str();
-                // Disjoint seed range per converted spline (spline2cov draws 500 throws at seed..seed+499).
-                Eigen::MatrixXf frac_cov = spline2cov(spline_idx, config, prop, *model, cvparams, 42u + (uint32_t)spline_idx * 500u);
+                // Disjoint seed range per converted spline (spline2cov draws spline2cov_throws throws from seed).
+                Eigen::MatrixXf frac_cov = spline2cov(spline_idx, config, prop, *model, cvparams, 42u + (uint32_t)(spline_idx * spline2cov_throws));
                 spline_priors  = saved_priors;
                 spline_centers = saved_centers;
                 Eigen::MatrixXf corr = GenerateCorrMatrix(frac_cov);
@@ -472,6 +475,7 @@ namespace PROfit {
                         spline_copy.bins = splines[idx].bins;
                         spline_copy.segments_per_bin = splines[idx].segments_per_bin;
                         spline_copy.segments = splines[idx].segments;  // vector copy
+                        spline_copy.knot_hi = splines[idx].knot_hi;
                         ret.splines.push_back(std::move(spline_copy));
                         ret.spline_hi.push_back(spline_hi[idx]);
                         ret.spline_lo.push_back(spline_lo[idx]);
@@ -530,6 +534,7 @@ namespace PROfit {
             spline_copy.bins = splines[idx].bins;
             spline_copy.segments_per_bin = splines[idx].segments_per_bin;
             spline_copy.segments = splines[idx].segments;  // vector copy
+            spline_copy.knot_hi = splines[idx].knot_hi;
             ret.splines.push_back(std::move(spline_copy));
             ret.spline_hi.push_back(spline_hi[idx]);
             ret.spline_lo.push_back(spline_lo[idx]);
@@ -585,8 +590,8 @@ namespace PROfit {
                 case SystType::Spline: {
                                            ret.syst_map[name] = std::make_pair(ret.covmat.size(), SystType::Covariance);
                                            ret.covar_names.push_back(name);
-                                           // Disjoint seed range per spline (spline2cov draws 500 throws at seed..seed+499).
-                                           Eigen::MatrixXf cov = spline2cov(idx, config, prop, model,params, seed + (uint32_t)idx * 500u);
+                                           // Disjoint seed range per spline (spline2cov draws spline2cov_throws throws from seed).
+                                           Eigen::MatrixXf cov = spline2cov(idx, config, prop, model,params, seed + (uint32_t)(idx * spline2cov_throws));
                                            Eigen::MatrixXf cor = GenerateCorrMatrix(cov);
                                            ret.covmat.push_back(cov);
                                            ret.corrmat.push_back(cor);
@@ -614,13 +619,22 @@ namespace PROfit {
     Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
-        std::vector<Eigen::VectorXf> specs;
         // Distinct seed per throw: FillSplineRandomThrow now uses its seed
         // argument on every call (it used to hold a function-local static RNG
         // that ignored the seed after the first-ever call).
-        for(size_t i = 0; i < 500; ++i){
-            specs.push_back(FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec());
-        }
+        // Throw i always uses seed+i and lands in specs[i], and the sum below runs
+        // in index order, so the result does not depend on the thread count.
+        std::vector<Eigen::VectorXf> specs(spline2cov_throws);
+        std::atomic<size_t> next{0};
+        auto worker = [&]() {
+            for(size_t i = next++; i < specs.size(); i = next++)
+                specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
+        };
+        const size_t nthreads = std::max<size_t>(1, std::min(spline2cov_nthreads, specs.size()));
+        std::vector<std::thread> pool;
+        for(size_t t = 1; t < nthreads; ++t) pool.emplace_back(worker);
+        worker();
+        for(auto &th: pool) th.join();
 
         int nbins = config.m_num_variable_bins_total[other_index];
         Eigen::MatrixXf mat(nbins, nbins);
@@ -1054,7 +1068,7 @@ namespace PROfit {
         const SplineSegment* seg = std::upper_bound(segs, end, shift, [](float x, const SplineSegment& s) { return x < s.knot; });
         if (seg != segs) --seg; // seg is now the last k_i such that k_i < shift
 
-        float hi = seg + 1 < end ? seg[1].knot : spline_hi[spline_num];
+        float hi = seg + 1 < end ? seg[1].knot : spline.knot_hi;
         float x = (shift - seg->knot) / (hi - seg->knot); // normalize to [0, 1]
         const auto& c = seg->coeffs;
         return c[0] + x*(c[1] + x*(c[2] + x*c[3]));
@@ -1072,7 +1086,7 @@ namespace PROfit {
         const SplineSegment* seg = std::upper_bound(segs, end, shift, [](float x, const SplineSegment& s) { return x < s.knot; });
         if (seg != segs) --seg;
 
-        float hi = seg + 1 < end ? seg[1].knot : spline_hi[spline_num];
+        float hi = seg + 1 < end ? seg[1].knot : spline.knot_hi;
         float width = hi - seg->knot;
         float x = (shift - seg->knot) / width;
         const auto& c = seg->coeffs;
@@ -1187,7 +1201,7 @@ namespace PROfit {
         for(int m : grp.members) {
             std::vector<float> kn;   // this member's knot positions in knob units, e.g. -3,-2,-1,0,1,2,3
             for(int seg = 0; seg < splines[m].segments_per_bin; ++seg) kn.push_back(splines[m].segments[seg].knot);  // each segment starts at a knot
-            kn.push_back(spline_hi[m]);   // ... and the last segment ends at spline_hi
+            kn.push_back(splines[m].knot_hi);   // ... and the last segment ends at knot_hi
             for(size_t q = 2; q < kn.size(); ++q) {
                 const float d0 = kn[1] - kn[0], dq = kn[q] - kn[q-1];   // first gap is the reference; every later gap must match it
                 if(std::abs(dq - d0) > 1e-4f * std::max(std::abs(d0), 1.0f)) {   // relative 1e-4 tolerance, floored at 1 knob unit
@@ -1424,6 +1438,7 @@ namespace PROfit {
         // If all bins have the same number of segments, keep as knobvals.size(); else update
         spline.segments_per_bin = all_segments.size() / nbins;
         spline.segments = std::move(all_segments);
+        spline.knot_hi = knobvals.back();
 
         syst_map[syst.systname] = {splines.size(), SystType::Spline};
         splines.push_back(std::move(spline));
@@ -1478,8 +1493,7 @@ namespace PROfit {
         // Knots: roughly unit spacing on both sides of 0, with 0 itself always a knot and the
         // outermost knots exactly at the parameter range. The response is exactly linear, so
         // the knot placement only matters for GetSplineShift's per-segment normalisation (which
-        // assumes a following knot) and for keeping the segment containing 0 away from the last
-        // one, whose width is read from spline_hi and can be rewritten by --fix.
+        // assumes a following knot).
         const int n_lo = std::max(1, (int)std::lround(-theta_lo));
         const int n_hi = std::max(2, (int)std::lround(theta_hi));
         std::vector<float> knots;
@@ -1509,6 +1523,7 @@ namespace PROfit {
                 }
             }
 
+            spline.knot_hi = theta_hi;
             const std::string child = syst.systname + "_bin" + std::to_string(j);
             syst_map[child] = {splines.size(), SystType::Spline};
             splines.push_back(std::move(spline));
@@ -1583,8 +1598,7 @@ namespace PROfit {
         // Knob range and knots. Gaussian (covariance_to_spline): the historical unit knots at
         // -3..2 with box [-3, 3]. Uniform (covariance_to_spline_uniform): the knob floats freely
         // inside [knob_lo, knob_hi] (sigma units of the mode), so the knots span that box with
-        // roughly unit spacing, 0 always a knot and the segment containing 0 never the last one
-        // (whose width is read from spline_hi, which --fix may rewrite).
+        // roughly unit spacing, 0 always a knot and the segment containing 0 never the last one.
         const bool uniform = (prior == SplinePriorType::Uniform);
         if(uniform && !(knob_lo < 0.0f && knob_hi > 0.0f)) {
             log<LOG_ERROR>(L"%1% || covariance_to_spline_uniform systematic %2% needs a knob range containing 0 (CV), got [%3%, %4%].") % __func__ % syst.systname.c_str() % knob_lo % knob_hi;
@@ -1639,6 +1653,7 @@ namespace PROfit {
                 }
             }
 
+            spline.knot_hi = hi;
             const std::string knob_name = syst.systname + "_decomp_knob_" + std::to_string(k);
             syst_map[knob_name] = {splines.size(), SystType::Spline};
             splines.push_back(std::move(spline));

@@ -154,6 +154,7 @@ struct PROpt {
     bool with_covar = false, no_frac_syst = false;
     bool with_subcovar = false;
     int band_throws = 2500;
+    size_t syst_throws = 500;
     std::map<std::string, float> fake_data_osc_params;
     std::map<std::string, float> cv_osc_params;
     std::map<std::string, float> injected_systs;
@@ -201,6 +202,11 @@ struct PROpt {
     bool gof_pvalue = false;
     bool reuse_dist = false;
     bool pvalue = false;
+    // Classic FC pseudo-experiment composition. These flags change only what
+    // is fluctuated when a toy is generated; the fits still use the configured
+    // systematic model and statistical term.
+    bool fc_stat_only_throws = false;
+    bool fc_syst_only_throws = false;
 
     // fc-adaptive (slice 1: Wilks prepass + meta-mesh + diagnostics).
     std::string afc_mode_str = "init-bank";

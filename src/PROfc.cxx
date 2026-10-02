@@ -43,10 +43,12 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         // Bounded, OOB-safe truncated-Gaussian throws (shared helper; the old
         // do/while here could spin forever on unreachable restrict bounds).
         for(size_t i = 0; i < args.systs.GetNSplines(); i++) {
-            throws(i+nphys) = ThrowRestrictedSplinePull(args.systs, i, rng, d);
+            throws(i+nphys) = args.throw_systematics
+                ? ThrowRestrictedSplinePull(args.systs, i, rng, d)
+                : 0.0f;
         }
         for(size_t i = 0; i < args.config.m_num_variable_bins_total_collapsed[args.config.i_prime]; i++)
-            throwC(i) = d(rng);
+            throwC(i) = args.throw_systematics ? d(rng) : 0.0f;
         // Fill the i_prime variable explicitly: the previous call passed an
         // EvalStrategy enum where FillSpectra takes `bool binned` and let
         // var_index default to 0, while the CollapseMatrix below collapses
@@ -54,7 +56,13 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         PROspec shifted = FillSpectra(args.config, args.prop, args.systs, *model, throws, args.binned, args.config.i_prime);
         log<LOG_DEBUG>(L"%1% || Shifted spectrum %2%\nfor throw %3%")
             % __func__ % shifted.Spec() % throws;
-        PROspec newSpec = PROspec::PoissonVariation(PROspec(CollapseMatrix(args.config, shifted.Spec()) + args.L * throwC, CollapseMatrix(args.config, shifted.Error())), dseed(rng));
+        PROspec variedSpec(
+            CollapseMatrix(args.config, shifted.Spec()) + args.L * throwC,
+            CollapseMatrix(args.config, shifted.Error()));
+
+        PROspec newSpec = args.throw_poisson
+            ? PROspec::PoissonVariation(variedSpec, dseed(rng))
+            : variedSpec;
         PROdata data(newSpec.Spec(), newSpec.Error());
         //Metric Time
         // Same construction point as the data fit (carries shape_only etc.).

@@ -1,5 +1,19 @@
 #include "PROfit_common.h"
 
+// Spline index of an --inject-systs / --inject-systs-cv name (spline name or plotname), -1 if unknown.
+static int find_spline_index(const PROsyst &systs, const PROconfig &config, const std::string &name) {
+    auto it = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
+    if(it == systs.spline_names.end()) {
+        for(const auto &[xml_name, plot_name]: config.m_mcgen_variation_plotname_map) {
+            if(name == plot_name) {
+                it = std::find(systs.spline_names.begin(), systs.spline_names.end(), xml_name);
+                break;
+            }
+        }
+    }
+    return it == systs.spline_names.end() ? -1 : (int)std::distance(systs.spline_names.begin(), it);
+}
+
 PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &fakedataparams, const PROpt &options) {
     PROdata data;
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
@@ -99,12 +113,20 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                                                fakedataparams, !options.eventbyevent, io);
                 Eigen::MatrixXf L_chol = variable_systs[io].DecomposeFractionalCovariance(config, cv_for_L.Spec());
 
+                // Splines named in --inject-systs are held at their injected value; the rest are thrown.
+                std::vector<char> held(nspline, 0);
+                for (const auto &[name, shift]: options.injected_systs) {
+                    const int idx = find_spline_index(variable_systs[io], config, name);
+                    if (idx >= 0) held[idx] = 1;
+                }
+
                 Eigen::VectorXf throws = fakedataparams;
                 // Shared truncated-Gaussian helper: samples each spline's actual prior
                 // N(center, sigma) within its restrict bounds, OOB-safe (never spins
                 // forever on unreachable bounds; clamps to the in-range value nearest
                 // the prior center and warns).
                 for (size_t i = 0; i < nspline; ++i) {
+                    if (held[i]) continue;
                     throws((int)(i + nphys)) = ThrowRestrictedSplinePull(variable_systs[io], i, PROseed::global_rng, d);
                 }
 
@@ -119,16 +141,17 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                             CollapseMatrix(config, shifted.Error(), io)),
                     dseed(PROseed::global_rng));
 
+                const int nheld = (int)std::count(held.begin(), held.end(), 1);
                 log<LOG_INFO>(L"%1% || Generated FC-style pseudo-experiment for i_prime variable %2% "
-                              L"(splines thrown=%3%, cov bins thrown=%4%).")
-                    % __func__ % io % (int)nspline % nbins_coll;
+                              L"(splines thrown=%3%, held at injected value=%4%, cov bins thrown=%5%).")
+                    % __func__ % io % ((int)nspline - nheld) % nheld % nbins_coll;
 
-                // List the thrown spline pulls (in sigma) that produced this pseudo-experiment.
+                // List the spline pulls (in sigma) that produced this pseudo-experiment.
                 std::string thrown_str;
                 for (size_t i = 0; i < nspline; ++i) {
                     const std::string sn = i < variable_systs[io].spline_names.size()
                         ? variable_systs[io].spline_names[i] : ("spline#" + std::to_string(i));
-                    thrown_str += sn + "=" + std::to_string(throws((int)(i + nphys)));
+                    thrown_str += sn + "=" + std::to_string(throws((int)(i + nphys))) + (held[i] ? " (injected)" : "");
                     if (i + 1 < nspline) thrown_str += ", ";
                 }
                 log<LOG_INFO>(L"%1% || Pseudo-experiment thrown spline pulls (sigma): %2%")
@@ -181,20 +204,11 @@ Eigen::VectorXf make_fakedata_params(Eigen::VectorXf &fake_data_osc_param_vector
     for(const auto& [name, shift]: options.injected_systs) {
         log<LOG_INFO>(L"%1% || Injected syst: %2% shifted by %3%") % __func__ % name.c_str() % shift;
 
-        auto it = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
-        if(it == systs.spline_names.end()) {
-            for(const auto &[xml_name, plot_name]: config.m_mcgen_variation_plotname_map) {
-                if(name == plot_name) {
-                    it = std::find(systs.spline_names.begin(), systs.spline_names.end(), xml_name);
-                    break;
-                }
-            }
-            if(it == systs.spline_names.end()) {
-                log<LOG_ERROR>(L"%1% || Error: Unrecognized spline %2%. Ignoring this injected shift.") % __func__ % name.c_str();
-                continue;
-            }
+        const int idx = find_spline_index(systs, config, name);
+        if(idx < 0) {
+            log<LOG_ERROR>(L"%1% || Error: Unrecognized spline %2%. Ignoring this injected shift.") % __func__ % name.c_str();
+            continue;
         }
-        int idx = std::distance(systs.spline_names.begin(), it);
         fakedataparams(idx+model.nparams) = shift;
     }
     return fakedataparams;
@@ -204,21 +218,11 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
     for(const auto& [name, shift]: options.cv_injected_systs) {
         log<LOG_INFO>(L"%1% || Injected syst: %2% shifted by %3%") % __func__ % name.c_str() % shift;
 
-        auto it = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
-        if(it == systs.spline_names.end()) {
-            for(const auto &[xml_name, plot_name]: config.m_mcgen_variation_plotname_map) {
-                if(name == plot_name) {
-                    it = std::find(systs.spline_names.begin(), systs.spline_names.end(), xml_name);
-                    break;
-                }
-            }
-            if(it == systs.spline_names.end()) {
-                log<LOG_ERROR>(L"%1% || Error: Unrecognized spline %2%. Ignoring this injected shift.") % __func__ % name.c_str();
-                continue;
-            }
-
+        const int idx = find_spline_index(systs, config, name);
+        if(idx < 0) {
+            log<LOG_ERROR>(L"%1% || Error: Unrecognized spline %2%. Ignoring this injected shift.") % __func__ % name.c_str();
+            continue;
         }
-        int idx = std::distance(systs.spline_names.begin(), it);
         CVParams(idx+model.nparams) = shift;
     }
 

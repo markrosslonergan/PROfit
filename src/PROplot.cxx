@@ -292,7 +292,7 @@ namespace PROfit{
                         float shift = spline.segments[seg_offset + k].knot;
                         fixed_pts->SetPoint(k, shift, systs.GetSplineShift(i, shift, j));
                     }
-                    fixed_pts->SetPoint(nsegs, systs.spline_hi[i], systs.GetSplineShift(i, systs.spline_hi[i], j));
+                    fixed_pts->SetPoint(nsegs, spline.knot_hi, systs.GetSplineShift(i, spline.knot_hi, j));
 
                     float lo = systs.spline_has_restrict[i] ? systs.spline_restrict_lo[i] : systs.spline_lo[i];
                     float hi = systs.spline_has_restrict[i] ? systs.spline_restrict_hi[i] : systs.spline_hi[i];

@@ -413,37 +413,52 @@ namespace PROfit {
         const size_t nfree = free_idx.size();
 
         // Per-parameter finite-difference step: nuisance parameters live in sigma units so
-        // a fixed 0.05 sigma works; physics steps scale with the bound range. Shrink any
-        // step that would leave the box (the best fit can sit near a bound).
+        // a fixed 0.05 sigma works; physics steps scale with the bound range. A best fit on
+        // a bound must NOT shrink the step: one-sided (knobval +1 only) splines have
+        // lb = CV = 0, so every spline the pre-fit channels cannot see sits exactly there,
+        // a ~1e-6 step leaves its curvature below float resolution (H ~ 0), and the
+        // eigenvalue floor below then gives it a tens-of-sigma posterior width. Keep the
+        // step and shift the stencil centre x0 inside the box instead; chi2 is close to
+        // quadratic, so H(x0) ~ H(best_fit). Centers are still saved at best_fit.
         Eigen::VectorXf h(nfree);
+        Eigen::VectorXf x0 = best_fit;
+        int n_shifted = 0;
         for(size_t k = 0; k < nfree; ++k) {
             const size_t i = free_idx[k];
-            float step = i < nphys ? std::max(1e-3f * (ub(i) - lb(i)), 1e-4f) : 0.05f;
-            step = std::min({step, ub(i) - best_fit(i), best_fit(i) - lb(i)});
+            const float range = ub(i) - lb(i);
+            float step = i < nphys ? std::max(1e-3f * range, 1e-4f) : 0.05f;
+            step = std::min(step, 0.5f * range);
             if(step < 1e-6f) {
-                log<LOG_WARNING>(L"%1% || PROjector Hessian: parameter %2% is pinned against its bounds; using minimal step.")
+                log<LOG_WARNING>(L"%1% || PROjector Hessian: parameter %2% has a (near) zero-width box; using minimal step.")
                     % __func__ % i;
                 step = 1e-6f;
             }
+            x0(i) = range >= 2.0f * step ? std::clamp(best_fit(i), lb(i) + step, ub(i) - step)
+                                         : 0.5f * (lb(i) + ub(i));
+            if(x0(i) != best_fit(i)) ++n_shifted;
             h(k) = step;
         }
 
         log<LOG_INFO>(L"%1% || PROjector: computing finite-difference Hessian over %2% free parameter(s) (~%3% chi2 evaluations).")
             % __func__ % nfree % (2 * nfree * nfree);
+        if(n_shifted)
+            log<LOG_INFO>(L"%1% || PROjector Hessian: %2% parameter(s) at/near a bound; their stencil is shifted inside the box.")
+                % __func__ % n_shifted;
 
         Eigen::VectorXf grad_dummy = Eigen::VectorXf::Zero(nparams);
-        const float f0 = evalChi2(metric, best_fit, grad_dummy);
-        if(std::abs(f0 - chi2) > std::max(1e-2f * std::abs(chi2), 0.5f)) {
+        const float f_bf = evalChi2(metric, best_fit, grad_dummy);
+        if(std::abs(f_bf - chi2) > std::max(1e-2f * std::abs(chi2), 0.5f)) {
             log<LOG_WARNING>(L"%1% || PROjector: chi2 at best fit re-evaluates to %2% vs fit result %3%; Hessian is taken at the re-evaluated point.")
-                % __func__ % f0 % chi2;
+                % __func__ % f_bf % chi2;
         }
+        const float f0 = n_shifted ? evalChi2(metric, x0, grad_dummy) : f_bf;
 
         // Central second differences. chi2 = chi2_min + d^T (Sigma^-1) d for a Gaussian
         // posterior, so H = Hessian(chi2) = 2 Sigma^-1 and Sigma = 2 H^-1.
         Eigen::MatrixXf H = Eigen::MatrixXf::Zero(nfree, nfree);
         std::vector<float> fplus(nfree), fminus(nfree);
         for(size_t k = 0; k < nfree; ++k) {
-            Eigen::VectorXf xp = best_fit, xm = best_fit;
+            Eigen::VectorXf xp = x0, xm = x0;
             xp(free_idx[k]) += h(k);
             xm(free_idx[k]) -= h(k);
             fplus[k] = evalChi2(metric, xp, grad_dummy);
@@ -452,7 +467,7 @@ namespace PROfit {
         }
         for(size_t k = 0; k < nfree; ++k) {
             for(size_t l = k + 1; l < nfree; ++l) {
-                Eigen::VectorXf xpp = best_fit, xpm = best_fit, xmp = best_fit, xmm = best_fit;
+                Eigen::VectorXf xpp = x0, xpm = x0, xmp = x0, xmm = x0;
                 xpp(free_idx[k]) += h(k); xpp(free_idx[l]) += h(l);
                 xpm(free_idx[k]) += h(k); xpm(free_idx[l]) -= h(l);
                 xmp(free_idx[k]) -= h(k); xmp(free_idx[l]) += h(l);
@@ -535,11 +550,22 @@ namespace PROfit {
         c.shape_only = metric.ShapeOnly();
 
         log<LOG_INFO>(L"%1% || ############ PROjector pre-fit posterior summary ############") % __func__;
+        int n_widened = 0;
         for(size_t i = 0; i < nsplines; ++i) {
             log<LOG_INFO>(L"%1% || %2% : center %3% +/- %4% (prior width was %5%)")
                 % __func__ % systs.spline_names[i].c_str()
                 % c.centers(i) % std::sqrt(Sigma(i, i)) % systs.spline_priors(i);
+            // Data can only narrow a Gaussian prior; a wider posterior is a bad Hessian.
+            if(systs.spline_prior_types[i] == SplinePriorType::Gaussian
+               && std::sqrt(Sigma(i, i)) > 1.5f * systs.spline_priors(i)) {
+                log<LOG_WARNING>(L"%1% || PROjector: %2% posterior width %3% exceeds its prior width %4%; the FD Hessian is unreliable in this direction.")
+                    % __func__ % systs.spline_names[i].c_str() % std::sqrt(Sigma(i, i)) % systs.spline_priors(i);
+                ++n_widened;
+            }
         }
+        if(n_widened)
+            log<LOG_WARNING>(L"%1% || PROjector: %2% nuisance(s) came out WIDER than their prior; stage-2 bands/fits will be inflated.")
+                % __func__ % n_widened;
 
         c.save(filename);
         return true;

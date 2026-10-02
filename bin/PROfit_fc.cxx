@@ -186,6 +186,18 @@ void run_fc(const PROconfig &config, const PROpeller &prop, PROmetric &metric, c
     size_t addone = FCthreads - options.nuniv%FCthreads;
     bool gof_mode = options.gof_pvalue;
 
+    const bool throw_systematics = !options.fc_stat_only_throws;
+    const bool throw_poisson = !options.fc_syst_only_throws;
+
+    const char *throw_mode = options.fc_stat_only_throws ? "stat-only"
+                            : options.fc_syst_only_throws ? "syst-only"
+                            : "stat+syst";
+
+    log<LOG_INFO>(
+        L"%1% || FC pseudo-experiment mode: %2% "
+        L"(systematic throws=%3%, Poisson throws=%4%).")
+        % __func__ % throw_mode % throw_systematics % throw_poisson;
+
     // --reuse: read a previous <tag>_<out>_FC.root back instead of throwing new
     // universes; fall back to fresh generation if the file isn't there.
     size_t nuniv = options.nuniv;
@@ -216,7 +228,7 @@ void run_fc(const PROconfig &config, const PROpeller &prop, PROmetric &metric, c
         for(size_t i = 0; i < FCthreads; i++) {
             dchi2s.emplace_back();
             outs.emplace_back();
-            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric.GetSysts(), options.chi2, fakeDataParams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !options.eventbyevent, gof_mode, options.shapeonly};
+            fc_args args{todo + (i >= addone), &dchi2s.back(), &outs.back(), config, prop, metric.GetSysts(), options.chi2, fakeDataParams, L, scanFitConfig,(*myseed.getThreadSeeds())[i], (int)i, !options.eventbyevent, gof_mode, options.shapeonly, throw_systematics, throw_poisson};
 
 
             threads.emplace_back([args, &fc_progress]() {

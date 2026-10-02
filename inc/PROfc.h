@@ -65,6 +65,8 @@ namespace PROfit {
         const bool binned;               ///< If true, use binned spectrum-filling mode.
         const bool gof_mode;             ///< If true, run as a goodness-of-fit test (both fits free).
         const bool shape_only;           ///< Build every pseudo-experiment metric in shape-only mode (must match the data fit; --shapeonly).
+        const bool throw_systematics;    ///< If true, fluctuate spline and covariance systematics in the pseudo-experiment.
+        const bool throw_poisson;        ///< If true, apply a Poisson fluctuation to the pseudo-experiment.
     };
 
     /**

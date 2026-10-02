@@ -52,6 +52,7 @@ namespace PROfit {
             int bins;             ///< Number of analysis bins covered by this spline.
             int segments_per_bin; ///< Number of cubic segments per bin (equal to number of knot intervals).
             std::vector<SplineSegment> segments; ///< Flat list of spline segments, ordered bin-major.
+            float knot_hi = 0.0f; ///< Upper end of the last segment. Kept apart from spline_hi, which --fix overwrites with the fit bound.
     };
 
     /**
@@ -180,6 +181,11 @@ namespace PROfit {
              * @return Fractional covariance matrix for the specified spline.
              */
             Eigen::MatrixXf spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const ;
+
+            /// Number of random throws spline2cov draws per spline (--syst-throws; default 500).
+            inline static size_t spline2cov_throws = 500;
+            /// Worker threads spline2cov spreads its throws over (-n; result is thread-count independent).
+            inline static size_t spline2cov_nthreads = 1;
 
             /* Function: given the systematic name, return corresponding fractional covariance matrix */
             Eigen::MatrixXf GrabMatrix(const std::string& sys) const;
