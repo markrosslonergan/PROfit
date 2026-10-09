@@ -1336,7 +1336,22 @@ namespace PROfit {
         std::vector<float> knobvals;
         for (size_t i = 0; i < syst.p_multi_spec.size(); ++i) {
             if (syst.knobval[i] > 0 && !found0) {
-                ratios.push_back(*syst.p_cv / *syst.p_cv);
+                if (syst.force_0_cv && i > 0) {
+                    // Ratio is linear interpolation of the two universes around 0, not cv/cv
+                    // The force_0_cv division then removes the same universe to CV normalisation
+                    // it removes for knobs that have a real universe at 0
+                    const float k_lo = syst.knobval[i - 1], k_hi = syst.knobval[i];
+                    const float t = (0.0f - k_lo) / (k_hi - k_lo);
+                    PROspec r_lo = (*syst.p_multi_spec[i - 1]) / *syst.p_cv;
+                    PROspec r_hi = (*syst.p_multi_spec[i]) / *syst.p_cv;
+                    ratios.push_back(r_lo + (r_hi - r_lo) * t);
+                    log<LOG_INFO>(L"%1% || systematic %2% has no universe at knob 0; inserting a knot there interpolated between knobvals %3% and %4%") % __func__ % syst.systname.c_str() % k_lo % k_hi;
+                } else {
+                    // Without force_0_cv there is no normalisation to remove, and with nothing
+                    // below 0 to interpolate from: the knob-0 knot is the CV itself
+                    log<LOG_DEBUG>(L"%1% || systematic %2% has no universe at knob 0; the inserted knob-0 knot is the CV (ratio 1)") % __func__ % syst.systname.c_str();
+                    ratios.push_back(*syst.p_cv / *syst.p_cv);
+                }
                 knobvals.push_back(0);
                 knob0_index = ratios.size() - 1;
                 found0 = true;
@@ -1350,6 +1365,7 @@ namespace PROfit {
             knobvals.push_back(syst.knobval[i]);
         }
         if (!found0) {
+            log<LOG_DEBUG>(L"%1% || systematic %2% has only negative knobvals; the inserted knob-0 knot is the CV (ratio 1)") % __func__ % syst.systname.c_str();
             ratios.push_back(*syst.p_cv / *syst.p_cv);
             knobvals.push_back(0);
             knob0_index = ratios.size() - 1;
