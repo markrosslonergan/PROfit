@@ -14,73 +14,48 @@ static int find_spline_index(const PROsyst &systs, const PROconfig &config, cons
     return it == systs.spline_names.end() ? -1 : (int)std::distance(systs.spline_names.begin(), it);
 }
 
-// --data + --inject: when the data config carries a <model>, process the data files like MC
-// (a PROpeller with per-event truth/model_rule; no systematics) and build the data spectrum
-// at the injected physics point. The physics values come from the MC-side fakedataparams,
-// matched to the data model by parameter NAME (so the data model may be a different tag or
-// order); data-model parameters not given via --inject sit at the data model's default.
+// --data + --inject with a data <model>: process data like MC (no systs) and fill at the injected point.
 static void build_injected_data(std::vector<PROdata> &variable_data, const PROconfig &config, const PROconfig &dataconfig,
-                                const PROmodel &model, const Eigen::VectorXf &fakedataparams, const PROpt &options,
-                                std::uniform_int_distribution<uint32_t> &dseed) {
-    const std::string dataPropBinName = options.analysis_tag + "_data_prop.bin";
+        const PROmodel &model, const Eigen::VectorXf &fakedataparams, const PROpt &options, std::uniform_int_distribution<uint32_t> &dseed) {
+    const std::string binName = options.analysis_tag + "_data_prop.bin";
     PROpeller dataprop;
-    if((*options.process_command) || !std::filesystem::exists(dataPropBinName)) {
-        log<LOG_INFO>(L"%1% || --inject with a data <model>: processing data files into a PROpeller, saving to %2%") % __func__ % dataPropBinName.c_str();
-        std::vector<std::vector<SystStruct>> datasysts; // data carries no systematics
-        PROcess_CAFAna(dataconfig, datasysts, dataprop, options.noxrootd);
-        dataprop.save(dataPropBinName);
+    if((*options.process_command) || !std::filesystem::exists(binName)) {
+        std::vector<std::vector<SystStruct>> nosysts;
+        PROcess_CAFAna(dataconfig, nosysts, dataprop, options.noxrootd);
+        dataprop.save(binName);
     } else {
-        log<LOG_INFO>(L"%1% || --inject with a data <model>: loading data PROpeller from %2%") % __func__ % dataPropBinName.c_str();
-        dataprop.load(dataPropBinName);
-        if(dataconfig.hash != dataprop.hash) {
-            if(options.force) {
-                log<LOG_WARNING>(L"%1% || WARNING data config hash (%2%) and binary data PROpeller hash (%3%) not compatible! Forcing ahead.") % __func__ % dataconfig.hash % dataprop.hash;
-            } else {
-                log<LOG_ERROR>(L"%1% || ERROR data config hash (%2%) and binary data PROpeller hash (%3%) not compatible! Rerun with process.") % __func__ % dataconfig.hash % dataprop.hash;
-                exit(EXIT_FAILURE);
-            }
-        }
-    }
-
-    std::unique_ptr<PROmodel> datamodel = get_model_from_string(dataconfig, dataprop);
-
-    // Every --inject name must exist in the data model, otherwise the injection would be
-    // silently dropped from the data.
-    for(const auto &[name, value]: options.fake_data_osc_params) {
-        if(std::find(datamodel->param_names.begin(), datamodel->param_names.end(), name) == datamodel->param_names.end()) {
-            log<LOG_ERROR>(L"%1% || --inject parameter %2% is not a parameter of the data model (tag %3%). Valid names are %4%. Terminating.")
-                % __func__ % name.c_str() % dataconfig.m_model_tag.c_str() % datamodel->param_names;
+        dataprop.load(binName);
+        if(dataconfig.hash != dataprop.hash && !options.force) {
+            log<LOG_ERROR>(L"%1% || Data config hash (%2%) != %3% hash (%4%). Rerun process or use --force.") % __func__ % dataconfig.hash % binName.c_str() % dataprop.hash;
             exit(EXIT_FAILURE);
         }
     }
-
+    std::unique_ptr<PROmodel> datamodel = get_model_from_string(dataconfig, dataprop);
+    for(const auto &[name, value]: options.fake_data_osc_params) {
+        if(std::find(datamodel->param_names.begin(), datamodel->param_names.end(), name) == datamodel->param_names.end()) {
+            log<LOG_ERROR>(L"%1% || --inject parameter %2% is not in the data model %3%.") % __func__ % name.c_str() % datamodel->param_names;
+            exit(EXIT_FAILURE);
+        }
+    }
+    // Map injected values by name; un-injected data-model params stay at their defaults.
     Eigen::VectorXf dataparams = datamodel->default_val;
     for(size_t j = 0; j < datamodel->nparams; ++j) {
-        const auto it = std::find(model.param_names.begin(), model.param_names.end(), datamodel->param_names[j]);
-        if(it == model.param_names.end()) {
-            log<LOG_WARNING>(L"%1% || Data model parameter %2% is not in the MC model; using the data model default %3%.")
-                % __func__ % datamodel->param_names[j].c_str() % dataparams(j);
-            continue;
-        }
-        const size_t k = std::distance(model.param_names.begin(), it);
-        // fakedataparams is in the MC model's internal (possibly log10) units; convert via
-        // linear in case the two models disagree on is_log10 for this name.
-        const float lin = model.is_log10[k] ? std::pow(10.0f, fakedataparams(k)) : fakedataparams(k);
+        auto it = std::find(model.param_names.begin(), model.param_names.end(), datamodel->param_names[j]);
+        if(it == model.param_names.end()) continue;
+        size_t k = std::distance(model.param_names.begin(), it);
+        float lin = model.is_log10[k] ? std::pow(10.0f, fakedataparams(k)) : fakedataparams(k);
         dataparams(j) = datamodel->is_log10[j] ? std::log10(lin) : lin;
-        log<LOG_INFO>(L"%1% || Data injected parameter %2% = %3% (internally %4%)") % __func__ % datamodel->param_names[j].c_str() % lin % dataparams(j);
     }
-
+    log<LOG_INFO>(L"%1% || Filling data (%2% events) at injected point %3%") % __func__ % dataprop.NEvent() % dataparams.transpose();
     PROsyst emptySyst;
     for(size_t io = 0; io < dataconfig.m_num_variables; ++io) {
-        const bool fill_this_variable = config.m_channel_variable_plot_bool.at(io) || io == config.i_prime;
-        PROspec data_spec = fill_this_variable
-            ? FillSpectra(dataconfig, dataprop, emptySyst, *datamodel, dataparams, !options.eventbyevent, io)
-            : PROspec(dataconfig.m_num_variable_bins_total[io]);
-        if(options.poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(PROseed::global_rng));
-        Eigen::VectorXf data_vec = CollapseMatrix(dataconfig, data_spec.Spec(), io);
-        variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
+        bool fill = config.m_channel_variable_plot_bool.at(io) || io == config.i_prime;
+        PROspec spec = fill ? FillSpectra(dataconfig, dataprop, emptySyst, *datamodel, dataparams, !options.eventbyevent, io)
+                            : PROspec(dataconfig.m_num_variable_bins_total[io]);
+        if(options.poisson_throw) spec = PROspec::PoissonVariation(spec, dseed(PROseed::global_rng));
+        Eigen::VectorXf vec = CollapseMatrix(dataconfig, spec.Spec(), io);
+        variable_data.push_back(PROdata(vec, vec.array().sqrt()));
     }
-    log<LOG_INFO>(L"%1% || Built data spectrum with injected physics from %2% data events.") % __func__ % dataprop.NEvent();
 }
 
 PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &fakedataparams, const PROpt &options) {
@@ -98,7 +73,7 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             log<LOG_INFO>(L"%1% || Using embedded <data> section from XML for data config") % __func__;
             dataconfig = config.BuildDataConfig();
         }
-
+        std::string dataBinName = options.analysis_tag+"_data.bin";
         for(size_t i = 0; i < dataconfig.m_num_channels; ++i) {
             size_t nsubch = dataconfig.m_num_subchannels[i];
             if(nsubch != 1) {
@@ -122,14 +97,10 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             exit(EXIT_FAILURE);
         }
 
-        const bool inject_requested = !options.fake_data_osc_params.empty();
-        if(inject_requested && !dataconfig.m_has_model) {
-            log<LOG_WARNING>(L"%1% || WARNING: --inject was given with real data, but the data config has no <model>, so the injection is NOT applied to the data. "
-                             L"Add a <model> to the data XML (or <data inherit_model=\"true\"> for an embedded <data> section) to enable it.") % __func__;
-        }
-
-        std::string dataBinName = options.analysis_tag+"_data.bin";
-        if(inject_requested && dataconfig.m_has_model) {
+        const bool inject = !options.fake_data_osc_params.empty();
+        if(inject && !dataconfig.m_has_model)
+            log<LOG_WARNING>(L"%1% || --inject is ignored: the data config has no <model>.") % __func__;
+        if(inject && dataconfig.m_has_model) {
             build_injected_data(variable_data, config, dataconfig, model, fakedataparams, options, dseed);
         } else if((*options.process_command) || (!std::filesystem::exists(dataBinName))  ){
             log<LOG_INFO>(L"%1% || Processing Data Spectrum and saving to binary output also: %2%") % __func__ % dataBinName.c_str();

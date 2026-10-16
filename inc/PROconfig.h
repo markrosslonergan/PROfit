@@ -581,10 +581,7 @@ namespace PROfit{
 
             //Some model infomation
             std::string m_model_tag;
-            /// True when a <model> element was parsed from this XML. For a data config
-            /// (from --data or an embedded <data> section) this enables --inject to
-            /// reweight the data events at the injected physics point.
-            bool m_has_model = false;
+            bool m_has_model = false; ///< A <model> was parsed; lets --inject reweight a data config.
             std::vector<int> m_model_rule_index;
             std::vector<std::string> m_model_rule_names;
             std::vector<int> m_model_parameter_index;
