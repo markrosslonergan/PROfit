@@ -2166,6 +2166,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     pModel   = doc.FirstChildElement("model");
 
     if(pModel){
+        m_has_model = true;
         // Read in how many bins this channel uses
 
         const std::vector<std::string> expected_attrs = {"tag","name","index"};
@@ -2440,6 +2441,29 @@ int PROconfig::LoadFromXML(const std::string &filename){
             dataXml << "</channel>\n";
         }
         dataXml << "\n";
+
+        // Optional model for the data, so --inject can reweight data events (e.g. an MC
+        // fake-data sample carrying truth info). This is opt-in and explicit, because real
+        // data branches commonly carry a boilerplate model_rule="0":
+        //   * a <model> element inside <data> is used as-is, or
+        //   * <data inherit_model="true"> reuses the top-level <model>.
+        // With neither, the data XML is byte-identical to before (no model).
+        {
+            tinyxml2::XMLElement* pDataModel = pData->FirstChildElement("model");
+            if(!pDataModel && pData->BoolAttribute("inherit_model", false)) {
+                pDataModel = doc.FirstChildElement("model");
+                if(!pDataModel) {
+                    log<LOG_ERROR>(L"%1% || <data inherit_model=\"true\"> but there is no top-level <model> to inherit.") % __func__;
+                    throw std::invalid_argument("<data inherit_model=\"true\"> requires a top-level <model>");
+                }
+                log<LOG_INFO>(L"%1% || <data> inherits the top-level <model> (inherit_model=\"true\").") % __func__;
+            }
+            if(pDataModel) {
+                tinyxml2::XMLPrinter printer;
+                pDataModel->Accept(&printer);
+                dataXml << printer.CStr() << "\n";
+            }
+        }
 
         // Serialize MCFile elements from inside the <data> section
         tinyxml2::XMLElement* pDataMC = pData->FirstChildElement("MCFile");

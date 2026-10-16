@@ -15,7 +15,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Default 500.")->check(CLI::PositiveNumber);
         app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options: neyman (default; stat cov = diag(data)), pearson (stat cov = diag(prediction)), CNP, poisson. Legacy aliases PROchi, PROCNP, Poisson accepted.")->default_str("neyman");
         app.add_option("-d, --data", data_xml, "Load from a seperate data xml/data file instead of signal injection. Only used with plot subcommand.")->default_str("");
-        app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
+        app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25. With --data (or an embedded <data>) whose config has a <model>, the data events are reweighted at this point instead.")->expected(-1);
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
