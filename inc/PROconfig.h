@@ -581,6 +581,7 @@ namespace PROfit{
 
             //Some model infomation
             std::string m_model_tag;
+            bool m_has_model = false; ///< A <model> was parsed; lets --inject reweight a data config.
             std::vector<int> m_model_rule_index;
             std::vector<std::string> m_model_rule_names;
             std::vector<int> m_model_parameter_index;

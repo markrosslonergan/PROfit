@@ -14,6 +14,52 @@ static int find_spline_index(const PROsyst &systs, const PROconfig &config, cons
     return it == systs.spline_names.end() ? -1 : (int)std::distance(systs.spline_names.begin(), it);
 }
 
+// File-name tag for an injected point, e.g. "dmsq3_sinsq2thmm0.25". Values use the short form
+// unless it doesn't round-trip, so distinct points never share a cached binary.
+static std::string inject_tag(const PROpt &options) {
+    std::string tag;
+    for(const auto &[name, value]: options.fake_data_osc_params) { // std::map: sorted by name
+        std::ostringstream v; v << value;
+        if(std::stof(v.str()) != value) { v.str(""); v << std::setprecision(std::numeric_limits<float>::max_digits10) << value; }
+        tag += (tag.empty() ? "" : "_") + name + v.str();
+    }
+    for(char &c: tag) if(!std::isalnum((unsigned char)c) && c != '.' && c != '-' && c != '_') c = '_';
+    return tag;
+}
+
+// --data + --inject with a data <model>: process data like MC (no systs) and return the
+// histograms at the injected point, ready to be cached like CreatePROdata's output.
+static std::vector<PROdata> CreateInjectedPROdata(const PROconfig &dataconfig, const PROmodel &model,
+        const Eigen::VectorXf &fakedataparams, const PROpt &options) {
+    PROpeller dataprop;
+    std::vector<std::vector<SystStruct>> nosysts;
+    PROcess_CAFAna(dataconfig, nosysts, dataprop, options.noxrootd);
+    std::unique_ptr<PROmodel> datamodel = get_model_from_string(dataconfig, dataprop);
+    for(const auto &[name, value]: options.fake_data_osc_params) {
+        if(std::find(datamodel->param_names.begin(), datamodel->param_names.end(), name) == datamodel->param_names.end()) {
+            log<LOG_ERROR>(L"%1% || --inject parameter %2% is not in the data model %3%.") % __func__ % name.c_str() % datamodel->param_names;
+            exit(EXIT_FAILURE);
+        }
+    }
+    // Map injected values by name; un-injected data-model params stay at their defaults.
+    Eigen::VectorXf dataparams = datamodel->default_val;
+    for(size_t j = 0; j < datamodel->nparams; ++j) {
+        auto it = std::find(model.param_names.begin(), model.param_names.end(), datamodel->param_names[j]);
+        if(it == model.param_names.end()) continue;
+        size_t k = std::distance(model.param_names.begin(), it);
+        float lin = model.is_log10[k] ? std::pow(10.0f, fakedataparams(k)) : fakedataparams(k);
+        dataparams(j) = datamodel->is_log10[j] ? std::log10(lin) : lin;
+    }
+    log<LOG_INFO>(L"%1% || Filling data (%2% events) at injected point %3%") % __func__ % dataprop.NEvent() % dataparams;
+    PROsyst emptySyst;
+    std::vector<PROdata> alldata;
+    for(size_t io = 0; io < dataconfig.m_num_variables; ++io) {
+        Eigen::VectorXf vec = CollapseMatrix(dataconfig, FillSpectra(dataconfig, dataprop, emptySyst, *datamodel, dataparams, !options.eventbyevent, io).Spec(), io);
+        alldata.push_back(PROdata(vec, vec.array().sqrt()));
+    }
+    return alldata;
+}
+
 PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &fakedataparams, const PROpt &options) {
     PROdata data;
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
@@ -53,11 +99,16 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             exit(EXIT_FAILURE);
         }
 
+        const bool inject = !options.fake_data_osc_params.empty() && dataconfig.m_has_model;
+        if(!options.fake_data_osc_params.empty() && !dataconfig.m_has_model)
+            log<LOG_WARNING>(L"%1% || --inject is ignored: the data config has no <model>.") % __func__;
+        // The injected point is in the name, so a binary is only reused at the same point.
+        if(inject) dataBinName = options.analysis_tag + "_data_inject_" + inject_tag(options) + ".bin";
         if((*options.process_command) || (!std::filesystem::exists(dataBinName))  ){
             log<LOG_INFO>(L"%1% || Processing Data Spectrum and saving to binary output also: %2%") % __func__ % dataBinName.c_str();
 
             //Process the CAF files to grab and fill spectrum directly
-            std::vector<PROdata> alldata = CreatePROdata(dataconfig);
+            std::vector<PROdata> alldata = inject ? CreateInjectedPROdata(dataconfig, model, fakedataparams, options) : CreatePROdata(dataconfig);
             PROdata::saveVector(dataconfig, alldata, dataBinName);
             data = alldata[config.i_prime];
             //data.save(dataconfig,dataBinName);
@@ -91,6 +142,12 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             }
         }
 
+        // Cache the Asimov injected spectrum; any Poisson throw is applied fresh each run.
+        if(inject && options.poisson_throw)
+            for(auto &d: variable_data) {
+                PROspec thrown = PROspec::PoissonVariation(PROspec(d.Spec(), d.Error()), dseed(PROseed::global_rng));
+                d = PROdata(thrown.Spec(), thrown.Spec().array().sqrt());
+            }
     }//if no data, use injected or fake data;
     else{
         log<LOG_INFO>(L"%1% || Going to get fake data set up for each variable.") % __func__ ;
