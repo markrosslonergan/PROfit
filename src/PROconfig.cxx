@@ -2184,6 +2184,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     pModel   = doc.FirstChildElement("model");
 
     if(pModel){
+        m_has_model = true;
         // Read in how many bins this channel uses
 
         const std::vector<std::string> expected_attrs = {"tag","name","index"};
@@ -2458,6 +2459,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
             dataXml << "</channel>\n";
         }
         dataXml << "\n";
+
+        // Opt-in data model (for --inject): a <model> inside <data>, or inherit_model="true".
+        tinyxml2::XMLElement* pDataModel = pData->FirstChildElement("model");
+        if(!pDataModel && pData->BoolAttribute("inherit_model", false)) {
+            pDataModel = doc.FirstChildElement("model");
+            if(!pDataModel) throw std::invalid_argument("<data inherit_model=\"true\"> requires a top-level <model>");
+        }
+        if(pDataModel) {
+            tinyxml2::XMLPrinter printer;
+            pDataModel->Accept(&printer);
+            dataXml << printer.CStr() << "\n";
+        }
 
         // Serialize MCFile elements from inside the <data> section
         tinyxml2::XMLElement* pDataMC = pData->FirstChildElement("MCFile");
