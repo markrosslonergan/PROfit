@@ -23,6 +23,10 @@
  *   consumed by PROchi::Pull). Any subcommand (global, profile, surface, plot, ...)
  *   then runs as the constrained "projected" fit.
  *
+ * Stage 1 is a fit-region fit (PROfitRegion.h) with the data outside the region blinded,
+ * plus the covariance promotion and posterior save; for a plain sideband-only fit with the
+ * analytic constraint evaluated in the other channels, use --fit-region instead.
+ *
  * Bin exclusion is enforced by the PROconfig fit-region (active-bin) mask, which every
  * metric (PROchi/PROchi_pearson/PROCNP/PROpoisson) snapshots at construction — including the fresh
  * metrics FC and adaptive-FC workers build around thrown pseudo-data, so regenerated
@@ -108,11 +112,10 @@ namespace PROfit {
 
     /**
      * @brief Resolve a subchannel wildcard into complete channels and validate it.
-     * @details Matches @p pattern against every subchannel fullname as an unanchored
-     * regex — plain substrings work as-is (the convention of
-     * find_subchannels_by_pattern). Because the chi2 lives in collapsed
-     * (channel-level) space, a channel is only selectable as a whole: if a pattern
-     * matches SOME but not ALL subchannels of a channel this function fails loudly.
+     * @details SelectChannelsByPattern (PROfitRegion.h: unanchored regex, whole channels
+     * only) plus the PROjector requirement that at least one channel is left unmatched
+     * to project onto. Masking itself goes through the shared fit-region helpers
+     * (InstallFitRegion / MaskDataToChannels).
      * @param config           Analysis configuration.
      * @param pattern          Pattern (unanchored regex; plain substrings work).
      * @param matched_channels Output: global channel indices whose subchannels all matched.
@@ -121,15 +124,6 @@ namespace PROfit {
      */
     bool PROjectorSelectChannels(const PROconfig &config, const std::string &pattern,
                                  std::vector<size_t> &matched_channels);
-
-    /**
-     * @brief Build a 0/1 mask over the collapsed bins of variable @p var_index.
-     * @param complement If false, masked-in bins are those of @p matched_channels;
-     *                   if true, everything else.
-     */
-    Eigen::VectorXf PROjectorCollapsedMask(const PROconfig &config,
-                                           const std::vector<size_t> &matched_channels,
-                                           size_t var_index, bool complement);
 
     /**
      * @brief Promote covariance-type systematics of @p systs to eigenmode splines.

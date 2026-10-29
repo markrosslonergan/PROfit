@@ -49,6 +49,10 @@ and statistically rigorous fits and confidence regions.
   detector) once, save the posterior as a correlated prior, and re-use it in
   downstream fits, profiles, surfaces, and FC — projection without
   approximation [Under Development!]
+- **Fit regions**: fit only selected channels (e.g. sidebands) with
+  `--fit-region`, then test the sideband-constrained prediction against the
+  data in the remaining channels — spline and covariance systematics
+  constrained analytically, with pre/post-constraint χ² per channel and plots.
 - **Multiple physics models** out of the box (3+1, 3+2, two-flavor, LBL in
   matter or vacuum with configurable baseline and density, simple scaling)
   with a clean base class for adding your own.
@@ -67,7 +71,7 @@ probabilities use the vendored
 
 | Resource | What it covers |
 |---|---|
-| [**Walk-through tutorial**](docs/tutorials/PROfit_Tutorial_v2.md) | The place to start. A complete v2.X walk-through: concepts, the XML format, every subcommand, Feldman-Cousins, and PROjector — with regenerable plots. |
+| [**Walk-through tutorial**](docs/tutorials/PROfit_Tutorial_v2.md) | The place to start. A complete v2.X walk-through: concepts, the XML format, every subcommand, Feldman-Cousins, PROjector, and fit regions — with regenerable plots. |
 | [**API reference (Doxygen)**](https://markrosslonergan.github.io/PROfit/) | Auto-generated class documentation, rebuilt on every push. Build locally with `make docs` (requires Doxygen). |
 | [**Test suite guide**](tests/README.md) | Deterministic regression tests for before/after comparisons of physics-touching changes. |
 

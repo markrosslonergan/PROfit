@@ -1,7 +1,7 @@
 #include "PROfit_common.h"
 #include "TLatex.h"
 
-void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &metric, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &fake_data_osc_param_vector, const std::vector<PROdata> &variable_data, const PROpt &options) {
+void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &metric, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &fake_data_osc_param_vector, const std::vector<PROdata> &variable_data, const std::vector<int> &fixed, const PROpt &options) {
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
     // allcovsyst (every spline converted to a covariance) is only needed for the
     // fractional-systematics PDFs, the Covar.pdf/ROOT covariance plots, and the
@@ -1013,6 +1013,18 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
                 curve->Write((name+"_curve_"+std::to_string(bin)).c_str());
                 bin++;
             }
+        }
+    }
+
+    // Fit region without a fit: the analytic constraint linearised about the CV.
+    if(options.fit_region_config.active()) {
+        FitRegionConstraint frc;
+        if(ComputeFitRegionConstraint(config, prop, metric, variable_data[config.i_prime], CVParams, fixed, options.fit_region_config, frc)) {
+            PrintFitRegionConstraint(frc, -1, nullptr);
+            fout.mkdir("FitRegion");
+            fout.cd("FitRegion");
+            for(const auto &[n, o] : PlotFitRegionConstraint(config, frc, options.final_output_tag+"_PROplot_FitRegion"))
+                o->Write(n.c_str());
         }
     }
 

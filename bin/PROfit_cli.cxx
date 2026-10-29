@@ -91,6 +91,27 @@ PROpt::PROpt(int argc, char **argv) {
             "PROjector pre-fit: float the physics parameters instead of fixing them at CV; the "
             "saved posterior is then the physics-marginalized nuisance covariance.");
 
+        // Fit region: fit only some channels (e.g. sidebands) and test the constrained
+        // prediction in the others (see inc/PROfitRegion.h).
+        CLI::Option *fit_region_opt = app.add_option("--fit-region", fit_region_config.fit_pattern,
+            "Fit ONLY the channels whose subchannel fullnames match this pattern (unanchored regex; "
+            "plain substrings work, whole channels only, quote it in the shell). Every chi2 (global, "
+            "profile, surface, fc, ...) is restricted to these channels; the other channels' data is "
+            "kept. Physics parameters are fixed at CV unless --fit-region-float-physics. global (after "
+            "the fit) and plot (at the CV) then report the fit-region-constrained prediction and its "
+            "chi2 in the evaluation channels, constraining spline AND covariance systematics "
+            "analytically, and draw <tag>_<output>_PROglobal_FitRegion.pdf / _PROplot_FitRegion.pdf.")
+            ->excludes("--projector-prefit")->excludes("--projector");
+        app.add_option("--eval-region", fit_region_config.eval_pattern,
+            "Channels (same pattern rules) to evaluate the constrained prediction in. Must not "
+            "overlap --fit-region. Default: every channel outside the fit region.")->needs(fit_region_opt);
+        app.add_flag("--blind-eval", fit_region_config.blind_eval,
+            "With --fit-region: zero the data outside the fit region; only the constrained "
+            "prediction is reported (no evaluation chi2).")->needs(fit_region_opt);
+        app.add_flag("--fit-region-float-physics", fit_region_config.float_physics,
+            "With --fit-region: float the physics parameters in the fit-region fit instead of "
+            "fixing them at CV. The constraint is then evaluated at the fitted physics point.")->needs(fit_region_opt);
+
         auto* shape_flag = app.add_flag("--shapeonly,--shape-only", shapeonly,
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "

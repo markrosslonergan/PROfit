@@ -28,6 +28,17 @@ void run_global(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, cons
 
     std::map<std::string, TObject *> drawn_objs = draw_fit_result(config, prop, metric.GetModel(), metric.GetSysts(), metric, cv, data, fitres, options.final_output_tag+"_PROglobal", popt, options.pbounds, options.plot_channel_ratios);
 
+    // Fit region: the fit above saw only the fit-region channels; test its constrained
+    // prediction against the evaluation channels' data.
+    if(options.fit_region_config.active()) {
+        FitRegionConstraint frc;
+        if(ComputeFitRegionConstraint(config, prop, metric, data, fitres.fitter.best_fit, fixed, options.fit_region_config, frc)) {
+            const PROndof ndof = metric.GetNdof();
+            PrintFitRegionConstraint(frc, fitres.chi2, &ndof);
+            drawn_objs.merge(PlotFitRegionConstraint(config, frc, options.final_output_tag+"_PROglobal_FitRegion"));
+        }
+    }
+
     TFile fout((options.final_output_tag+"_PROglobal.root").c_str(), "RECREATE");
     for(const auto &[n, o] : drawn_objs)
         o->Write(n.c_str());

@@ -32,6 +32,7 @@
 #include "PROplot.h"
 #include "PROpulls.h"
 #include "PROjector.h"
+#include "PROfitRegion.h"
 #include "PRObench.h"
 #include "PROletariat.h"
 
@@ -167,6 +168,7 @@ struct PROpt {
     bool legacy_postfit_errors = false;
     bool systs_only = false;
     PROjectorRunConfig projector_config; // Two-stage pre-fit / projected fit (PROjector).
+    FitRegionRunConfig fit_region_config; // Fit only some channels, evaluate the constrained prediction in the rest.
     bool use_fake_data = false;
     bool use_probe = false;
     int n_probe_chunks = 1; // 1 = no chunking by default. Opt in via --probe-chunks N when physics is the wall-time bottleneck.
@@ -284,7 +286,7 @@ void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &glob
 
 // Per-subcommand entry points (one PROfit_<name>.cxx each).
 void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstructs, const PROconfig &config, PROpt &options);
-void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &metric, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &fake_data_osc_param_vector, const std::vector<PROdata> &variable_data, const PROpt &options);
+void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &metric, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &fake_data_osc_param_vector, const std::vector<PROdata> &variable_data, const std::vector<int> &fixed, const PROpt &options);
 void run_global(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const PROdata &data, const Eigen::VectorXf CVParams, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub, const std::vector<int> fixed, const PROfitterConfig &fitConfig, const PROpt &options);
 void run_profile(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const PROdata &data, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakedataparams, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub, const std::vector<int> &fixed, const PROfitterConfig &fitConfig, PROfitterConfig &scanFitConfig, const PROpt &options, PROseed &myseed);
 void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const PROdata &data, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub, const std::vector<int> &fixed, PROfitterConfig &fitConfig, PROfitterConfig &scanFitConfig, PROpt &options, PROseed &myseed);

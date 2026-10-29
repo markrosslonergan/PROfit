@@ -357,6 +357,15 @@ namespace PROfit {
                 return ub;
             }
 
+            /** @brief Absolute prior covariance over the spline nuisance parameters, as used by
+             *  the pull term: the correlated (XML or PROjector external) prior when one is set,
+             *  otherwise diag(spline_priors^2). Uniform-prior entries carry no information;
+             *  callers must check spline_prior_types before using their rows/columns. */
+            Eigen::MatrixXf GetPriorCovariance() const {
+                if(correlated_systematics) return prior_covariance;
+                return Eigen::MatrixXf(GetSysts().spline_priors.array().square().matrix().asDiagonal());
+            }
+
             /** @brief True if a fit-region (active-bin) mask was snapshotted from the config. */
             bool hasActiveBinMask() const { return !active_bins.empty(); }
 

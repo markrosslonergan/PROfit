@@ -95,6 +95,13 @@ int main(int argc, char* argv[])
             exit(1);
     }
 
+    // Fit region: same placement rules as PROjector (mask before any metric exists,
+    // physics names into fixed_params before the bounds section). See inc/PROfitRegion.h.
+    if(options.fit_region_config.active()) {
+        if(!FitRegionSetup(options.fit_region_config, config, variable_data, data, options.fixed_params, *model))
+            exit(1);
+    }
+
     empty_bin_check(config, options, prop, *model, variable_systs[config.i_prime], data, use_real_data);
 
     //Pysics parameter input
@@ -178,7 +185,7 @@ int main(int argc, char* argv[])
     float global_fit_chi2 = -1;
 
     if(*options.proplot_command){
-        run_plot(config, prop, *metric, *model, variable_systs, CVParams, fakeDataParams, fake_data_osc_param_vector, variable_data, options);
+        run_plot(config, prop, *metric, *model, variable_systs, CVParams, fakeDataParams, fake_data_osc_param_vector, variable_data, global_fixed, options);
     }
     if(*options.global_command){
         run_global(global_fit_chi2, global_fit_result, config, prop, *metric, data, CVParams, global_lb, global_ub, global_fixed, fitConfig, options);

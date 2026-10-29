@@ -1,8 +1,8 @@
 # PROfit v2.X Walk-Through Tutorial
 
 This tutorial walks through the full PROfit v2.X workflow, from the conceptual
-building blocks and XML configuration all the way to Feldman-Cousins and the
-PROjector two-stage fit. Every plot shown here can be regenerated with the
+building blocks and XML configuration all the way to Feldman-Cousins, the
+PROjector two-stage fit, and sideband-only fit regions. Every plot shown here can be regenerated with the
 companion script [`make_tutorial_plots.sh`](make_tutorial_plots.sh) in this
 directory; the embedded images live in [`figures/`](figures/) and are rendered
 from those PDFs by [`make_tutorial_figures.sh`](make_tutorial_figures.sh) —
@@ -67,7 +67,8 @@ numbers should match.
 8. [Subcommand `surface` — 2D Wilks surfaces and AMR](#8-subcommand-surface--2d-wilks-surfaces-and-amr)
 9. [Feldman-Cousins: `fc` and `fc-adaptive`](#9-feldman-cousins-fc-and-fc-adaptive)
 10. [PROjector — two-stage pre-fit / projected fits](#10-projector--two-stage-pre-fit--projected-fits)
-11. [PROletariat — grid submission: `proletariat`](#11-proletariat--grid-submission-proletariat)
+11. [Fit regions — sideband-only fits and constrained predictions](#11-fit-regions--sideband-only-fits-and-constrained-predictions)
+12. [PROletariat — grid submission: `proletariat`](#12-proletariat--grid-submission-proletariat)
 
 Appendices:
 
@@ -119,7 +120,7 @@ PROsyst (splines + fractional covariances)      PROpeller (per-event MC)
                    ▼
    PROfitter (Latin hypercube → particle swarm → L-BFGS-B)
                    ▼
-   global fit / profile / surface / FC / adaptive-FC / PROjector
+   global fit / profile / surface / FC / adaptive-FC / PROjector / fit regions
                    ▼
    <TAG>_<out>_*.root, *.pdf, *.txt
 ```
@@ -136,7 +137,7 @@ subchannel has a *fullname* of the form
 ```
 
 Everywhere PROfit accepts a "pattern" (background subtraction, POT scaling,
-PROjector channel selection, flat/norm systematics, `apply_to_subchannel=`)
+PROjector and `--fit-region` channel selection, flat/norm systematics, `apply_to_subchannel=`)
 it matches it against these fullnames as an **unanchored regex**
 (`std::regex_search`, ECMAScript). A plain substring is a valid regex and
 behaves exactly as before: `"_ND_"` matches everything in the near detector;
@@ -640,7 +641,7 @@ Subcommands:
   mcmc         Get bayesian posteriors using MCMC
   protest      Testing ground for rapid quick tests (developer scratch space).
   scale-test   Run timing benchmarks for FillSpectra / metric / fit hot paths.
-  proletariat  Stage, tar, and submit grid jobs (section 11).
+  proletariat  Stage, tar, and submit grid jobs (section 12).
 ```
 
 ### Tags, outputs, and the binary cache
@@ -1914,7 +1915,128 @@ Note that autocorrelation and harmonic scan plots will not be filled properly wi
 
 ---
 
-# 11. PROletariat — grid submission: `proletariat`
+# 11. Fit regions — sideband-only fits and constrained predictions
+
+A classic analysis check: fit **only** the sideband channels, then ask how
+well the sideband-constrained prediction describes the channels the fit never
+saw (the signal region, or a validation sample). `--fit-region` does this in
+one step. Unlike PROjector it keeps the data outside the fit region, adds no
+parameters (covariance systematics are constrained analytically, not promoted
+to splines), and needs no second stage.
+
+### Fitting only the sidebands
+
+```bash
+PROfit -x tutorial.xml -t TUT -o fr --seed 405 -n 8 \
+    -i dmsq 1 sinsq2thme 0.01 \
+    --fit-region "_numu_" global
+# → TUT_fr_PROglobal_FitRegion.pdf (+ the usual TUT_fr_PROglobal_* outputs)
+```
+
+What happens: the channels matching `_numu_` (same pattern rules as
+PROjector — unanchored regex, **whole channels** only) become the fit region,
+and every χ² is restricted to their bins. The other channels' data is kept,
+and physics parameters are fixed at CV (pass `--fit-region-float-physics` to
+float them). The mask is honored everywhere — `profile`, `surface`, `fc`,
+`fc-adaptive` all run as sideband-only fits — but only `global` and `plot`
+produce the constraint report below.
+
+Here the injected νe appearance signal lives only in the νe channels, so the
+νμ sideband fit cannot see it; the νe channels are where it should show up.
+
+### The constrained prediction and its χ²
+
+After the fit, the default *evaluation region* (every channel outside the fit
+region, here the two νe channels) is tested with the Gaussian conditional
+constraint. Linearizing the prediction about the best fit, with the
+Gaussian-prior splines and the covariance-type systematics together giving a
+systematic covariance V and a prior prediction m, the evaluation bins S are
+conditioned on the fit-region data d_B:
+
+```
+m_S'  = m_S + V_SB (C_B + V_BB)^-1 (d_B - m_B)      constrained prediction
+V_SS' = V_SS - V_SB (C_B + V_BB)^-1 V_BS            constrained systematic covariance
+χ²    = (d_S - m_S')^T (C_S + V_SS')^-1 (d_S - m_S')     ndf = |S|
+```
+
+C is the metric's own statistical variance (neyman: the data; CNP, pearson
+as usual). Since the evaluation data never entered the fit, the χ² has one
+degree of freedom per evaluated bin (minus one per channel with
+`--shapeonly`). The log reports it before and after the constraint, overall
+and per channel:
+
+```
+Conditioned on 68 fit-region bins; 14 Gaussian-prior spline(s) propagated, 0 held at the fit point.
+Fit region, post-fit       : chi2 = 0 (ndf = 68 bins - 0 phys - 0 uniform - 0 shape = 68, p = 1)
+Fit region, linearised     : chi2 = 0 (matches the fit chi2 when the model is ~linear about the fit point)
+Eval region, pre-constraint : chi2 = 8.53389 / 32 (p = 0.999989)
+Eval region, post-constraint: chi2 = 8.98349 / 32 (p = 0.99998)
+  nu_ND_nue : pre 2.56499 / 16 (p = 0.999941)   post 2.82587 / 16 (p = 0.999887)
+  nu_FD_nue : pre 5.39055 / 16 (p = 0.993444)   post 5.84422 / 16 (p = 0.989693)
+```
+
+This is Asimov fake data, so without the injection every χ² would be 0: the
+evaluation χ² is purely the cost of the injected signal. It grows after the
+constraint because the sideband shrinks the systematic band under the excess.
+The same effect is visible bin by bin in the plot:
+
+<img src="figures/TUT_fr_PROglobal_FitRegion.png" width="800"/>
+
+*`TUT_fr_PROglobal_FitRegion.pdf`, page 2 — FD νe data against the
+pre-constraint (hatched) and sideband-constrained (blue) prediction. The ratio
+panel is data / constrained prediction. One page per evaluation channel, plus
+a final page comparing the pre- and post-constraint systematic covariances.*
+
+The histograms and both covariances are also written to `TUT_fr_PROglobal.root`
+(`fit_region_*`). The ordinary post-fit plots (`TUT_fr_PROglobal_hists.pdf`)
+show the constrained band in the evaluation channels too, since their post-fit
+band is conditioned on the fit-region data.
+
+Two built-in checks:
+
+* **Linearity.** The "linearised" fit-region χ² should track the actual fit
+  χ². A large gap means the splines are strongly non-linear about the fit point
+  and the Gaussian constraint is approximate.
+* **Closure.** With physics fixed, χ²_post-constraint = χ²_min(joint fit) −
+  χ²_min(fit-region fit) for a linear model. Running the same data once with
+  `--fit-region` and once without (plus `--fix` on the physics parameters) is a
+  quick end-to-end check on a new setup.
+
+### Options
+
+* `--eval-region "FD_nue"` — evaluate only these channels (must not overlap
+  the fit region; the default is everything outside it).
+* `--blind-eval` — zero the data outside the fit region and report only the
+  constrained prediction, e.g. before unblinding:
+
+  ```
+  nu_FD_nue : total events pre 58.4618 +/- 7.74117 (syst) -> post 58.4618 +/- 6.62346 (syst)
+  ```
+* `--fit-region-float-physics` — float physics in the sideband fit; the
+  constraint is then evaluated at the fitted physics point.
+* `plot` instead of `global` — no fit at all: the same constraint is evaluated
+  analytically about the CV and drawn to `<TAG>_<out>_PROplot_FitRegion.pdf`.
+  For a linear model this equals the fitted result.
+
+### Rules and caveats
+
+* Patterns must select whole channels; a pattern matching every channel, or a
+  channel in both `--fit-region` and `--eval-region`, is refused.
+* Splines that are `--fix`ed or have a uniform prior are held at their fit
+  values; their uncertainty is not propagated into the evaluation region (a
+  warning lists them).
+* Bins with zero statistical variance (zero data under neyman) are drawn but
+  left out of the χ², exactly as the fit metric does.
+* `-c poisson` has no covariance term, so the evaluation χ² is Gaussian with
+  pearson-style (prediction) statistical errors.
+* PROjector's stage-1 pre-fit uses the same fit-region machinery with the
+  remaining data blinded; use PROjector when you need the saved posterior as a
+  prior for downstream FC/surface studies, `--fit-region` for a sideband →
+  signal-region comparison.
+
+---
+
+# 12. PROletariat — grid submission: `proletariat`
 
 Everything above runs on one machine. For the artifacts that are genuinely
 expensive at scale — FC PE banks above all — the workflow is: ship PROfit and

@@ -1,4 +1,5 @@
 #include "PROjector.h"
+#include "PROfitRegion.h"
 #include "PROlog.h"
 
 #include <algorithm>
@@ -36,51 +37,8 @@ namespace PROfit {
 
     bool PROjectorSelectChannels(const PROconfig &config, const std::string &pattern,
                                  std::vector<size_t> &matched_channels) {
-        matched_channels.clear();
-        if(pattern.empty()) {
-            log<LOG_ERROR>(L"%1% || Empty PROjector subchannel pattern.") % __func__;
-            return false;
-        }
-
-        // Walk the canonical mode -> detector -> channel -> subchannel nesting so the
-        // running counter matches the ordering of config.m_fullnames, and demand that a
-        // channel's subchannels are either all matched or all unmatched: the chi2 lives
-        // in collapsed (channel) space, so a partially-selected channel is ill-defined.
-        size_t global_subchannel_index = 0;
-        size_t global_channel_index = 0;
-        size_t n_unmatched_channels = 0;
-        bool ok = true;
-        // Unanchored regex (plain substrings behave as before); see PROconfig.h.
-        std::regex re = CompilePattern(pattern, "PROjector channel pattern");
-        for(size_t im = 0; im < config.m_num_modes; ++im) {
-            for(size_t id = 0; id < config.m_num_detectors; ++id) {
-                for(size_t ic = 0; ic < config.m_num_channels; ++ic, ++global_channel_index) {
-                    size_t n_match = 0;
-                    const size_t nsub = config.m_num_subchannels[ic];
-                    for(size_t sc = 0; sc < nsub; ++sc, ++global_subchannel_index) {
-                        const std::string &fullname = config.m_fullnames[global_subchannel_index];
-                        if(PatternMatches(fullname, re)) ++n_match;
-                    }
-                    if(n_match == nsub && nsub > 0) {
-                        matched_channels.push_back(global_channel_index);
-                    } else if(n_match == 0) {
-                        ++n_unmatched_channels;
-                    } else {
-                        log<LOG_ERROR>(L"%1% || PROjector pattern '%2%' matches %3%/%4% subchannels of channel %5% (mode %6%, detector %7%). "
-                                L"A channel must be selected as a whole; refine the pattern.")
-                            % __func__ % pattern.c_str() % n_match % nsub
-                            % config.m_channel_names[ic].c_str()
-                            % config.m_mode_names[im].c_str() % config.m_detector_names[id].c_str();
-                        ok = false;
-                    }
-                }
-            }
-        }
-        if(!ok) return false;
-        if(matched_channels.empty()) {
-            log<LOG_ERROR>(L"%1% || PROjector pattern '%2%' matched no channels.") % __func__ % pattern.c_str();
-            return false;
-        }
+        if(!SelectChannelsByPattern(config, pattern, matched_channels, "PROjector channel pattern")) return false;
+        const size_t n_unmatched_channels = ComplementChannels(config, matched_channels).size();
         if(n_unmatched_channels == 0) {
             log<LOG_ERROR>(L"%1% || PROjector pattern '%2%' matched EVERY channel; nothing left to project onto.")
                 % __func__ % pattern.c_str();
@@ -89,21 +47,6 @@ namespace PROfit {
         log<LOG_INFO>(L"%1% || PROjector pattern '%2%' selected %3% pre-fit channel(s), leaving %4% projected channel(s).")
             % __func__ % pattern.c_str() % matched_channels.size() % n_unmatched_channels;
         return true;
-    }
-
-    Eigen::VectorXf PROjectorCollapsedMask(const PROconfig &config,
-                                           const std::vector<size_t> &matched_channels,
-                                           size_t var_index, bool complement) {
-        Eigen::VectorXf mask = Eigen::VectorXf::Constant(
-                config.m_num_variable_bins_total_collapsed[var_index], complement ? 1.0f : 0.0f);
-        const float fill = complement ? 0.0f : 1.0f;
-        for(size_t gc : matched_channels) {
-            const size_t start = config.GetCollapsedGlobalVariableBinStart(gc, var_index);
-            const size_t nbins = config.GetChannelVariableBins(gc, var_index).NBins();
-            for(size_t b = 0; b < nbins; ++b)
-                mask(static_cast<Eigen::Index>(start + b)) = fill;
-        }
-        return mask;
     }
 
     namespace {
@@ -190,49 +133,6 @@ namespace PROfit {
 
     namespace {
 
-        // Install the fit region as a PROconfig active-bin mask for every variable. This is
-        // the authoritative exclusion: every metric constructed afterwards (including the
-        // fresh ones FC/AFC workers build around thrown pseudo-data) snapshots it, so
-        // masked bins can never re-enter a chi2 through regenerated data.
-        void installFitRegion(PROconfig &config, const std::vector<size_t> &matched_channels,
-                              bool complement) {
-            for(size_t io = 0; io < config.m_num_variables; ++io) {
-                Eigen::VectorXf maskv = PROjectorCollapsedMask(config, matched_channels, io, complement);
-                std::vector<char> mask(maskv.size());
-                for(Eigen::Index i = 0; i < maskv.size(); ++i)
-                    mask[(size_t)i] = maskv(i) > 0.5f ? 1 : 0;
-                config.SetActiveBins(io, mask);
-            }
-        }
-
-        // Apply a collapsed-space mask to every PROdata and refresh the primary data object.
-        // With the config active-bin mask installed this is statistically redundant for the
-        // fit, but it keeps plots/error bands consistent and the excluded data blind.
-        bool maskAllData(const PROconfig &config, const std::vector<size_t> &matched_channels,
-                         bool complement, std::vector<PROdata> &variable_data, PROdata &data) {
-            const size_t nvar = std::min(variable_data.size(), config.m_num_variables);
-            for(size_t io = 0; io < nvar; ++io) {
-                if(variable_data[io].GetNbins() != config.m_num_variable_bins_total_collapsed[io]) {
-                    log<LOG_WARNING>(L"%1% || PROjector: variable %2% data has %3% bins, expected %4%; leaving it unmasked.")
-                        % __func__ % io % variable_data[io].GetNbins()
-                        % config.m_num_variable_bins_total_collapsed[io];
-                    continue;
-                }
-                Eigen::VectorXf mask = PROjectorCollapsedMask(config, matched_channels, io, complement);
-                PROdata masked(mask.cwiseProduct(variable_data[io].Spec()),
-                               mask.cwiseProduct(variable_data[io].Error()));
-                masked.hash = variable_data[io].hash;
-                variable_data[io] = std::move(masked);
-            }
-            data = variable_data[config.i_prime];
-            if(data.Spec().sum() <= 0) {
-                log<LOG_ERROR>(L"%1% || PROjector: the %2% data bins are all empty after masking. Nothing to fit.")
-                    % __func__ % (complement ? "projected" : "pre-fit");
-                return false;
-            }
-            return true;
-        }
-
         // PROpoisson has no covariance term: whatever promotion leaves as covariance (mcstat,
         // kept covariances, residual eigenmodes) would silently drop out of the fit. Refuse it.
         bool poissonCovarianceLeftover(const PROconfig &config, const PROsyst &systs,
@@ -278,8 +178,9 @@ namespace PROfit {
                                        pjconf.num_decomp_knobs, pjconf.keep_covariance);
             if(poisson && poissonCovarianceLeftover(config, systs, pjconf.keep_covariance)) return false;
 
-            installFitRegion(config, matched_channels, /*complement=*/false);
-            if(!maskAllData(config, matched_channels, /*complement=*/false, variable_data, data)) return false;
+            // Fit region = the matched channels; the rest of the data is blinded.
+            InstallFitRegion(config, matched_channels);
+            if(!MaskDataToChannels(config, matched_channels, variable_data, data, "PROjector pre-fit")) return false;
 
             if(!pjconf.float_physics) {
                 for(size_t i = 0; i < model.nparams; ++i) {
@@ -373,8 +274,10 @@ namespace PROfit {
                     % __func__ % c.nuisance_names[i].c_str() % c.centers(i) % widths(i);
             }
 
-            installFitRegion(config, matched_channels, /*complement=*/true);
-            if(!maskAllData(config, matched_channels, /*complement=*/true, variable_data, data)) return false;
+            // Fit region = everything the pre-fit did NOT see; the pre-fit data is blinded.
+            const std::vector<size_t> projected_channels = ComplementChannels(config, matched_channels);
+            InstallFitRegion(config, projected_channels);
+            if(!MaskDataToChannels(config, projected_channels, variable_data, data, "PROjector projected fit")) return false;
 
             log<LOG_INFO>(L"%1% || PROjector projected fit ready: pre-fit channels masked out, %2% constrained nuisance parameters.")
                 % __func__ % c.nuisance_names.size();
