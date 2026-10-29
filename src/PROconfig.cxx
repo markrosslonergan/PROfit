@@ -844,7 +844,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
         {
 
 
-            std::vector<std::string> expected_attrs = {"treename","filename","maxevents","scale","pot","fake","partial_load_frac"};
+            std::vector<std::string> expected_attrs = {"treename","filename","maxevents","scale","pot","fake","partial_load_frac","overlap_matching_vars","overlap_common"};
             for (const tinyxml2::XMLAttribute* attr = pMC->FirstAttribute(); attr; attr = attr->Next()) {
                 std::string name = attr->Name();
                 if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -909,6 +909,30 @@ int PROconfig::LoadFromXML(const std::string &filename){
             }else{
                 m_mcgen_partial_load_frac.push_back(strtod(partial_load_frac,&end));
             }
+
+            // Statistical overlap with another analysis (opt-in, see PROoverlap.h): the
+            // expressions identifying one interaction, and which entries both analyses processed.
+            std::vector<std::string> overlap_vars;
+            if(const char* ov = pMC->Attribute("overlap_matching_vars")) {
+                std::istringstream ov_ss(ov);
+                std::string tok;
+                while(std::getline(ov_ss, tok, ',')) {
+                    tok.erase(0, tok.find_first_not_of(" \t"));
+                    if(!tok.empty()) tok.erase(tok.find_last_not_of(" \t") + 1);
+                    if(!tok.empty()) overlap_vars.push_back(tok);
+                }
+                if(overlap_vars.empty()) {
+                    log<LOG_ERROR>(L"%1% || ERROR: overlap_matching_vars on <MCFile filename='%2%'> lists no expressions.") % __func__ % m_mcgen_file_name.back().c_str();
+                    throw std::invalid_argument("empty overlap_matching_vars");
+                }
+            }
+            const char* ov_common = pMC->Attribute("overlap_common");
+            if(ov_common && overlap_vars.empty()) {
+                log<LOG_ERROR>(L"%1% || ERROR: overlap_common on <MCFile filename='%2%'> needs overlap_matching_vars on the same MCFile.") % __func__ % m_mcgen_file_name.back().c_str();
+                throw std::invalid_argument("overlap_common without overlap_matching_vars");
+            }
+            m_mcgen_overlap_matching_vars.push_back(overlap_vars);
+            m_mcgen_overlap_common.push_back(ov_common ? ov_common : "");
 
             log<LOG_DEBUG>(L"%1% || MultisimFile %2%, treename: %3%  ") % __func__ % m_mcgen_file_name.back().c_str() % m_mcgen_tree_name.back().c_str();
 
@@ -3255,6 +3279,12 @@ uint32_t PROconfig::CalcHash() const{
         unique_string << vecToString(vec);
 
     unique_string << vecToString(m_mcgen_variation_allowlist);
+
+    // Overlap matching keys are recorded at process time (<tag>_overlap_mc.bin / the data
+    // overlap file). Unflagged files append nothing, so existing hashes are unchanged.
+    for (size_t fid = 0; fid < m_mcgen_overlap_matching_vars.size(); ++fid)
+        if (!m_mcgen_overlap_matching_vars[fid].empty())
+            unique_string << "ovl" << fid << ":" << vecToString(m_mcgen_overlap_matching_vars[fid]) << "|" << m_mcgen_overlap_common[fid];
 
     // apply_to_subchannel wildcards change which bins a systematic populates in the
     // cached SystStructs; empty map appends nothing so pre-existing hashes are unchanged.

@@ -53,12 +53,22 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             exit(EXIT_FAILURE);
         }
 
-        if((*options.process_command) || (!std::filesystem::exists(dataBinName))  ){
+        // Observed statistical overlap (opt-in via overlap_matching_vars on data MCFiles), kept
+        // out of _data.bin, which is unchanged without the opt-in.
+        const bool data_overlap = dataconfig.HasOverlapMatching();
+        const std::string dataOverlapBinName = options.analysis_tag+"_overlap_data.bin";
+
+        if((*options.process_command) || (!std::filesystem::exists(dataBinName)) || (data_overlap && !std::filesystem::exists(dataOverlapBinName))){
             log<LOG_INFO>(L"%1% || Processing Data Spectrum and saving to binary output also: %2%") % __func__ % dataBinName.c_str();
 
             //Process the CAF files to grab and fill spectrum directly
             std::vector<PROdata> alldata = CreatePROdata(dataconfig);
             PROdata::saveVector(dataconfig, alldata, dataBinName);
+            if(data_overlap) {
+                std::vector<OverlapCells> cells;
+                for(const auto &d : alldata) cells.push_back(d.overlap);
+                SaveDataOverlap(dataOverlapBinName, dataconfig.hash, cells);
+            }
             data = alldata[config.i_prime];
             //data.save(dataconfig,dataBinName);
             
@@ -71,6 +81,19 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             //data.load(dataBinName);
             std::vector<PROdata> alldata;
             PROdata::loadVector(alldata, dataBinName);
+            if(data_overlap) {
+                uint32_t overlap_hash = 0;
+                const std::vector<OverlapCells> cells = LoadDataOverlap(dataOverlapBinName, overlap_hash);
+                if((overlap_hash != dataconfig.hash || cells.size() != alldata.size()) && !options.force) {
+                    log<LOG_ERROR>(L"%1% || ERROR data overlap file %2% (hash %3%) does not match the data config (hash %4%). Re-run process.")
+                        % __func__ % dataOverlapBinName.c_str() % overlap_hash % dataconfig.hash;
+                    exit(EXIT_FAILURE);
+                }
+                for(size_t io = 0; io < alldata.size() && io < cells.size(); ++io) {
+                    alldata[io].has_overlap = true;
+                    alldata[io].overlap = cells[io];
+                }
+            }
             data = alldata[config.i_prime];
             //data.save(dataconfig,dataBinName);
 
@@ -91,9 +114,16 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             }
         }
 
+        if(data_overlap)
+            log<LOG_INFO>(L"%1% || Observed statistical overlap in the data: %2%") % __func__ % DescribeOverlap(data).c_str();
+
     }//if no data, use injected or fake data;
     else{
         log<LOG_INFO>(L"%1% || Going to get fake data set up for each variable.") % __func__ ;
+        // With MC overlap the fake data carries the cells its own truth implies.
+        auto fake_overlap = [&](size_t io) {
+            return ComputeOverlapFractions(config, prop, model, fakedataparams.head(model.nparams), io);
+        };
         for(size_t io = 0; io < config.m_num_variables; ++io) {
             // plot="false" only suppresses drawing; the fitting variable always needs real
             // fake-data, so i_prime bypasses the flag here and in the Asimov branch below
@@ -130,11 +160,22 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
 
                 PROspec shifted = FillSpectra(config, prop, variable_systs[io], model,
                                               throws, !options.eventbyevent, io);
-                PROspec newSpec = PROspec::PoissonVariation(
-                    PROspec(CollapseMatrix(config, shifted.Spec(), io)
-                                + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
-                            CollapseMatrix(config, shifted.Error(), io)),
-                    dseed(PROseed::global_rng));
+                PROdata pseudo;
+                if(!prop.overlap) {
+                    PROspec newSpec = PROspec::PoissonVariation(
+                        PROspec(CollapseMatrix(config, shifted.Spec(), io)
+                                    + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
+                                CollapseMatrix(config, shifted.Error(), io)),
+                        dseed(PROseed::global_rng));
+                    pseudo = PROdata(newSpec.Spec(), newSpec.Error());
+                } else {
+                    const PROspec mean(CollapseMatrix(config, shifted.Spec(), io)
+                                           + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
+                                       CollapseMatrix(config, shifted.Error(), io));
+                    const OverlapFractions frac = fake_overlap(io);
+                    pseudo = MakeToyData(mean, &frac, true, dseed(PROseed::global_rng));
+                    log<LOG_INFO>(L"%1% || Pseudo-experiment overlap: %2%") % __func__ % DescribeOverlap(pseudo).c_str();
+                }
 
                 const int nheld = (int)std::count(held.begin(), held.end(), 1);
                 log<LOG_INFO>(L"%1% || Generated FC-style pseudo-experiment for i_prime variable %2% "
@@ -152,12 +193,23 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                 log<LOG_INFO>(L"%1% || Pseudo-experiment thrown spline pulls (sigma): %2%")
                     % __func__ % thrown_str.c_str();
 
-                variable_data.push_back(PROdata(newSpec.Spec(), newSpec.Error()));
+                variable_data.push_back(pseudo);
                 continue;
             }
 
             const bool fill_this_variable = config.m_channel_variable_plot_bool.at(io) || io == config.i_prime;
             PROspec data_spec = fill_this_variable ?  FillSpectra(config, prop, variable_systs[io], model, fakedataparams, !options.eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
+            if(prop.overlap && fill_this_variable) {
+                // The overlap throw works on collapsed bins (the cells live there); without
+                // --poisson-throw this is the Asimov spectrum carrying its expected cells.
+                const Eigen::VectorXf mean = CollapseMatrix(config, data_spec.Spec(), io);
+                const OverlapFractions frac = fake_overlap(io);
+                variable_data.push_back(MakeToyData(PROspec(mean, mean.array().max(0.0f).sqrt()), &frac,
+                                                    options.poisson_throw, options.poisson_throw ? dseed(PROseed::global_rng) : 0));
+                if(io == config.i_prime)
+                    log<LOG_INFO>(L"%1% || Fake-data overlap (%2%): %3%") % __func__ % (options.poisson_throw ? "Poisson-thrown" : "Asimov") % DescribeOverlap(variable_data.back()).c_str();
+                continue;
+            }
             if(options.poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(PROseed::global_rng));
             Eigen::VectorXf data_vec = CollapseMatrix(config, data_spec.Spec(), io);
             variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
@@ -400,6 +452,32 @@ void poisson_covariance_check(const PROpt &options, const PROconfig &config, con
         % __func__ % covs;
     log<LOG_ERROR>(L"Terminating.");
     exit(EXIT_FAILURE);
+}
+
+void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROdata &data, bool use_real_data) {
+    const bool mc_overlap = (bool)prop.overlap;
+    if(!mc_overlap && !data.has_overlap) return;
+    auto fatal = [](const std::string &msg) {
+        log<LOG_ERROR>(L"stat_overlap_check || %1%") % msg.c_str();
+        log<LOG_ERROR>(L"Terminating.");
+        exit(EXIT_FAILURE);
+    };
+
+    if(options.chi2 != "neyman")
+        fatal("statistical overlap between analyses is only supported by the neyman metric (-c neyman); got " + options.chi2 + ".");
+    if(mc_overlap && model.uses_get_counts())
+        fatal("statistical overlap is not supported for visible-decay models.");
+    // Toys and the fit statistic must treat the overlap the same way.
+    if(use_real_data && mc_overlap && !data.has_overlap)
+        fatal("the MC MCFiles carry overlap_matching_vars but the data MCFiles do not: the data fit would ignore the overlap while every toy carries it. Add overlap_matching_vars to the data MCFiles.");
+    const bool throws_toys = *options.profc_command || *options.afc_command || (*options.surface_command && options.run_brazil);
+    if(use_real_data && data.has_overlap && !mc_overlap && throws_toys)
+        fatal("the data carries overlap_matching_vars but the MC does not, so toys cannot reproduce the overlap. Add overlap_matching_vars (and overlap_common if the MC samples only partly coincide) to the MC MCFiles.");
+    if(*options.bench_command)
+        fatal("scale-test does not support statistical overlap.");
+
+    if(*options.global_command || *options.profile_command)
+        log<LOG_WARNING>(L"%1% || Statistical overlap: post-fit error bands, the Constrained Best-Fit and the pull distributions still condition on a diagonal statistical term (the fit chi2 itself is correlated).") % __func__;
 }
 
 Eigen::VectorXf remap_spline_params(const Eigen::VectorXf &params, size_t nphys,

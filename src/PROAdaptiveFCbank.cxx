@@ -27,6 +27,7 @@
 #include <Eigen/Eigen>
 
 #include <algorithm>
+#include <optional>
 #include <atomic>
 #include <climits>
 #include <cmath>
@@ -133,14 +134,16 @@ bool save_bank(const PEBank &bank, const std::string &path) {
     }
     try {
         boost::archive::binary_oarchive oa(ofs);
-        // Legacy banks keep the v2 layout byte for byte; profile banks append a tail.
-        const bool profiled = bank.manifest.profiled();
+        // Legacy banks keep the v2 layout byte for byte; profile banks append a tail, and
+        // banks thrown with statistical overlap add its fingerprint after it.
+        const bool tail = bank.manifest.has_tail();
+        const bool overlap = bank.manifest.overlap_fp != 0;
         uint32_t magic = PEBank::MAGIC;
-        uint16_t version = profiled ? PEBank::VERSION : 2;
+        uint16_t version = overlap ? PEBank::VERSION_OVERLAP : (tail ? PEBank::VERSION : 2);
         oa & magic;
         oa & version;
         oa & const_cast<PEBank &>(bank); // boost serialize() takes non-const ref
-        if (profiled) {
+        if (tail) {
             oa & const_cast<ProfileManifest &>(bank.manifest);
             oa & const_cast<std::vector<std::vector<float>> &>(bank.cell_truth_phys);
             // phys_hat flattened per cell, in PE order.
@@ -149,6 +152,7 @@ bool save_bank(const PEBank &bank, const std::string &path) {
                 for (const auto &r : bank.cell_pes[c])
                     phat[c].insert(phat[c].end(), r.phys_hat.begin(), r.phys_hat.end());
             oa & phat;
+            if (overlap) oa & const_cast<uint64_t &>(bank.manifest.overlap_fp);
         }
     } catch (const std::exception &e) {
         log<LOG_ERROR>(L"%1% || save_bank: serialisation error: %2%") % __func__ % e.what();
@@ -178,9 +182,9 @@ bool load_bank(PEBank &bank_out, const std::string &path) {
                 % __func__ % path.c_str() % magic % (uint32_t)PEBank::MAGIC;
             return false;
         }
-        if (version != 2 && version != PEBank::VERSION) {
-            log<LOG_ERROR>(L"%1% || load_bank: version mismatch in %2% (got %3%, expected 2 or %4%).")
-                % __func__ % path.c_str() % (int)version % (int)PEBank::VERSION;
+        if (version != 2 && version != PEBank::VERSION && version != PEBank::VERSION_OVERLAP) {
+            log<LOG_ERROR>(L"%1% || load_bank: version mismatch in %2% (got %3%, expected 2, %4% or %5%).")
+                % __func__ % path.c_str() % (int)version % (int)PEBank::VERSION % (int)PEBank::VERSION_OVERLAP;
             return false;
         }
         ia & bank_out;
@@ -202,6 +206,7 @@ bool load_bank(PEBank &bank_out, const std::string &path) {
                 for (size_t k = 0; k < pes.size(); ++k)
                     pes[k].phys_hat.assign(phat[c].begin() + k * nprof, phat[c].begin() + (k + 1) * nprof);
             }
+            if (version >= PEBank::VERSION_OVERLAP) ia & bank_out.manifest.overlap_fp;
         }
     } catch (const std::exception &e) {
         log<LOG_ERROR>(L"%1% || load_bank: deserialisation error: %2%") % __func__ % e.what();
@@ -277,16 +282,19 @@ bool save_brazil_archive(const BrazilArchive &arc, const std::string &path) {
     }
     try {
         boost::archive::binary_oarchive oa(ofs);
-        // Legacy archives keep the v1 layout byte for byte; profile archives append a tail.
-        const bool profiled = arc.manifest.profiled();
+        // Legacy archives keep the v1 layout byte for byte; profile archives append a tail,
+        // and archives thrown with statistical overlap add its fingerprint after it.
+        const bool tail = arc.manifest.has_tail();
+        const bool overlap = arc.manifest.overlap_fp != 0;
         uint32_t magic = BrazilArchive::MAGIC;
-        uint16_t version = profiled ? BrazilArchive::VERSION : 1;
+        uint16_t version = overlap ? BrazilArchive::VERSION_OVERLAP : (tail ? BrazilArchive::VERSION : 1);
         oa & magic;
         oa & version;
         oa & const_cast<BrazilArchive &>(arc);
-        if (profiled) {
+        if (tail) {
             oa & const_cast<ProfileManifest &>(arc.manifest);
             oa & const_cast<std::vector<std::vector<float>> &>(arc.per_throw_phys_hat);
+            if (overlap) oa & const_cast<uint64_t &>(arc.manifest.overlap_fp);
         }
     } catch (const std::exception &e) {
         log<LOG_ERROR>(L"%1% || save_brazil_archive: serialisation error: %2%") % __func__ % e.what();
@@ -314,9 +322,9 @@ bool load_brazil_archive(BrazilArchive &arc_out, const std::string &path) {
                 % __func__ % path.c_str() % magic % (uint32_t)BrazilArchive::MAGIC;
             return false;
         }
-        if (version != 1 && version != BrazilArchive::VERSION) {
-            log<LOG_ERROR>(L"%1% || load_brazil_archive: version mismatch in %2% (got %3%, expected 1 or %4%).")
-                % __func__ % path.c_str() % (int)version % (int)BrazilArchive::VERSION;
+        if (version != 1 && version != BrazilArchive::VERSION && version != BrazilArchive::VERSION_OVERLAP) {
+            log<LOG_ERROR>(L"%1% || load_brazil_archive: version mismatch in %2% (got %3%, expected 1, %4% or %5%).")
+                % __func__ % path.c_str() % (int)version % (int)BrazilArchive::VERSION % (int)BrazilArchive::VERSION_OVERLAP;
             return false;
         }
         ia & arc_out;
@@ -325,6 +333,7 @@ bool load_brazil_archive(BrazilArchive &arc_out, const std::string &path) {
         if (version >= 2) {
             ia & arc_out.manifest;
             ia & arc_out.per_throw_phys_hat;
+            if (version >= BrazilArchive::VERSION_OVERLAP) ia & arc_out.manifest.overlap_fp;
         }
     } catch (const std::exception &e) {
         log<LOG_ERROR>(L"%1% || load_brazil_archive: deserialisation error: %2%") % __func__ % e.what();
@@ -408,6 +417,7 @@ struct AdaptivePEArgs {
     bool   shape_only = false;   ///< --shapeonly (must match the data fit's metric).
     const float *truth_phys = nullptr;      ///< Toy truth of every physics param (model space); axes at the cell centre.
     const NuisanceSpec *spec = nullptr;     ///< Which physics params float in the constrained fit.
+    const OverlapFractions *overlap = nullptr; ///< Expected statistical-overlap fractions at the cell truth (MC overlap only).
     uint32_t seed;
     FitTiming *timing = nullptr;  ///< Worker-local fit timings (log only).
 };
@@ -475,11 +485,10 @@ static PEBankRecord run_one_pe(const AdaptivePEArgs &args)
     // Covariance fluctuation scaled by this PE's own prediction (cell physics +
     // thrown splines): the covariance the metric assumes at this cell.
     const Eigen::VectorXf sys_shift = ThrowCovarianceShift(config, *args.R, shifted.Spec(), rng, d, config.i_prime);
-    PROspec newSpec = PROspec::PoissonVariation(
+    PROdata data = MakeToyData(
         PROspec(CollapseMatrix(config, shifted.Spec()) + sys_shift,
                 CollapseMatrix(config, shifted.Error())),
-        dseed(rng));
-    PROdata data(newSpec.Spec(), newSpec.Error());
+        args.overlap, true, dseed(rng));
 
     // Build metric (unique_ptr — early-stop safe).
     PROmetric::EvalStrategy mstrat = args.binned ? PROmetric::BinnedChi2 : PROmetric::EventByEvent;
@@ -687,6 +696,13 @@ void schedule_pes(const AdaptiveFCConfig &acfg,
             const int final_total = std::min(n_existing + to_add_raw, acfg.n_pe_max);
 
             cells_topped_up.fetch_add(1);
+            // Statistical overlap: one set of expected-cell fractions per cell truth.
+            std::optional<OverlapFractions> overlap_frac;
+            if (prop.overlap) {
+                const auto &ct = cell_truth[(size_t)c];
+                overlap_frac = ComputeOverlapFractions(config, prop, model,
+                    Eigen::Map<const Eigen::VectorXf>(ct.data(), (Eigen::Index)ct.size()), config.i_prime);
+            }
             for (int i = n_existing; i < final_total; ++i) {
                 AdaptivePEArgs args{};
                 args.config = &config;
@@ -700,6 +716,7 @@ void schedule_pes(const AdaptiveFCConfig &acfg,
                 args.shape_only = acfg.shape_only;
                 args.truth_phys = cell_truth[(size_t)c].data();
                 args.spec = &spec;
+                args.overlap = overlap_frac ? &*overlap_frac : nullptr;
                 args.seed = pe_seed_for(c, i);
                 args.timing = &timing;
 

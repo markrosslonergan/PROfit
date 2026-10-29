@@ -19,7 +19,11 @@
 #include <Eigen/src/Core/Matrix.h>
 #include <vector>
 #include <chrono>
+#include <memory>
 namespace PROfit{
+
+    struct PROoverlapMC;
+
     /**
      * @brief Compact upper-triangular storage for per-variable 2D histogram pairs.
      * @details Stores an n×n collection of (n_reco × n_phys) Eigen matrices indexed by
@@ -217,6 +221,11 @@ namespace PROfit{
             PROhistStorage variable_hist_storage;
 
             uint32_t hash; ///< MurmurHash3 of the PROconfig used to create this PROpeller; checked during serialisation.
+
+            /// Which entries are the same interaction in another analysis (PROoverlap.h). Only
+            /// set when MC MCFiles carry overlap_matching_vars; not serialised (it lives in
+            /// <tag>_overlap_mc.bin). Shared, so per-thread copies of the PROpeller stay cheap.
+            std::shared_ptr<const PROoverlapMC> overlap;
 
             /**
              * @brief Return the value of a given analysis variable for a given event.

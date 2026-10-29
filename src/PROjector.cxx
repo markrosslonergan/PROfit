@@ -222,6 +222,9 @@ namespace PROfit {
                 PROdata masked(mask.cwiseProduct(variable_data[io].Spec()),
                                mask.cwiseProduct(variable_data[io].Error()));
                 masked.hash = variable_data[io].hash;
+                // Cells keep their masked-out bins: the metric drops those (zero variance).
+                masked.has_overlap = variable_data[io].has_overlap;
+                masked.overlap = variable_data[io].overlap;
                 variable_data[io] = std::move(masked);
             }
             data = variable_data[config.i_prime];

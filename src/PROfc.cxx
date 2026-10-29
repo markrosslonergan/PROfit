@@ -1,5 +1,7 @@
 #include "PROfc.h"
 
+#include <optional>
+
 namespace PROfit {
 
 void fc_worker(fc_args args, MultiPROgressBar &progress) {
@@ -62,6 +64,12 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         profile_fixed_seeds.push_back(std::move(at_default));
     }
 
+    // Statistical overlap: expected cells at this worker's toy truth (MC fractions only, so
+    // the toy distribution never depends on the observed data).
+    std::optional<OverlapFractions> overlap_frac;
+    if(args.prop.overlap)
+        overlap_frac = ComputeOverlapFractions(args.config, args.prop, *model, args.phy_params.head(nphys), args.config.i_prime);
+
     for(size_t u = 0; u < args.todo; ++u) {
         log<LOG_INFO>(L"%1% | Thread #%2% Throw #%3%") % __func__ % args.thread % u;
         std::normal_distribution<float> d;
@@ -88,10 +96,8 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         PROspec variedSpec(collapsed, CollapseMatrix(args.config, shifted.Error()));
 
         // Without Poisson, clamp negative bins to 0 as PoissonVariation does.
-        PROspec newSpec = args.throw_poisson
-            ? PROspec::PoissonVariation(variedSpec, dseed(rng))
-            : PROspec(variedSpec.Spec().cwiseMax(0.0f), variedSpec.Error());
-        PROdata data(newSpec.Spec(), newSpec.Error());
+        PROdata data = MakeToyData(variedSpec, overlap_frac ? &*overlap_frac : nullptr, args.throw_poisson,
+                                   args.throw_poisson ? dseed(rng) : 0);
         //Metric Time
         // Same construction point as the data fit (carries shape_only etc.).
         PROmetric *metric = MakeMetric(args.chi2, args.config, args.prop, &args.systs, *model, data,

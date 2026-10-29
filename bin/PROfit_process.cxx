@@ -133,14 +133,22 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     std::string propBinName = options.analysis_tag+"_prop.bin";
     std::string systBinName = options.analysis_tag+"_syst.bin";
 
-    bool need_main_process = (*options.process_command) || (!std::filesystem::exists(systBinName) || !std::filesystem::exists(propBinName));
+    // MC statistical overlap (opt-in via overlap_matching_vars on MC MCFiles): which entries
+    // are the same interaction. Kept out of _prop.bin, which is unchanged without the opt-in.
+    const bool mc_overlap = config.HasOverlapMatching();
+    std::string overlapBinName = options.analysis_tag+"_overlap_mc.bin";
 
+    bool need_main_process = (*options.process_command) || (!std::filesystem::exists(systBinName) || !std::filesystem::exists(propBinName))
+        || (mc_overlap && !std::filesystem::exists(overlapBinName));
+
+    PROoverlapMC overlap_mc;
     if(need_main_process){
         log<LOG_INFO>(L"%1% || Processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
         //Process the CAF files to grab and fill all SystStructs and PROpeller
-        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd);
+        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd, mc_overlap ? &overlap_mc : nullptr);
         prop.save(propBinName);
         saveSystStructVector(systsstructs, systBinName);
+        if(mc_overlap) overlap_mc.save(overlapBinName);
         log<LOG_INFO>(L"%1% || Done processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
 
     }else{
@@ -159,6 +167,13 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                 exit(1);
             }
         }
+        if(mc_overlap) {
+            overlap_mc.load(overlapBinName);
+            if(overlap_mc.hash != config.hash && !options.force) {
+                log<LOG_ERROR>(L"%1% || ERROR config hash (%2%) and MC overlap file %3% (%4%) not compatable! Re-run process.") % __func__ % config.hash % overlapBinName.c_str() % overlap_mc.hash;
+                exit(1);
+            }
+        }
         //Now check syststructs, if there is any!
         if(systsstructs.front().size()>0){
             log<LOG_INFO>(L"%1% || Done loading. Config hash (%2%) and binary loaded PROsyst hash(%3%) are here. ") % __func__ %  config.hash % systsstructs[0][0].hash;
@@ -173,6 +188,10 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
             }
         }
 
+    }
+    if(mc_overlap) {
+        log<LOG_INFO>(L"%1% || MC statistical overlap active: %2% shared interactions (toys and Asimov data carry correlated cells).") % __func__ % overlap_mc.groups.size();
+        prop.overlap = std::make_shared<const PROoverlapMC>(std::move(overlap_mc));
     }
 
     // Combined DetVar propeller binary: one file for all DetVar files, keyed by section+name.

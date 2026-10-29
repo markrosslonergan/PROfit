@@ -224,7 +224,7 @@ namespace PROfit {
         return;
     }
 
-    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller& inprop,bool noxrootd){
+    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller& inprop,bool noxrootd, PROoverlapMC *overlap_out){
 
         log<LOG_DEBUG>(L"%1% || Loading Monte Carlo Files") % __func__ ;
 
@@ -877,6 +877,11 @@ namespace PROfit {
         }
 
         time_t start_time = time(nullptr), time_stamp = time(nullptr);
+        // Statistical-overlap keys (PROoverlap.h): one record per entry filled from a flagged file.
+        OverlapRecords overlap_records;
+        overlap_records.channels_per_block = inconfig.m_num_channels;
+        const bool record_overlap = overlap_out && inconfig.HasOverlapMatching();
+
         log<LOG_INFO>(L"%1% || Start reading the files..") % __func__;
         for(int fid=0; fid < num_files; ++fid) {
             const auto& fn = inconfig.m_mcgen_file_name.at(fid);
@@ -884,6 +889,23 @@ namespace PROfit {
             log<LOG_DEBUG>(L"%1% || Start @files: %2% which has %3% total events, loading fraction %4% (%5% events)") % __func__ % fn.c_str() % nentries[fid] % inconfig.m_mcgen_partial_load_frac[fid] % nevents;
             if(inconfig.m_mcgen_partial_load_frac[fid] != 1.0)
                 log<LOG_INFO>(L"%1% || File %2% -- loading %3%%% of events (%4% / %5%)") % __func__ % fid % (inconfig.m_mcgen_partial_load_frac[fid] * 100) % nevents % nentries[fid];
+
+            const bool overlap_file = record_overlap && !inconfig.m_mcgen_overlap_matching_vars[fid].empty();
+            std::unique_ptr<OverlapKeyReader> overlap_key, overlap_common;
+            std::vector<double> overlap_key_val;
+            if(overlap_file) {
+                overlap_key = std::make_unique<OverlapKeyReader>("overlapKey_" + std::to_string(fid), inconfig.m_mcgen_overlap_matching_vars[fid], chains[fid]);
+                if(overlap_records.arity == 0) overlap_records.arity = overlap_key->Arity();
+                if(overlap_key->Arity() != overlap_records.arity) {
+                    log<LOG_ERROR>(L"%1% || ERROR: overlap_matching_vars of MCFile %2% has %3% expressions, other MCFiles have %4%.") % __func__ % fn.c_str() % overlap_key->Arity() % overlap_records.arity;
+                    throw std::invalid_argument("overlap_matching_vars arity mismatch");
+                }
+                if(!inconfig.m_mcgen_overlap_common[fid].empty())
+                    overlap_common = std::make_unique<OverlapKeyReader>("overlapCommon_" + std::to_string(fid), std::vector<std::string>{inconfig.m_mcgen_overlap_common[fid]}, chains[fid]);
+                overlap_key_val.resize(overlap_records.arity);
+                log<LOG_INFO>(L"%1% || File %2% records statistical-overlap keys (%3% expressions%4%).") % __func__ % fid % overlap_records.arity
+                    % (overlap_common ? ", common sample: " + inconfig.m_mcgen_overlap_common[fid] : std::string(", every entry common")).c_str();
+            }
 
 
             // set up systematic weight formula
@@ -999,6 +1021,11 @@ namespace PROfit {
                             ROOTFormula::ExtractExprTokens(s.GetWeightFormula(), needed);
                 for(const auto& vname : inconfig.m_detvar_matching_vars)
                     ROOTFormula::ExtractExprTokens(vname, needed);
+                if(overlap_file) {
+                    for(const auto& expr : inconfig.m_mcgen_overlap_matching_vars[fid])
+                        ROOTFormula::ExtractExprTokens(expr, needed);
+                    ROOTFormula::ExtractExprTokens(inconfig.m_mcgen_overlap_common[fid], needed);
+                }
 
                 // Branches bound via SetBranchAddress (eventweight maps)
                 for(const auto& [name, _] : f_event_weights[fid][0]) needed.insert(name);
@@ -1082,6 +1109,15 @@ namespace PROfit {
                     for(auto& mf : matching_var_formulas)
                         current_matching_vals.push_back(mf->EvalInstance());
                 }
+                bool overlap_is_common = true;
+                if(overlap_file) {
+                    overlap_key->Eval(overlap_key_val.data());
+                    if(overlap_common) {
+                        double c = 0;
+                        overlap_common->Eval(&c);
+                        overlap_is_common = (c != 0);
+                    }
+                }
 
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
@@ -1093,6 +1129,9 @@ namespace PROfit {
                         for(size_t iv = 0; iv < current_matching_vals.size(); ++iv)
                             inprop.matching_var_values[iv].push_back(current_matching_vals[iv]);
                     }
+                    if(overlap_file && inprop.NEvent() > prop_size_before)
+                        overlap_records.add(overlap_key_val.data(), OverlapChannelOfSubchannel(inconfig, subchannel_index[ib]),
+                                            (uint32_t)prop_size_before, overlap_is_common);
                 }
 
             } //end of entry loop
@@ -1101,6 +1140,8 @@ namespace PROfit {
 
         //ensure hash is correctly assigned
         inprop.hash=inconfig.hash;
+        if(record_overlap)
+            *overlap_out = BuildOverlapMC(overlap_records, inprop.NEvent(), inconfig.hash);
         // Convert the accumulated per-bin sum of squared weights into the sqrt of the
         // Kish effective count, sqrt(N_eff) = Sum(w)/sqrt(Sum(w^2)), using the CV Sum(w)
         // from the pre-binned hist diagonal. PROsyst's square().inverse() then gives the
@@ -1229,6 +1270,14 @@ namespace PROfit {
         std::vector<PROdata> data;
         for(size_t io = 0; io < inconfig.m_num_variables; ++io)
             data.emplace_back(inconfig.m_num_variable_bins_total[io]);
+
+        // Statistical overlap (PROoverlap.h): a record per filled entry of a flagged file,
+        // with that entry's bin in every variable.
+        const bool record_overlap = inconfig.HasOverlapMatching();
+        OverlapRecords overlap_records;
+        overlap_records.channels_per_block = inconfig.m_num_channels;
+        std::vector<std::vector<int>> overlap_record_bins;
+
         log<LOG_INFO>(L"%1% || Start reading the files..") % __func__;
         for(int fid=0; fid < num_files; ++fid) {
             const auto& fn = inconfig.m_mcgen_file_name.at(fid);
@@ -1248,6 +1297,24 @@ namespace PROfit {
                 branch_fullname.push_back(hist_name);
             }
 
+            const bool overlap_file = record_overlap && !inconfig.m_mcgen_overlap_matching_vars[fid].empty();
+            if(overlap_file && !inconfig.m_mcgen_overlap_common[fid].empty()) {
+                log<LOG_ERROR>(L"%1% || ERROR: overlap_common is for MC MCFiles only (data overlap is the events actually shared); remove it from data MCFile %2%.") % __func__ % fn.c_str();
+                throw std::invalid_argument("overlap_common on a data MCFile");
+            }
+            std::unique_ptr<OverlapKeyReader> overlap_key;
+            std::vector<double> overlap_key_val;
+            if(overlap_file) {
+                overlap_key = std::make_unique<OverlapKeyReader>("dataOverlapKey_" + std::to_string(fid), inconfig.m_mcgen_overlap_matching_vars[fid], chains[fid]);
+                if(overlap_records.arity == 0) overlap_records.arity = overlap_key->Arity();
+                if(overlap_key->Arity() != overlap_records.arity) {
+                    log<LOG_ERROR>(L"%1% || ERROR: overlap_matching_vars of data MCFile %2% has %3% expressions, other data MCFiles have %4%.") % __func__ % fn.c_str() % overlap_key->Arity() % overlap_records.arity;
+                    throw std::invalid_argument("overlap_matching_vars arity mismatch");
+                }
+                overlap_key_val.resize(overlap_records.arity);
+                log<LOG_INFO>(L"%1% || Data file %2% records statistical-overlap keys (%3% expressions).") % __func__ % fid % overlap_records.arity;
+            }
+
             // Prune unused branches: disable everything, then re-enable only what our
             // formulas actually need.
             //
@@ -1265,6 +1332,9 @@ namespace PROfit {
                     for(const auto& wname : inconfig.m_mcgen_weight_names[fid][ib])
                         ROOTFormula::ExtractExprTokens(wname, needed);
                 }
+                if(overlap_file)
+                    for(const auto& expr : inconfig.m_mcgen_overlap_matching_vars[fid])
+                        ROOTFormula::ExtractExprTokens(expr, needed);
                 log<LOG_DEBUG>(L"%1% || Branch pruning fid=%2%: needed set has %3% entries, calling SetBranchStatus(*,0)") % __func__ % fid % needed.size();
                 chains[fid]->SetBranchStatus("*", 0);
                 for(const auto& name : needed) {
@@ -1291,6 +1361,7 @@ namespace PROfit {
                         b->LoadEvent(i);
                     }
                 }
+                if(overlap_file) overlap_key->Eval(overlap_key_val.data());
 
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
@@ -1310,7 +1381,17 @@ namespace PROfit {
                     for(size_t io = 0; io < inconfig.m_num_variables; ++io)
                         if(var_bin_indices[io] >= 0)
                             data[io].Fill(var_bin_indices[io], additional_weight);//from io+1
-                    
+
+                    if(overlap_file) {
+                        if(std::fabs(additional_weight - 1.0f) > 1e-4f) {
+                            log<LOG_ERROR>(L"%1% || ERROR: data MCFile %2% carries overlap_matching_vars but entry %3% (%4%) has weight %5%. Overlap counting needs unit-weight data events.")
+                                % __func__ % fn.c_str() % i % branch_fullname[ib].c_str() % additional_weight;
+                            throw std::runtime_error("overlap on weighted data");
+                        }
+                        overlap_records.add(overlap_key_val.data(), OverlapChannelOfSubchannel(inconfig, inconfig.GetSubchannelIndex(branch_fullname[ib])),
+                                            (uint32_t)overlap_record_bins.size());
+                        overlap_record_bins.push_back(var_bin_indices);
+                    }
                 }  //end of branch loop
             } //end of entry loop
         } //end of file loop
@@ -1334,6 +1415,32 @@ namespace PROfit {
         for(auto &d : data) {
             Eigen::VectorXf poisson_err = d.Spec().array().max(0.0f).sqrt();
             d = PROdata(d.Spec(), poisson_err);
+        }
+
+        if(record_overlap) {
+            const auto groups = overlap_records.Join("data");
+            for(size_t io = 0; io < inconfig.m_num_variables; ++io) {
+                std::map<std::vector<int>, size_t> cell_index;
+                OverlapCells &cells = data[io].overlap;
+                for(const auto &g : groups) {
+                    std::vector<int> bins;
+                    for(size_t r : g) {
+                        const int b = overlap_record_bins[overlap_records.payload[r]][io];
+                        if(b >= 0) bins.push_back(b);
+                    }
+                    std::sort(bins.begin(), bins.end());
+                    if(bins.size() < 2) continue;
+                    auto [it, inserted] = cell_index.emplace(bins, cells.size());
+                    if(inserted) {
+                        cells.bins.push_back(bins);
+                        cells.count.push_back(0.0f);
+                    }
+                    cells.count[it->second] += 1.0f;
+                }
+                data[io].has_overlap = true;
+            }
+            log<LOG_INFO>(L"%1% || Data overlap: %2% flagged data entries, %3% shared events. Variable %4%: %5%")
+                % __func__ % overlap_records.size() % groups.size() % inconfig.i_prime % DescribeOverlap(data[inconfig.i_prime]).c_str();
         }
 
         return data;

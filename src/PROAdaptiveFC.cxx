@@ -342,6 +342,8 @@ AdaptiveFCResult run_adaptive_fc(
         run_manifest.chi2         = acfg.chi2;
         run_manifest.shape_only   = acfg.shape_only ? 1 : 0;
     }
+    // Toys thrown with the MC statistical overlap are a different distribution (any truth source).
+    if (prop.overlap) run_manifest.overlap_fp = OverlapFingerprint(*prop.overlap);
     auto profiled_columns = [&](const ProfileManifest &m) {
         std::vector<std::tuple<std::string, int, bool>> cols;
         for (int i : m.profile_idx)
@@ -416,6 +418,14 @@ AdaptiveFCResult run_adaptive_fc(
     // A bank (or archive) must have been built with the same profiled
     // parameters, model, metric and config as this classification run.
     auto check_manifest = [&](const ProfileManifest &m, const std::string &what) -> bool {
+        if (m.overlap_fp != run_manifest.overlap_fp) {
+            const char *how = m.overlap_fp == 0 ? "without the MC statistical overlap this run uses"
+                            : run_manifest.overlap_fp == 0 ? "with MC statistical overlap, which this run does not use"
+                            : "with a different MC statistical overlap";
+            log<LOG_ERROR>(L"%1% || %2% was thrown %3% (overlap_matching_vars); regenerate it.")
+                % __func__ % what.c_str() % how;
+            return false;
+        }
         if (m.profile_idx != profile_idx) {
             log<LOG_ERROR>(L"%1% || %2% was built %3% profiled parameters than this run's --profile-params; "
                            L"pass the same --profile-params to every fc-adaptive stage.")
@@ -577,7 +587,7 @@ AdaptiveFCResult run_adaptive_fc(
                 first_input = false;
             } else if (in.manifest != bank.manifest) {
                 log<LOG_ERROR>(L"%1% || merge-bank: %2% was built with a different profile manifest (profiled parameters, "
-                               L"dataset, config or metric) than %3%; refusing to merge.")
+                               L"dataset, config, metric or statistical overlap) than %3%; refusing to merge.")
                     % __func__ % path.c_str() % acfg.merge_inputs.front().c_str();
                 res.ok = false;
                 return res;
@@ -1384,7 +1394,7 @@ AdaptiveFCResult run_adaptive_fc(
                     // Never mix toys thrown at different truths into one cell.
                     if (existing.manifest != bank.manifest) {
                         log<LOG_ERROR>(L"%1% || init-bank: existing %2% was built with a different profile manifest "
-                                       L"(profiled parameters, dataset, config or metric). Use another -o, or delete it.")
+                                       L"(profiled parameters, dataset, config, metric or statistical overlap). Use another -o, or delete it.")
                             % __func__ % bank_path.c_str();
                         progress.finish_all(false);
                         res.ok = false;

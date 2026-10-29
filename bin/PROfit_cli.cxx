@@ -335,7 +335,7 @@ PROpt::PROpt(int argc, char **argv) {
         proletariat_command->add_option("--memory", grid_opts.memory_mb, "Requested memory in MB.")->default_val(4000);
         proletariat_command->add_option("--disk", grid_opts.disk_mb, "Requested scratch disk in MB.")->default_val(10000);
         proletariat_command->add_option("--input", grid_opts.extra_inputs,
-            "Extra file(s) to bundle into the tarball (repeatable). A missing file is a hard error. The XML and any <tag>_prop.bin/_syst.bin and <tag>_<output>_mesh.bin/_bank.bin in the current directory are bundled automatically.");
+            "Extra file(s) to bundle into the tarball (repeatable). A missing file is a hard error. The XML and any <tag>_prop.bin/_syst.bin/_data.bin/_overlap_mc.bin/_overlap_data.bin and <tag>_<output>_mesh.bin/_bank.bin in the current directory are bundled automatically.");
         proletariat_command->add_flag("--dry-run", grid_opts.dry_run,
             "Stage and build the tarball, print the exact jobsub_submit command, do not submit.");
         proletariat_command->add_option("--backend", grid_backend_str, "Scheduler backend: jobsub or slurm (slurm not yet implemented).")->default_str("jobsub");
