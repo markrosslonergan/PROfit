@@ -2442,7 +2442,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
         }
         dataXml << "\n";
 
-        // Opt-in data model (for --inject): a <model> inside <data>, or inherit_model="true".
+        // Opt-in data model (for --inject-data): a <model> inside <data>, or inherit_model="true".
         tinyxml2::XMLElement* pDataModel = pData->FirstChildElement("model");
         if(!pDataModel && pData->BoolAttribute("inherit_model", false)) {
             pDataModel = doc.FirstChildElement("model");

@@ -662,6 +662,7 @@ dataset from the command line:
 | Option | What it does |
 |---|---|
 | `-i/--inject dmsq 1 sinsq2thme 0.01` | inject an oscillation signal as truth (**name value pairs** in v2.X, in linear units) |
+| `--inject-data dmsq 1 sinsq2thme 0.01` | reweight *real* data to an oscillation signal using the data's own `<model>` (a `<model>` inside `<data>`, or `<data inherit_model="true">`); errors if the data has no model, and not allowed with `fc`/`fc-adaptive` |
 | `--inject-systs Flux1 1.0 DetSys2 -2.0` | shift spline systematics (in σ) into the fake data |
 | `--inject-cv` / `--inject-systs-cv` | same, but shift the *prediction* CV instead of the data |
 | `--poisson-throw` | Poisson-fluctuate the fake data |
