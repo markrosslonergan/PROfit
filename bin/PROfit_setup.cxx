@@ -476,8 +476,8 @@ void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmo
     if(*options.bench_command)
         fatal("scale-test does not support statistical overlap.");
 
-    if(*options.global_command || *options.profile_command)
-        log<LOG_WARNING>(L"%1% || Statistical overlap: post-fit error bands, the Constrained Best-Fit and the pull distributions still condition on a diagonal statistical term (the fit chi2 itself is correlated).") % __func__;
+    if(options.projector_config.active())
+        log<LOG_WARNING>(L"%1% || Statistical overlap with PROjector: each stage uses the overlap among its own channels, but events shared between the pre-fit and the fitted channels count as exclusive in stage 2 (the constraint and the stage-2 data are not decorrelated).") % __func__;
 }
 
 Eigen::VectorXf remap_spline_params(const Eigen::VectorXf &params, size_t nphys,

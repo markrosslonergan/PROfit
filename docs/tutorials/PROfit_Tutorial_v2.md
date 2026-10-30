@@ -3641,13 +3641,31 @@ non-overlap toys. `proletariat` stages `_data.bin` and both overlap files.
   events (n_a = n_b = n_ab) gives Neyman a singular block. Only then, and
   only for that group of bins, the zero-exclusive bins get half an event of
   exclusive variance, with a one-time warning.
+* **Post-fit plots use the same correlated term.** The post-fit error band,
+  the Constrained Best-Fit, the covariance-mode pulls and the pull
+  distributions condition the systematics on the data with the V the fit
+  uses (Appendix C with C → V). On the closure test, the A channels' post-fit
+  band, the covariance bin pulls and every spline's posterior width equal the
+  A-only fit's to float precision. Ignoring the overlap narrows the νe band by
+  up to 17%. With no free splines, the band's logged uᵀ(V+Σ)⁻¹u still equals
+  the fit χ².
+* **FC toys match nature.** The check uses a harder closure: B keeps 60% of
+  A's νe events in a smeared energy variable, plus 20% of low-energy νμ CC as
+  a mis-ID sample, so cells cross bins and channels. Here "nature" throws each
+  MC interaction once as a Poisson count in every bin it fills. The thrower's
+  expected shared rates equal nature's to 1e-5. With only half the MC
+  declared common, they agree within MC noise. With a stat-only Δχ² over a
+  40×40 physics grid and 3000 toys at a signal point and at the null, the
+  thrower's Δχ² distribution is
+  indistinguishable from nature's (KS p = 0.93 and 0.61). The FC 90%
+  coverage on nature toys is 0.902 and 0.897 (nominal 0.900 ± 0.006).
+  Ignoring the overlap gives 0.890 and 0.859.
 
 ### G.4 Not yet covered
 
-* **Post-fit plots.** The post-fit error bands, the Constrained Best-Fit, the
-  covariance-mode pulls and the pull distributions still condition on a
-  diagonal statistical term. `global`/`profile` warn about this; the fit χ²
-  itself is correlated.
+* **PROjector.** Each stage uses the overlap among its own channels, but
+  events shared between the pre-fit channels and the fitted channels count
+  as exclusive in stage 2. PROfit warns.
 * **MC-stat.** Off-diagonals of the MC-stat covariance for MC entries shared
   between the analyses are not included.
 * **Exposure.** The MC fractions assume both analyses' data cover the same

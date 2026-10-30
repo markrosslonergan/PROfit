@@ -403,6 +403,7 @@ namespace PROfit{
                     contrib.push_back(i);
             if(!contrib.empty()) {
                 const size_t nb = contrib.size();
+                const Eigen::MatrixXd C_full = conditioningStatCovariance(metric, config, var_index, data_spec, contrib);
                 Eigen::MatrixXd Sig_full = cov.cast<double>();
                 Eigen::MatrixXd K(cv_coll.size(), nb);      // Sigma[:, contrib]
                 Eigen::MatrixXd M(nb, nb);                  // C + Sigma on contrib bins
@@ -410,9 +411,10 @@ namespace PROfit{
                 for(size_t a = 0; a < nb; ++a) {
                     K.col(a) = Sig_full.col(contrib[a]);
                     for(size_t b = 0; b < nb; ++b) M(a, b) = Sig_full(contrib[a], contrib[b]);
-                    M(a, a) += stat(contrib[a]);
+                    if(C_full.size() == 0) M(a, a) += stat(contrib[a]);
                     u(a) = data_spec(contrib[a]) - cv_coll(contrib[a]);
                 }
+                if(C_full.size() != 0) M += C_full;
                 Eigen::LDLT<Eigen::MatrixXd> M_ldlt(M);
                 // With no free splines this equals the fit's chi^2 at params.
                 log<LOG_INFO>(L"%1% || Data-constrained band: u^T (C+Sigma)^-1 u = %2% over %3% bins") % __func__ % u.dot(M_ldlt.solve(u)) % nb;
@@ -3847,8 +3849,18 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
             C_inv_red(i) = 1.0 / stat(contrib[i]);
             u_bf(i) = data_spec(contrib[i]) - cv_coll(contrib[i]);
         }
-        Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k)
-                              + L_red.transpose() * C_inv_red.asDiagonal() * L_red;
+        // L^T C^-1 L and L^T C^-1 u: C diagonal, or the full statistical overlap covariance.
+        const Eigen::MatrixXd C_full = conditioningStatCovariance(metric, config, var_index, data_spec, contrib);
+        Eigen::MatrixXd inner;
+        Eigen::VectorXd LtCu;
+        if(C_full.size() == 0) {
+            inner = Eigen::MatrixXd::Identity(k, k) + L_red.transpose() * C_inv_red.asDiagonal() * L_red;
+            LtCu = L_red.transpose() * (C_inv_red.asDiagonal() * u_bf);
+        } else {
+            const Eigen::MatrixXd W = OverlapStatPrecision(C_full);
+            inner = Eigen::MatrixXd::Identity(k, k) + L_red.transpose() * W * L_red;
+            LtCu = L_red.transpose() * (W * u_bf);
+        }
         Eigen::LLT<Eigen::MatrixXd> inner_llt(inner);
         if(inner_llt.info() != Eigen::Success) {
             // inner is PD by construction. any failures here are float math noise from L. Clamp eigenvalues and retry.
@@ -3861,7 +3873,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         }
 
         // Mode-space posterior: mean alpha_hat, covariance inner^-1 (prior = I).
-        Eigen::VectorXd alpha_hat = inner_llt.solve(L_red.transpose() * (C_inv_red.asDiagonal() * u_bf));
+        Eigen::VectorXd alpha_hat = inner_llt.solve(LtCu);
         Eigen::MatrixXd inner_inv = inner_llt.solve(Eigen::MatrixXd::Identity(k, k));
         Eigen::VectorXd sigma_post = inner_inv.diagonal().cwiseMax(0.0).cwiseSqrt();
 
