@@ -701,6 +701,28 @@ COMMON=(-x local_plot_le.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
 expect_fail t77plotcarried --use-fake-data global
 COMMON=("${SAVED_COMMON[@]}")
 
+# --- 16. Pearson analytic gradient ---------------------------------------------
+# Pearson's prediction-valued stat variance is differentiated in closed form: the
+# analytic mode must track central-full (the lin modes, which drop that term, are
+# off by ~1e3) and must not have fallen back to finite differences.
+grad_rel_check() {
+    local name="$1" log="$2" r
+    r=$(sed -n 's/.*\[GRADCHECK\] mode=analytic .*mean_rel=\([-+0-9.eE]*\).*/\1/p' "$log" | tail -n 1)
+    if [ -n "$r" ] && awk -v r="$r" 'BEGIN { exit !(r < 0.2) }' && ! grep -q "falling back" "$log"; then
+        note "PASS  $name  (analytic vs central-full mean_rel $r)"
+        PASS=$((PASS+1))
+    else
+        note "FAIL  $name  (analytic vs central-full mean_rel '$r', want < 0.2 and no fallback)"
+        FAIL=$((FAIL+1))
+    fi
+}
+run_test t78apearsongrad -l logs/t78apearsongrad.full.log -w 3 --use-fake-data -c pearson \
+    scale-test --tests gradcheck -N 200
+grad_rel_check t78bpearsongradrel logs/t78apearsongrad.full.log
+run_test t78cpearsonshgrad -l logs/t78cpearsonshgrad.full.log -w 3 --use-fake-data -c pearson --shapeonly \
+    scale-test --tests gradcheck -N 200
+grad_rel_check t78dpearsonshgradrel logs/t78cpearsonshgrad.full.log
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

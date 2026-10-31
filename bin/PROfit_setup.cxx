@@ -254,7 +254,7 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
 // hypercube, PSO effectively off, the budget spent on many cheap multistart
 // descents. That shape only pays off when a gradient really costs ~one evaluation
 // and is exact. Three things can take that away:
-//   * a metric other than neyman/PROchi (pearson / CNP / poisson demote to central-lin),
+//   * a metric other than neyman/pearson (CNP / poisson demote to central-lin),
 //   * --event-by-event (the unbinned strategy demotes too),
 //   * a model without closed-form get_probs_grad (PROmodel's base class falls back
 //     to a central finite difference on the probabilities, so every gradient costs
@@ -263,7 +263,7 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
 // them unless the user picked a preset themselves — an explicit -p is always honoured.
 void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel &model) {
     std::vector<std::string> reasons;
-    if(options.chi2 != "neyman")        reasons.push_back(options.chi2);
+    if(options.chi2 != "neyman" && options.chi2 != "pearson") reasons.push_back(options.chi2);
     if(options.eventbyevent)            reasons.push_back("--event-by-event");
     if(!model.has_analytic_gradient())  reasons.push_back("model '" + config.m_model_tag +
                                                           "' (no closed-form get_probs_grad)");

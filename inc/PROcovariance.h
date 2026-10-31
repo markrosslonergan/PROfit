@@ -33,7 +33,7 @@ namespace PROfit{
      * @brief Common engine for covariance-matrix chi-squared metrics.
      * @details Gathers the MC store (PROpeller), systematic object (PROsyst), and oscillation
      * model (PROmodel) into a single callable object whose operator() returns the chi-squared
-     * value and gradient for use by PROfitter. PROchi, PROpearson, and PROCNP
+     * value and gradient for use by PROfitter. PROchi, PROchi_pearson, and PROCNP
      * specialize only the per-bin statistical variance. All heavy objects are
      * stored as references or pointers to objects owned by the caller.
      */
@@ -77,6 +77,18 @@ namespace PROfit{
             virtual bool statisticalVariancesDependOnPrediction() const { return false; }
 
             /**
+             * @brief d var_k / d c_k, for a variance that is a per-bin function of the collapsed
+             * (shape-rescaled) prediction c handed to statisticalVariances().
+             * @details Only consulted when statisticalVariancesDependOnPrediction() is true. A
+             * non-empty result enables the analytic gradient, which then adds the
+             * −uᵀ diag(dvar/dθ) u term; an empty one (the default) falls back to
+             * analyticFallbackMode(). PROchi_pearson implements it. PROCNP cannot: its mu is the
+             * physics-only CV, not c.
+             */
+            virtual Eigen::VectorXf statisticalVarianceSlope(
+                [[maybe_unused]] const Eigen::VectorXf &collapsed_prediction) const { return Eigen::VectorXf(); }
+
+            /**
              * @brief Per-bin statistical variance used by getSingleChannelChi().
              * @details Defaults to statisticalVariances() with no parameter vector. PROchi and
              * PROCNP override it because their per-channel diagnostic path has historically
@@ -90,10 +102,11 @@ namespace PROfit{
             /**
              * @brief Gradient mode used when GradientAnalytic is requested but unavailable.
              * @details Defaults to PROmetric::GradientFallback (Gauss-Newton linearised FD),
-             * matching upstream's choice for PROCNP. PROpearson overrides this with a
-             * full-FD mode: its statistical variance is the prediction itself, so the
-             * (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the linearised mode drops is first-order in the
-             * fitted parameters, and dropping it stalls the minimiser.
+             * matching upstream's choice for PROCNP. PROchi_pearson (which only needs a
+             * fallback for EventByEvent) overrides this with a full-FD mode: its statistical
+             * variance is the prediction itself, so the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the
+             * linearised mode drops is first-order in the fitted parameters, and dropping it
+             * stalls the minimiser.
              */
             virtual GradientMode analyticFallbackMode() const { return GradientFallback; }
 

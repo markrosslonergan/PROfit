@@ -24,12 +24,17 @@ bool PROchi_pearson::statisticalVariancesDependOnPrediction() const {
     return true;
 }
 
+Eigen::VectorXf PROchi_pearson::statisticalVarianceSlope(const Eigen::VectorXf &collapsed_prediction) const {
+    // Slope of cwiseMax(c, floor): 1 above the floor, 0 where the floor holds the variance.
+    return (collapsed_prediction.array() > kMinPearsonMu).cast<float>().matrix();
+}
+
 PROmetric::GradientMode PROchi_pearson::analyticFallbackMode() const {
-    // Not the linearised default: the Pearson variance IS the prediction, so the
-    // dM/dtheta term the Gauss-Newton mode drops is first-order in every fitted
-    // parameter. In tests the linearised fallback stalled well above the true
-    // minimum; the full one-sided FD converges to the same optimum as central-full
-    // at half the cost.
+    // Reached only with EventByEvent (binned fits have the analytic gradient). Not the
+    // linearised default: the Pearson variance IS the prediction, so the dM/dtheta term
+    // the Gauss-Newton mode drops is first-order in every fitted parameter. In tests the
+    // linearised fallback stalled well above the true minimum; the full one-sided FD
+    // converges to the same optimum as central-full at half the cost.
     return GradientOneSidedFull;
 }
 

@@ -109,6 +109,10 @@ namespace PRObench {
         /// within the fit bounds; per-universe truth columns are added to the
         /// CSV for parameter-recovery plots.
         bool throw_phys = false;
+        /// (p) benchmark: metric (canonical --chi2 name) and shape-only flag of the
+        /// per-universe metrics.
+        std::string chi2 = "neyman";
+        bool shape_only = false;
     };
 
     /**

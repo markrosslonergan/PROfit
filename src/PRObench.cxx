@@ -3,7 +3,7 @@
 #include "PROlog.h"
 #include "PROdata.h"
 #include "PROmetric.h"
-#include "PROmetrics/PROchi_neyman.h"
+#include "PROmetrics/PROmetricFactory.h"
 #include "PROmodel.h"
 #include "PROsyst.h"
 #include "PROpeller.h"
@@ -493,16 +493,16 @@ void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &param
 //     logged after each cell completes so [GRADBENCH] lines never interleave.
 //   - Fitted physics parameters are logged per fit for parameter-recovery
 //     plots; the injected truth is logged once as [GRADBENCH-TRUTH].
-// Metrics are constructed fresh per universe as PROchi/BinnedChi2 regardless of
-// the CLI --chi2 choice (the analytic mode is PROchi-only so far, and a fresh
-// metric is needed anyway to bind the per-universe data).
+// Metrics are constructed fresh per universe (to bind the per-universe data) with
+// the CLI --chi2 / --shapeonly choice and the BinnedChi2 strategy.
 void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
                         PROmetric &base_metric, const PROdata &base_data,
                         int n_universes, uint32_t base_seed, int nthreads,
                         const Eigen::VectorXf &truth_params,
                         const std::string &csv_path,
                         const std::string &preset_filter,
-                        bool throw_systs, bool throw_phys)
+                        bool throw_systs, bool throw_phys,
+                        const std::string &chi2_kind, bool shape_only)
 {
     const PROmodel &model = base_metric.GetModel();
     const PROsyst  &syst  = base_metric.GetSysts();
@@ -665,8 +665,9 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
             std::atomic<int> next{0};
             auto worker = [&]() {
                 for (int u = next.fetch_add(1); u < n_universes; u = next.fetch_add(1)) {
-                    PROchi m("", config, prop, &syst, model, universes[u],
-                             PROmetric::BinnedChi2, /*shape_only=*/false);
+                    std::unique_ptr<PROmetric> mp = MakeMetric(chi2_kind, config, prop, &syst, model, universes[u],
+                                                               PROmetric::BinnedChi2, shape_only);
+                    PROmetric &m = *mp;
                     m.setBounds(bench_lb, bench_ub);
                     // Same fitter seed per universe across all (preset, mode)
                     // cells → identical LHS/PSO trajectories per universe.
@@ -859,7 +860,8 @@ std::vector<BenchResult> run_scale_test(
         run_grad_mode_fits(config, prop, metric, data, N_fit,
                            opts.rng_seed ^ 0x80u, opts.nthreads, opts.truth_params,
                            opts.grad_csv, opts.grad_presets,
-                           opts.throw_systs, opts.throw_phys);
+                           opts.throw_systs, opts.throw_phys,
+                           opts.chi2, opts.shape_only);
     }
 
     log<LOG_INFO>(L"%1% || ===== PRObench scale-test complete: %2% tests =====")

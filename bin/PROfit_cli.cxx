@@ -19,7 +19,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
-        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c pearson / -c CNP / -c poisson, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
+        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c CNP / -c poisson, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
         app.add_option("--fit-options", global_fit_options, "Parameters for single, detailed global best fit LBFGSB. See PROfitter.h or run --fit-help for available settings.");
         app.add_option("--scan-fit-options", scan_fit_options, "Parameters for simpier, multiple best fits in PROfile/surface LBFGSB.");
         app.add_flag("--fit-help", show_fit_help, "Show detailed help for all fitting parameters (L-BFGS-B, PSO, MCMC, etc.)");
@@ -30,8 +30,8 @@ PROpt::PROpt(int argc, char **argv) {
                        "central-lin (central FD on delta only, M frozen at base; Gauss-Newton, ~5-10x), "
                        "one-sided-lin (forward FD on delta only, M frozen at base; ~10-20x), "
                        "analytic (DEFAULT; exact closed-form gradient incl. the dM/dtheta term; no FD truncation, "
-                       "no extra spectrum fills; neyman (PROchi) binned strategies only — CNP, poisson and the "
-                       "event-by-event strategy fall back to central-lin, pearson to one-sided-full, with a warning). "
+                       "no extra spectrum fills; neyman and pearson binned strategies only — CNP, poisson and the "
+                       "event-by-event strategy fall back to central-lin (pearson event-by-event to one-sided-full), with a warning). "
                        "Applies to every fit (global, scan, FC).")
             ->default_str("");
 

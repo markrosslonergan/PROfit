@@ -233,20 +233,23 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         GradientMode mode = gradient_mode;
         // The analytic gradient requires (a) the binned factorised spectrum
         // (spec = systw .* H*probs) for FillSpectraGradient — the event-by-event
-        // fill mixes physics and systematics per event — and (b) a statistical
-        // covariance that does not move with the parameters, since the closed-form
-        // dM/dθ term below only differentiates the systematic part of M. Metrics
-        // whose statisticalVariances depend on the prediction (PROchi_pearson, PROCNP)
-        // would need an extra diag(dvar/dθ) term that is not wired up yet, so they
-        // fall back to the mode chosen by analyticFallbackMode() — Gauss-Newton
-        // central-lin by default (exact at the minimum); PROchi_pearson overrides to
-        // one-sided-full because its dM/dθ term is first-order and the lin mode stalls.
+        // fill mixes physics and systematics per event — and (b) a closed form for
+        // any statistical variance that moves with the parameters. A variance that is
+        // a per-bin function of the collapsed prediction (PROchi_pearson) supplies its
+        // slope dvar/dc and gets the extra diag(dvar/dθ) term below; one that does not
+        // (PROCNP: mu is the physics-only CV) falls back to the mode chosen by
+        // analyticFallbackMode() — Gauss-Newton central-lin by default (exact at the
+        // minimum); PROchi_pearson's EventByEvent fallback is one-sided-full because
+        // its dM/dθ term is first-order and the lin mode stalls.
+        Eigen::VectorXf dvar_dc; // empty unless the analytic path needs the stat-variance term
+        if (mode == GradientAnalytic && strat != EventByEvent && statisticalVariancesDependOnPrediction())
+            dvar_dc = statisticalVarianceSlope(collapsed_mc_spec);
         if (mode == GradientAnalytic &&
-            (strat == EventByEvent || statisticalVariancesDependOnPrediction())) {
+            (strat == EventByEvent || (statisticalVariancesDependOnPrediction() && dvar_dc.size() == 0))) {
             mode = analyticFallbackMode();
             static std::atomic<bool> warned_fallback{false};
             if(!warned_fallback.exchange(true))
-                log<LOG_WARNING>(L"%1% || Analytic gradient not available for this metric/strategy (EventByEvent, or prediction-dependent statistical variance); falling back to %2%.") % __func__ % gradientModeName(mode);
+                log<LOG_WARNING>(L"%1% || Analytic gradient not available for this metric/strategy (EventByEvent, or a prediction-dependent statistical variance without a closed-form slope); falling back to %2%.") % __func__ % gradientModeName(mode);
         }
         const bool analytic   = (mode == GradientAnalytic);
         const bool linearised = (mode == GradientCentralLin) || (mode == GradientOneSidedLin);
@@ -294,8 +297,8 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             //   δ(θ)  = c(idx) − d(idx)                                  (reduced residual)
             //   F     fractional systematic covariance (N × N, symmetric)
             //   M(θ)  = diag(var(idx)) + [Tᵀ diag(s) F diag(s) T](idx,idx) (stat + syst)
-            //         with var θ-independent (guaranteed by the dispatch gate above:
-            //         prediction-dependent variances fall back to FD).
+            //         with var θ-independent (neyman) or a per-bin function of the
+            //         collapsed prediction c (pearson; Step 3′ below).
             //   P(θ)  nuisance pull penalty
             //   χ²(θ) = δᵀ M⁻¹ δ + P
             //
@@ -345,6 +348,13 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             //   dχ²/dθ_j = 2 (TᵀG)(idx,j)·u − 2 G(:,j)·(w ∘ g) + dP/dθ_j,
             // i.e. grad = 2 (TᵀG)(idx,:)ᵀ u − 2 Gᵀ (w∘g) + [0; dP/dθ_nuis]. No finite
             // differences, no extra spectrum fills, no extra Cholesky factorisation.
+            //
+            // Step 3′ — prediction-dependent stat variance (pearson). If var_k = f(c_k)
+            // with c = Tᵀs the collapsed prediction (shape-rescaled in shape_only mode,
+            // where G is already the rescaled Jacobian; the stat term is never projected), then
+            //   uᵀ diag(dvar/dθ_j)(idx) u = Σ_k u_k² f′(c_k) (TᵀG)(idx_k, j),
+            // which folds into the residual term: 2u → r = 2u − u∘u∘f′(c)(idx).
+            // 1-bin check: d/dc (c−d)²/c = 2(c−d)/c − (c−d)²/c² = 2u − u².
             const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
             Eigen::VectorXf u_c = Eigen::VectorXf::Zero(T.cols());
             for(size_t k = 0; k < reduced_size; ++k)
@@ -383,8 +393,15 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
                 }
             }
             Eigen::MatrixXf TtG = T.transpose() * G; // collapsed-space Jacobian (ncollapsed × nparams)
-            Eigen::VectorXf grad_vec = 2.0f * (TtG(idx, Eigen::all).transpose() * Minv_delta_b)
-                                     - 2.0f * (G.transpose() * wg);
+            Eigen::VectorXf grad_vec;
+            if(dvar_dc.size() == 0) {
+                grad_vec = 2.0f * (TtG(idx, Eigen::all).transpose() * Minv_delta_b)
+                         - 2.0f * (G.transpose() * wg);
+            } else {
+                const Eigen::VectorXf r = 2.0f * Minv_delta_b
+                    - Minv_delta_b.cwiseProduct(Minv_delta_b).cwiseProduct(dvar_dc(idx));
+                grad_vec = TtG(idx, Eigen::all).transpose() * r - 2.0f * (G.transpose() * wg);
+            }
             if(shape_only) grad_vec += 2.0f * (TtG.transpose() * u_kappa);
             grad_vec.segment(model.nparams, nsyst) += pull_grad_nuis;
             grad_vec.head(model.nparams) += pull_grad_phys;

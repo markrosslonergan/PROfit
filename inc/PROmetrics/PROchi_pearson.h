@@ -28,6 +28,8 @@ namespace PROfit {
 
             bool statisticalVariancesDependOnPrediction() const override;
 
+            Eigen::VectorXf statisticalVarianceSlope(const Eigen::VectorXf &collapsed_prediction) const override;
+
             GradientMode analyticFallbackMode() const override;
 
         public:
