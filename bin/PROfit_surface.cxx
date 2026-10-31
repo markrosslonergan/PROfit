@@ -203,6 +203,7 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
                                                       + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
                                                   CollapseMatrix(config, shifted.Error())), dseed(myseed.global_rng));
             PROdata data(newSpec.Spec(), newSpec.Error());
+            data.physics_prior_centers = ToyPhysicsPriorCenters(metric.GetModel(), throwp.head(metric.GetModel().nparams), !options.statonly_brazil, PROseed::global_rng);
             // Same construction point as the data fit (carries --shapeonly).
             PROmetric *brazil_metric = MakeMetric(options.chi2, config, prop, &metric.GetSysts(), metric.GetModel(), data,
                                                   options.eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,

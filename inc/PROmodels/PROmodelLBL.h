@@ -12,6 +12,19 @@
 
 namespace PROfit {
 
+/// Which kinematic inputs an LBL model's config supplied (see PROLBL).
+enum class LBLInputMode { PairLE, EOnly, RatioLE };
+
+/**
+ * @brief Resolve the kinematic `<parameter>` layout shared by the LBL models (see PROLBL).
+ * @param config      Supplies m_model_parameter_map and the baseline= option.
+ * @param matter      Matter regime: a bare `L/E` is fatal (the MSW potential needs E).
+ * @param ivars       Out: PROpeller variable indices, ordered (L, E), (E) or (L/E).
+ * @param baseline_km Out: the fixed baseline [km] in EOnly mode (untouched otherwise).
+ * @return The input layout; throws std::runtime_error on an invalid combination.
+ */
+LBLInputMode resolve_lbl_inputs(const PROconfig &config, bool matter, std::vector<int> &ivars, double &baseline_km);
+
 /**
  * @brief Standard three-flavour long-baseline oscillation model, in matter or in vacuum.
  * @details Wraps the NuFastLBL library (Denton, arXiv:2405.02400) to compute the full 3x3
@@ -51,7 +64,7 @@ namespace PROfit {
 class PROLBL : public PROmodel {
 public:
     /// Which kinematic inputs the config supplied (see the class doc).
-    enum class InputMode { PairLE, EOnly, RatioLE };
+    using InputMode = LBLInputMode;
 
     // Legacy hardcoded values, kept as the attribute defaults.
     static constexpr double default_density = 3.0;            ///< g/cm^3 (legacy; DUNE uses 2.848).

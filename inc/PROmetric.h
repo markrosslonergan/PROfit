@@ -31,17 +31,18 @@ namespace PROfit {
     /**
      * @brief Degrees-of-freedom breakdown for a chi-squared minimum, from PROmetric::GetNdof().
      * @details ndf = bins entering the chi2 sum
-     *              - free physics parameters
+     *              - free physics parameters, less one per <model><prior> acting on them
      *              - free spline parameters with a uniform prior (no pull term)
      *              - one per channel block in shape-only mode (per-channel area normalisation).
      * Gaussian-prior splines (XML prior, XML correlations, PROjector external prior) net
-     * zero: the pull term is one pseudo-measurement that cancels the parameter. Covariance-mode
+     * zero, as does a physics parameter with a <model><prior>: the pull term is one
+     * pseudo-measurement that cancels the parameter. Covariance-mode
      * systematics are marginalised inside M and count zero. A parameter is "fixed" when
      * PROmetric::is_fixed says so OR its bounds have zero width (--fix, --syst-only, scan pins).
      */
     struct PROndof {
         long n_bins = 0;              ///< Bins entering the chi2 sum (active AND positive statistical variance).
-        long n_free_physics = 0;      ///< Physics parameters not pinned.
+        long n_free_physics = 0;      ///< Physics parameters not pinned, less one per physics prior acting on them.
         long n_free_uniform = 0;      ///< Uniform-prior splines not pinned (no pull => genuine free parameter).
         long n_shape_constraints = 0; ///< Shape-only: one per channel block with contributing bins.
         /** @brief The degrees of freedom. May be <= 0 for pathological setups; callers should guard. */
@@ -205,6 +206,33 @@ namespace PROfit {
                 return centered.dot(prior_covariance_inv * centered);
             }
             /**
+             * @brief Gaussian penalty of the <model> physics priors at physics vector @p phys:
+             * sum_k ((q_k - c_k) / sigma_k)^2, q_k the constrained quantity
+             * (PROmodel::physics_prior_quantity) and c_k this metric's centre (the XML one, or
+             * the dataset's re-observed PROdata::physics_prior_centers). Every metric adds it
+             * next to Pull(); 0 without priors.
+             */
+            float PhysicsPull(const Eigen::VectorXf &phys) const {
+                float total = 0.0f;
+                for(const auto &p : physics_priors) {
+                    const float r = (model.physics_prior_quantity(p, phys) - p.center) / p.sigma;
+                    total += r * r;
+                }
+                return total;
+            }
+            /** @brief d PhysicsPull / d phys, size model.nparams (zero without priors). */
+            Eigen::VectorXf PhysicsPullGradient(const Eigen::VectorXf &phys) const {
+                Eigen::VectorXf g = Eigen::VectorXf::Zero(phys.size());
+                for(const auto &p : physics_priors) {
+                    Eigen::VectorXf dq = Eigen::VectorXf::Zero(phys.size());
+                    const float q = model.physics_prior_quantity(p, phys, &dq);
+                    g += (2.0f * (q - p.center) / (p.sigma * p.sigma)) * dq;
+                }
+                return g;
+            }
+            /** @brief The physics priors as this metric applies them (centres included). */
+            const std::vector<PROmodel::PhysicsPrior> &GetPhysicsPriors() const { return physics_priors; }
+            /**
              * @brief Print a human-readable summary of the metric evaluation at @p param.
              * @param param  Parameter vector to evaluate at.
              */
@@ -290,6 +318,10 @@ namespace PROfit {
                 };
                 for(size_t i = 0; i < nphys; ++i)
                     if(!fixed(i)) ++out.n_free_physics;
+                // Each physics prior acting on a free parameter is one pseudo-measurement.
+                for(const auto &p : physics_priors)
+                    for(const auto &[i, c] : p.terms)
+                        if(!fixed(i)) { --out.n_free_physics; break; }
                 for(size_t i = nphys; i < ntot; ++i) {
                     const size_t s = i - nphys;
                     const bool uniform = s < syst->spline_prior_types.size()
@@ -325,7 +357,7 @@ namespace PROfit {
                   prior_covariance(other.prior_covariance),
                   prior_covariance_inv(other.prior_covariance_inv), fs_cache(other.fs_cache),
                   call_count(other.call_count.load()), gradient_mode(other.gradient_mode),
-                  active_bins(other.active_bins) {}
+                  active_bins(other.active_bins), physics_priors(other.physics_priors) {}
             PROmetric& operator=(const PROmetric&) { return *this; }
 
 
@@ -469,8 +501,16 @@ namespace PROfit {
                   shape_only(shape_only_in), physics_param_fixed(fixed_physics), fixed_index(-999),
                   fixed_val(0.0f),
                   last_param(Eigen::VectorXf::Zero(modelin.nparams + systin->GetNSplines())),
-                  last_value(0.0f), correlated_systematics(false) {
+                  last_value(0.0f), correlated_systematics(false), physics_priors(modelin.physics_priors) {
                 snapshotActiveBins(config);
+                if(!datain.physics_prior_centers.empty()) {
+                    if(datain.physics_prior_centers.size() != physics_priors.size()) {
+                        log<LOG_ERROR>(L"%1% || The dataset carries %2% physics-prior centres but the model has %3% physics priors.")
+                            % __func__ % datain.physics_prior_centers.size() % physics_priors.size();
+                        throw std::runtime_error("PROdata::physics_prior_centers does not match the model's physics priors");
+                    }
+                    for(size_t k = 0; k < physics_priors.size(); ++k) physics_priors[k].center = datain.physics_prior_centers[k];
+                }
             }
 
             std::string model_tag; ///< String tag identifying the physics model in use.
@@ -504,6 +544,10 @@ namespace PROfit {
              *  lb/ub/is_fixed are deliberately NOT copied, so a copy-constructed metric
              *  still needs setBounds(); prefer Clone(). */
             std::vector<char> active_bins;
+
+            /** @brief The model's physics priors with this dataset's centres; like active_bins it
+             *  is fixed at construction, so Clone() (same data) and the copy constructor keep it. */
+            std::vector<PROmodel::PhysicsPrior> physics_priors;
 
             /** @brief Fill active_bins from the config's mask for its primary fitting variable.
              *  Call from every concrete metric constructor. */

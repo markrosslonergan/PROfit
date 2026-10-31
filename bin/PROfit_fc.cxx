@@ -175,6 +175,13 @@ static FCMeta makeFCMeta(const PROconfig &config, const PROmodel &model, const E
     m.strs.push_back({"preset", options.fit_preset.back()});
     m.strs.push_back({"grad_mode", PROmetric::gradientModeName(scanFitConfig.gradient_mode)});
     m.strs.push_back({"version", PROJECT_VERSION_STR});
+    // Physics priors shape every toy (re-observed centres) and the data statistic.
+    for(const auto &p : model.physics_priors) {
+        const std::string &n = p.name;
+        m.nums.push_back({"prior_center_" + n, p.center});
+        m.nums.push_back({"prior_sigma_" + n, p.sigma});
+        m.nums.push_back({"prior_abs_" + n, (float)p.abs});
+    }
     return m;
 }
 
@@ -227,7 +234,7 @@ static bool checkFCMeta(const std::string &filename, const FCMeta &now) {
 
     // Run settings (seed, threads, preset...) may differ between the throwing run and the reuse.
     auto checked_num = [](const std::string &k) {
-        for(const char *pre: {"test_", "fixed_", "profiled_", "truth_"})
+        for(const char *pre: {"test_", "fixed_", "profiled_", "truth_", "prior_"})
             if(k.rfind(pre, 0) == 0) return true;
         return k == "shape_only";
     };

@@ -472,13 +472,13 @@ tmpl_xml local_tmpl_nontmpl.xml  nueapp   '<parameter name="L/E" variable_index=
 
 # global_chi2 <test name>: the INFO-level best-fit chi2 from the test's file log.
 global_chi2() { sed -n 's/.*Global Best Fit chi^2: *\([-+0-9.eE]*\).*/\1/p' "logs/$1.full.log" | tail -n 1; }
-tmpl_equal() {  # <check name> <test A> <test B>
+chi2_equal() {  # <check name> <test A> <test B> <what is compared>
     local a b; a=$(global_chi2 "$2"); b=$(global_chi2 "$3")
     if [ -n "$a" ] && [ -n "$b" ] && awk -v a="$a" -v b="$b" 'BEGIN { d=a-b; if (d<0) d=-d; m=(a<0?-a:a); exit !(d <= 1e-5*(m>1?m:1)) }'; then
-        note "PASS  $1  (shared vs separate, all pinned, chi2: $a vs $b)"
+        note "PASS  $1  ($4, all pinned, chi2: $a vs $b)"
         PASS=$((PASS+1))
     else
-        note "FAIL  $1  (shared vs separate pinned chi2 differ: '$a' vs '$b')"
+        note "FAIL  $1  ($4 pinned chi2 differ: '$a' vs '$b')"
         FAIL=$((FAIL+1))
     fi
 }
@@ -496,8 +496,8 @@ run_test t33btmplshared02 -l logs/t33btmplshared02.full.log -w 3 --use-fake-data
     -i mu 0.05 --inject-cv mu 0.02 global
 run_test t33dtmplshared08 -l logs/t33dtmplshared08.full.log -w 3 --use-fake-data --fix mu "${SPLINES[@]}" "${SPLINE_CV[@]}" \
     -i mu 0.05 --inject-cv mu 0.8 global
-tmpl_equal t33etmplequal02 t33atmplsep02 t33btmplshared02
-tmpl_equal t33ftmplequal08 t33ctmplsep08 t33dtmplshared08
+chi2_equal t33etmplequal02 t33atmplsep02 t33btmplshared02 "shared vs separate"
+chi2_equal t33ftmplequal08 t33ctmplsep08 t33dtmplshared08 "shared vs separate"
 run_test t33gtmplrecover  --use-fake-data -i mu 0.05 global
 mu_fit=$(sed -n 's/^mu : *//p' "${TAG}_t33gtmplrecover_global_fit.txt" 2>/dev/null)
 if [ -n "$mu_fit" ] && awk -v m="$mu_fit" 'BEGIN { d=m-0.05; if (d<0) d=-d; exit !(d < 1e-3) }'; then
@@ -577,6 +577,128 @@ run_test_tag t57p3afcpbank   t57p3afcp --use-fake-data "${AFC3P[@]}" --mode init
 run_test_tag t57p3afcpasimov t57p3afcp --use-fake-data "${AFC3P[@]}" --mode asimov
 run_test_tag t57p3afcpbrazil t57p3afcp --use-fake-data "${AFC3P[@]}" --mode brazil --n-brazil-throws 2
 expect_fail_tag t58p3afcpfp t57p3afcp --use-fake-data -i dmsq 1 sinsq2thmue 0.01 "${AFC3P[@]}" --mode asimov
+COMMON=("${SAVED_COMMON[@]}")
+
+
+# --- 14. LBL 3+1 vacuum model --------------------------------------------------
+# LBL_3+1-vacuum_angles with the fake sample routed through its active-flavour
+# columns (fullosc -> Pmue 4, numu signal -> Pmumu 5, nue intrinsic -> Pee 1).
+# model_rule is hashed, so this config has its own process step; the E-only and
+# 3nu variants change only the (unhashed) model block and reuse it. At the
+# sample's L/E < 2.5 km/GeV the 3nu block is flat, and theta_34 and the sterile
+# phases need NC events or a long baseline, so the L/E tests pin them.
+# Binaries predating LBL_3+1-vacuum_angles fail t70-t74 by design.
+sed 's|<model tag="nueapp">|<model tag="LBL_3+1-vacuum_angles">|' local_test.xml | awk '
+  /associated_subchannel/ { r = /_nue_fullosc"/ ? 4 : /_numu_signal"/ ? 5 : /_nue_intrinsic"/ ? 1 : -1 }
+  /model_rule/ && r >= 0 { sub(/"[0-9]+"/, "\"" r "\"") } { print }' > local_lbl3p1.xml
+lbl_eonly_xml() {  # <out.xml> <model attributes>: E-only at a fixed 1300 km
+    sed -e "s|<model tag=\"LBL_3+1-vacuum_angles\">|<model $2>|" \
+        -e 's|<parameter name="L/E" variable_index="1"/>|<parameter name="E" variable_index="2"/>|' local_lbl3p1.xml > "$1"
+}
+lbl_eonly_xml local_lbl3p1_eonly.xml  'tag="LBL_3+1-vacuum_angles" baseline="1300"'
+lbl_eonly_xml local_lbl3p1_eonly0.xml 'tag="LBL_3+1-vacuum_angles" baseline="1300" bin_average="0"'
+lbl_eonly_xml local_lbl3nu_eonly.xml  'tag="LBL_3nu-vacuum_angles" baseline="1300"'
+NU3=(dmsq_21 dmsq_31 sinsqt12 sinsqt13 sinsqt23 delta_CP)
+FLAT=(sinsqt34 delta_14 delta_24)
+COMMON=(-x local_lbl3p1.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t70l3p1process process
+# Asimov at a sterile point. dmsq_41 is physics parameter 0, so the harmonic
+# seed scan runs over it and lifts the fit out of the wrong Delta m^2 basin.
+run_test t71al3p1asimov --fix "${NU3[@]}" "${FLAT[@]}" -i dmsq_41 2 sinsqt14 0.03 sinsqt24 0.05 global
+fit_val() { sed -n "s/^$2 : *//p" "${TAG}l3p1_$1_global_fit.txt" 2>/dev/null; }
+dm_fit=$(fit_val t71al3p1asimov dmsq_41); s24_fit=$(fit_val t71al3p1asimov sinsqt24)
+if [ -n "$dm_fit" ] && [ -n "$s24_fit" ] && awk -v d="$dm_fit" -v s="$s24_fit" \
+        'BEGIN { a=d-0.30103; b=s+1.30103; exit !(a*a < 1e-4 && b*b < 4e-4) }'; then
+    note "PASS  t71bl3p1recover  (log10 dmsq_41 $dm_fit, log10 sinsqt24 $s24_fit; injected 0.301, -1.301)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t71bl3p1recover  (sterile point not recovered: log10 dmsq_41 '$dm_fit', log10 sinsqt24 '$s24_fit')"
+    FAIL=$((FAIL+1))
+fi
+run_test t72al3p1grad -l logs/t72al3p1grad.full.log -w 3 --use-fake-data --fix "${NU3[@]}" "${FLAT[@]}" \
+    scale-test --tests gradcheck -N 200
+grad_rel=$(sed -n 's/.*\[GRADCHECK\] mode=analytic .*mean_rel=\([-+0-9.eE]*\).*/\1/p' logs/t72al3p1grad.full.log | tail -n 1)
+if [ -n "$grad_rel" ] && awk -v r="$grad_rel" 'BEGIN { exit !(r < 0.2) }'; then
+    note "PASS  t72bl3p1gradrel  (analytic vs central-full mean_rel $grad_rel)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t72bl3p1gradrel  (analytic vs central-full mean_rel '$grad_rel', want < 0.2)"
+    FAIL=$((FAIL+1))
+fi
+# E-only at 1300 km with truth-bin averaging: the sterile block and the
+# atmospheric parameters float.
+COMMON=(-x local_lbl3p1_eonly.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t73l3p1eonly --use-fake-data --fix dmsq_21 sinsqt12 "${FLAT[@]}" global
+# Every parameter pinned: at zero sterile mixing (default 1e-8) and midpoint
+# sampling the 3+1 model is the 3nu vacuum model, here with large 3nu
+# oscillations (pinned NO point vs IO data at 1300 km).
+PIN=(--use-fake-data "${SPLINE_CV[@]}"
+     --inject-cv dmsq_21 7.5e-5 dmsq_31 2.5e-3 sinsqt12 0.3 sinsqt13 0.022 sinsqt23 0.55 delta_CP 1.2
+     -i dmsq_21 7.4e-5 dmsq_31 -2.45e-3 sinsqt12 0.31 sinsqt13 0.022 sinsqt23 0.45 delta_CP -1.6)
+COMMON=(-x local_lbl3nu_eonly.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t74al3nupin -l logs/t74al3nupin.full.log -w 3 "${PIN[@]}" --fix "${NU3[@]}" "${SPLINES[@]}" global
+COMMON=(-x local_lbl3p1_eonly0.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t74bl3p1pin -l logs/t74bl3p1pin.full.log -w 3 "${PIN[@]}" \
+    --fix "${NU3[@]}" dmsq_41 sinsqt14 sinsqt24 "${FLAT[@]}" "${SPLINES[@]}" global
+chi2_equal t74cl3p1equal t74al3nupin t74bl3p1pin "3nu vacuum vs 3+1 at zero sterile mixing"
+COMMON=("${SAVED_COMMON[@]}")
+
+
+# --- 15. Physics priors, carried-only variables --------------------------------
+# <model><prior>: a Gaussian on a physics parameter's physical value (|value|
+# with abs="true"). The <model> block is not hashed, so the variants reuse the
+# t70 (LBL) and t00 (SBL) caches. With the data equal to the pinned prediction
+# the chi2 is the prior term alone: |-2.4e-3| vs 2.5e-3 +- 5e-4 is 0.04 with
+# abs, 96.04 signed; the LBL derived quantity dmsq_32 = dmsq_31 - dmsq_21 gives
+# |-2.474e-3| -> 0.002704; 10^log10(2) vs 1 +- 0.2 on SBL dmsq is 25.
+prior_xml() {  # <in.xml> <out.xml> <model open tag> <prior element>
+    sed "s|$3|&\n    $4|" "$1" > "$2"
+}
+LBLOPEN='<model tag="LBL_3nu-vacuum_angles" baseline="1300">'
+prior_xml local_lbl3nu_eonly.xml local_prior_abs.xml    "$LBLOPEN" '<prior name="dmsq_31" center="0.0025" sigma="0.0005" abs="true"/>'
+prior_xml local_lbl3nu_eonly.xml local_prior_signed.xml "$LBLOPEN" '<prior name="dmsq_31" center="0.0025" sigma="0.0005"/>'
+prior_xml local_lbl3nu_eonly.xml local_prior_d32.xml    "$LBLOPEN" '<prior name="dmsq_32" center="0.0025" sigma="0.0005" abs="true"/>'
+prior_xml local_lbl3nu_eonly.xml local_prior_badname.xml "$LBLOPEN" '<prior name="dmsq_41" center="1" sigma="1"/>'
+prior_xml local_test.xml local_prior_log.xml '<model tag="nueapp">' '<prior name="dmsq" center="1.0" sigma="0.2"/>'
+prior_chi2() {  # <check> <test> <expected chi2>
+    local c; c=$(global_chi2 "$2")
+    if [ -n "$c" ] && awk -v c="$c" -v e="$3" 'BEGIN { d=c-e; if (d<0) d=-d; exit !(d <= 1e-5 + 1e-4*e) }'; then
+        note "PASS  $1  (pinned chi2 = prior term: $c, expected $3)"
+        PASS=$((PASS+1))
+    else
+        note "FAIL  $1  (pinned chi2 '$c', expected the prior term $3)"
+        FAIL=$((FAIL+1))
+    fi
+}
+IO3=(dmsq_21 7.4e-5 dmsq_31 -2.4e-3 sinsqt12 0.31 sinsqt13 0.022 sinsqt23 0.45 delta_CP -1.6)
+PINP=(--use-fake-data -i "${IO3[@]}" --inject-cv "${IO3[@]}" --fix "${NU3[@]}" "${SPLINES[@]}")
+COMMON=(-x local_prior_abs.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t75apriorabs -l logs/t75apriorabs.full.log -w 3 "${PINP[@]}" global
+prior_chi2 t75bpriorabschi2 t75apriorabs 0.04
+COMMON=(-x local_prior_signed.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t75cpriorsigned -l logs/t75cpriorsigned.full.log -w 3 "${PINP[@]}" global
+prior_chi2 t75dpriorsignedchi2 t75cpriorsigned 96.04
+COMMON=(-x local_prior_d32.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+run_test t75gpriord32 -l logs/t75gpriord32.full.log -w 3 "${PINP[@]}" global
+prior_chi2 t75hpriord32chi2 t75gpriord32 0.002704
+COMMON=(-x local_prior_log.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
+run_test t75epriorlog -l logs/t75epriorlog.full.log -w 3 --use-fake-data -i dmsq 2 sinsq2thme 0.01 \
+    --inject-cv dmsq 2 sinsq2thme 0.01 --fix dmsq sinsq2thme "${SPLINES[@]}" global
+prior_chi2 t75fpriorlogchi2 t75epriorlog 25
+# FC toys re-observe the prior about their truth; fc_meta records it, so --reuse
+# without the prior is refused. A prior on a non-parameter is refused.
+COMMON=(-x local_prior_abs.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+FCP=(--use-fake-data -i "${IO3[@]}" --fix dmsq_21 sinsqt12 sinsqt13 sinsqt23 delta_CP)
+run_test t76apriorfc "${FCP[@]}" fc -u 2
+COMMON=(-x local_lbl3nu_eonly.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail_tag t76bpriorreuse t76apriorfc "${FCP[@]}" fc --reuse
+COMMON=(-x local_prior_badname.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail t76cpriorbadname --use-fake-data global
+# plot="false" variables are carried along only: process stores no pre-binned
+# matrices with them, so plotting the L/E variable on the t00 cache is refused.
+sed 's| plot="false"||' local_test.xml > local_plot_le.xml
+COMMON=(-x local_plot_le.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
+expect_fail t77plotcarried --use-fake-data global
 COMMON=("${SAVED_COMMON[@]}")
 
 note "----------------------------------------------------------------------"

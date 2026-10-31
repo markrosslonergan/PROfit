@@ -298,10 +298,18 @@ namespace {
         // Linearised posterior precision. Physics and uniform-prior splines have flat priors on
         // their box; they enter with the box's own variance W^2/12, so a direction the data
         // barely resolves cannot absorb the rest (exactly flat it would, at any tiny slope).
+        // A <model><prior> adds its Gauss-Newton curvature g g^T / sigma^2 (g = dq/dphys).
         Eigen::MatrixXd H = J.transpose() * cinv.asDiagonal() * J;
         for(Eigen::Index a = 0; a < nf; ++a) {
             const double W = ub(free_phys[a]) - lb(free_phys[a]);
             H(a, a) += 12.0 / (W * W);
+        }
+        for(const auto &p : metric.GetPhysicsPriors()) {
+            Eigen::VectorXf dq = Eigen::VectorXf::Zero((Eigen::Index)nphys);
+            model.physics_prior_quantity(p, best_fit.head((Eigen::Index)nphys), &dq);
+            for(Eigen::Index a = 0; a < nf; ++a)
+                for(Eigen::Index b = 0; b < nf; ++b)
+                    H(a, b) += (double)dq((Eigen::Index)free_phys[a]) * dq((Eigen::Index)free_phys[b]) / ((double)p.sigma * p.sigma);
         }
         const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
         for(Eigen::Index a = 0; a < ns; ++a) {

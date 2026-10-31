@@ -222,6 +222,7 @@ namespace PROfit {
                 PROdata masked(mask.cwiseProduct(variable_data[io].Spec()),
                                mask.cwiseProduct(variable_data[io].Error()));
                 masked.hash = variable_data[io].hash;
+                masked.physics_prior_centers = variable_data[io].physics_prior_centers;
                 variable_data[io] = std::move(masked);
             }
             data = variable_data[config.i_prime];

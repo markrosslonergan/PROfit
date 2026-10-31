@@ -10,7 +10,11 @@
 #include "PROmodels/PROmodel3p1decayvis.h"
 #include "PROmodels/PROmodel3p2.h"
 #include "PROmodels/PROmodelLBL.h"
+#include "PROmodels/PROmodelLBL3p1.h"
 #include "PROmodels/PROmodelSine.h"
+
+#include <algorithm>
+#include <atomic>
 
 namespace PROfit {
 
@@ -28,22 +32,26 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
     // Decay models compute counts directly in get_counts and leave model_functions empty;
     // for those, the number of components comes from prob_types instead.
     size_t J    = model_functions.empty() ? prob_types.size() : model_functions.size();
-    H_combined.resize(nvar);
+    H_combined.assign(nvar, Eigen::MatrixXf());
 
     // This pre-bins the WHOLE MC event store into the dense binned-eval
     // response matrices for every variable, and is the silent chunk of model
     // construction — announce the size up front so a long stall here is
     // labeled (it scales with subchannel count via the uncollapsed reco bins).
     {
-        size_t total_floats = 0;
-        for(size_t v = 0; v < nvar; ++v)
+        size_t total_floats = 0, nbinned = 0;
+        for(size_t v = 0; v < nvar; ++v) {
+            if(!prop.IsBinnedVariable(v)) continue;
             total_floats += prop.variable_mc_stat_err[v].size() * (size_t)n_phys_bins * J;
-        log<LOG_INFO>(L"%1% || Pre-binning %2% MC events into response matrices: %3% variables x %4% components x %5% physics-grid bins (~%6% MB). This runs once per model construction.")
-            % __func__ % prop.NEvent() % nvar % J % n_phys_bins
+            ++nbinned;
+        }
+        log<LOG_INFO>(L"%1% || Pre-binning %2% MC events into response matrices: %3% of %4% variables x %5% components x %6% physics-grid bins (~%7% MB). This runs once per model construction.")
+            % __func__ % prop.NEvent() % nbinned % nvar % J % n_phys_bins
             % (total_floats * sizeof(float) / (1024.0 * 1024.0));
     }
 
     for(size_t v = 0; v < nvar; ++v) {
+        if(!prop.IsBinnedVariable(v)) continue;
         size_t n_reco_v = prop.variable_mc_stat_err[v].size();
         // Fill events directly into component m's column block
         // [m*n_phys_bins, (m+1)*n_phys_bins) of H_combined[v] — no per-component
@@ -133,6 +141,32 @@ std::vector<Eigen::MatrixXf> PROmodel::get_probs_grad(const Eigen::VectorXf &phy
     return grads;
 }
 
+float PROmodel::physics_prior_quantity(const PhysicsPrior &p, const Eigen::VectorXf &phys, Eigen::VectorXf *dqdx) const {
+    float q = 0.0f;
+    for(const auto &[i, c] : p.terms) {
+        const float x = phys((Eigen::Index)i);
+        q += c * (is_log10[i] ? std::pow(10.0f, x) : x);
+    }
+    const float sign = !p.abs ? 1.0f : (q > 0 ? 1.0f : (q < 0 ? -1.0f : 0.0f));
+    if(dqdx)
+        for(const auto &[i, c] : p.terms) {
+            const float x = phys((Eigen::Index)i);
+            (*dqdx)((Eigen::Index)i) += sign * c * (is_log10[i] ? (float)M_LN10 * std::pow(10.0f, x) : 1.0f);
+        }
+    return p.abs ? std::fabs(q) : q;
+}
+
+std::vector<float> ToyPhysicsPriorCenters(const PROmodel &model, const Eigen::VectorXf &truth_phys,
+                                          bool fluctuate, std::mt19937 &rng) {
+    std::vector<float> centers;
+    centers.reserve(model.physics_priors.size());
+    for(const auto &p : model.physics_priors) {
+        const float q = model.physics_prior_quantity(p, truth_phys);
+        centers.push_back(fluctuate ? std::normal_distribution<float>(q, p.sigma)(rng) : q);
+    }
+    return centers;
+}
+
 void PROmodel::build_param_index() {
     param_name_to_index.clear();
     for(size_t i = 0; i < param_names.size(); ++i){
@@ -178,6 +212,35 @@ static std::string canonicalize_model_tag(const std::string &name) {
     return it->second;
 }
 
+static std::unique_ptr<PROmodel> construct_model(const std::string &name, const PROconfig &config, const PROpeller &prop) {
+    if(name == "null") {
+        return std::unique_ptr<PROmodel>(new NullModel(prop));
+    } else if(name == "numudisTEST") {
+        return std::unique_ptr<PROmodel>(new PROnumudisTEST(prop,config.m_model_parameter_map));
+    } else if(name == "SBL_3+1+decay_invis") {
+        return std::unique_ptr<PROmodel>(new PRO3p1_decay_invis(prop,config.m_model_parameter_map));
+    } else if(name == "SBL_3+1+decay_vis1") {
+        return std::unique_ptr<PROmodel>(new PRO3p1_decay_vis_model1(prop,config.m_model_parameter_map));
+    } else if(name == "SBL_3+1+decay_vis2") {
+        return std::unique_ptr<PROmodel>(new PRO3p1_decay_vis_model2(prop,config.m_model_parameter_map));
+    } else if(name == "SBL_3+2_Usq") {
+        return std::unique_ptr<PROmodel>(new PRO3p2(prop, config.m_model_parameter_map));
+    } else if(name == "LBL_3nu-matter_angles" || name == "LBL_3nu-vacuum_angles") {
+        return std::unique_ptr<PROmodel>(new PROLBL(config, prop, name == "LBL_3nu-matter_angles"));
+    } else if(name == "LBL_3+1-vacuum_angles") {
+        return std::unique_ptr<PROmodel>(new PROLBL3p1(config, prop));
+    } else if(name == "template") {
+        return std::unique_ptr<PROmodel>(new PROtemplate(config, prop));
+    }
+    // Sine-kernel family (SBL_2flav_*, SBL_3+1_* and their _NC variants):
+    // recipe-driven, all evaluated by PROsineModel. See PROmodelSine.h.
+    if(const SineModelRecipe *recipe = find_sine_recipe(name)) {
+        return std::unique_ptr<PROmodel>(new PROsineModel(prop, config.m_model_parameter_map, *recipe));
+    }
+    log<LOG_ERROR>(L"%1% || Unrecognized model name %2%. Valid tags (regime_model_parameterization(_NC); legacy pre-v3.1 names are auto-mapped): null, template, SBL_2flav_(numudis,nueapp,nuedis), SBL_2flav_(numudis,nudis)_NC, SBL_3+1_(Usq,angles,sinsq2thee,sinsq2thmumu,sinsq2thmue) and their _NC versions, SBL_3+1+decay_(invis,vis1,vis2), SBL_3+2_Usq, LBL_3nu-matter_angles, LBL_3nu-vacuum_angles, LBL_3+1-vacuum_angles. Terminating.") % __func__ % name.c_str();
+    exit(EXIT_FAILURE);
+}
+
 std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const PROpeller &prop) {
     std::string name = canonicalize_model_tag(config.m_model_tag);
 
@@ -198,30 +261,43 @@ std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const P
         }
     }
 
-    if(name == "null") {
-        return std::unique_ptr<PROmodel>(new NullModel(prop));
-    } else if(name == "numudisTEST") {
-        return std::unique_ptr<PROmodel>(new PROnumudisTEST(prop,config.m_model_parameter_map));
-    } else if(name == "SBL_3+1+decay_invis") {
-        return std::unique_ptr<PROmodel>(new PRO3p1_decay_invis(prop,config.m_model_parameter_map));
-    } else if(name == "SBL_3+1+decay_vis1") {
-        return std::unique_ptr<PROmodel>(new PRO3p1_decay_vis_model1(prop,config.m_model_parameter_map));
-    } else if(name == "SBL_3+1+decay_vis2") {
-        return std::unique_ptr<PROmodel>(new PRO3p1_decay_vis_model2(prop,config.m_model_parameter_map));
-    } else if(name == "SBL_3+2_Usq") {
-        return std::unique_ptr<PROmodel>(new PRO3p2(prop, config.m_model_parameter_map));
-    } else if(name == "LBL_3nu-matter_angles" || name == "LBL_3nu-vacuum_angles") {
-        return std::unique_ptr<PROmodel>(new PROLBL(config, prop, name == "LBL_3nu-matter_angles"));
-    } else if(name == "template") {
-        return std::unique_ptr<PROmodel>(new PROtemplate(config, prop));
+    std::unique_ptr<PROmodel> model = construct_model(name, config, prop);
+
+    for(const PhysicsPriorSpec &spec : config.m_model_physics_priors) {
+        PROmodel::PhysicsPrior p;
+        p.name = spec.name;
+        auto it = std::find(model->param_names.begin(), model->param_names.end(), spec.name);
+        if(it != model->param_names.end()) {
+            p.terms = {{(size_t)std::distance(model->param_names.begin(), it), 1.0f}};
+        } else if(model->derived_quantities.count(spec.name)) {
+            p.terms = model->derived_quantities.at(spec.name);
+        } else {
+            std::vector<std::string> derived;
+            for(const auto &[dn, terms] : model->derived_quantities) derived.push_back(dn);
+            log<LOG_ERROR>(L"%1% || <model><prior name=\"%2%\"> is neither a physics parameter %3% nor a derived quantity %4% of model '%5%'. Terminating.")
+                % __func__ % spec.name.c_str() % model->param_names % derived % name.c_str();
+            exit(EXIT_FAILURE);
+        }
+        p.center = (float)spec.center;
+        p.sigma  = (float)spec.sigma;
+        p.abs    = spec.abs;
+        model->physics_priors.push_back(p);
     }
-    // Sine-kernel family (SBL_2flav_*, SBL_3+1_* and their _NC variants):
-    // recipe-driven, all evaluated by PROsineModel. See PROmodelSine.h.
-    if(const SineModelRecipe *recipe = find_sine_recipe(name)) {
-        return std::unique_ptr<PROmodel>(new PROsineModel(prop, config.m_model_parameter_map, *recipe));
+    // One-time: FC/AFC build a fresh model per worker.
+    static std::atomic<bool> logged_priors{false};
+    if(!model->physics_priors.empty() && !logged_priors.exchange(true)) {
+        for(const auto &p : model->physics_priors) {
+            std::string q;
+            for(const auto &[i, c] : p.terms) {
+                const std::string v = model->is_log10[i] ? "10^" + model->param_names[i] : model->param_names[i];
+                q += (q.empty() ? (c < 0 ? "-" : "") : (c < 0 ? " - " : " + ")) + (std::fabs(c) == 1.0f ? v : std::to_string(std::fabs(c)) + "*" + v);
+            }
+            log<LOG_INFO>(L"%1% || Physics prior on %2%: ((%3%%4%%5% - %6%) / %7%)^2, in physical units.")
+                % __func__ % p.name.c_str() % (p.abs ? "|" : "") % q.c_str() % (p.abs ? "|" : "") % p.center % p.sigma;
+        }
     }
-    log<LOG_ERROR>(L"%1% || Unrecognized model name %2%. Valid tags (regime_model_parameterization(_NC); legacy pre-v3.1 names are auto-mapped): null, template, SBL_2flav_(numudis,nueapp,nuedis), SBL_2flav_(numudis,nudis)_NC, SBL_3+1_(Usq,angles,sinsq2thee,sinsq2thmumu,sinsq2thmue) and their _NC versions, SBL_3+1+decay_(invis,vis1,vis2), SBL_3+2_Usq, LBL_3nu-matter_angles, LBL_3nu-vacuum_angles. Terminating.") % __func__ % name.c_str();
-    exit(EXIT_FAILURE);
+    return model;
 }
+
 
 }

@@ -121,7 +121,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime)
         : result.Spec());
     float poisson = BakerCousinsChi2(vmc, vdata, &active_bins);
-    float pull = Pull(subvector2);
+    float pull = Pull(subvector2) + PhysicsPull(subvector1);
     float value = poisson + pull;
 
     if(rungradient){
@@ -160,6 +160,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         // vdata and vmc were already computed for the base value.
         Eigen::VectorXf w_base;     // 2 (1 - n/s) at base, used by linearised
         Eigen::VectorXf pull_grad_nuis;
+        Eigen::VectorXf pull_grad_phys;
         Eigen::VectorXf vmc_base = vmc;  // base collapsed MC (preserve before perturbed FillSpectra calls)
         Eigen::VectorXf vdata_base = vdata;
         if (linearised) {
@@ -172,6 +173,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
                 const float s = vmc_base(b);
                 w_base(b) = (s > 0.0f) ? 2.0f * (1.0f - vdata_base(b) / s) : 0.0f;
             }
+            pull_grad_phys = PhysicsPullGradient(subvector1);
             Eigen::VectorXf centered = subvector2 - syst->spline_centers;
             // Match Pull(): uniform-prior splines contribute NO pull — mask them
             // here too, or the gradient carries a phantom Gaussian pull the value
@@ -216,7 +218,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
                 : rl.Spec());
             float pois = BakerCousinsChi2(vmc_l, vdata, &active_bins);
             Eigen::VectorXf nuis = param_at.segment(nparams - nsyst, nsyst);
-            chi2_out = pois + Pull(nuis);
+            chi2_out = pois + Pull(nuis) + PhysicsPull(phys);
             return true;
         };
 
@@ -277,6 +279,8 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
                 float grad_i = w_base.dot(ds_dtheta);
                 if (i >= (size_t)(nparams - nsyst)) {
                     grad_i += pull_grad_nuis(i - (nparams - nsyst));
+                } else {
+                    grad_i += pull_grad_phys(i);
                 }
                 gradient(i) = grad_i;
             } else {

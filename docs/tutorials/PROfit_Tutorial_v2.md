@@ -242,6 +242,17 @@ energy here); the rest are extra binnings that PROfit tracks and plots for you
 true-L/E binning that only exists for the oscillation model). Subchannel
 `plotname` and `color` control the stacked histograms in `plot`.
 
+A `plot="false"` variable that is neither the fitting variable nor any
+systematic's `binning=` is **carried along only**: PROfit keeps each event's
+value and bin index (all an oscillation model needs from it) but builds no
+binned spectra in it. `process` stores no pre-binned migration matrices with
+it, and models build no response matrix for it. For a fine kinematic binning
+these dominate both `_prop.bin` and memory: an 8209-bin true L/E with six
+oscillation components costs ~1.6 GB per model, and `fc -n 8` builds one model
+per thread. Flipping such a variable to `plot="true"` later needs a fresh
+`process` (PROfit refuses an older cache that lacks its matrices; plot flags
+are not part of the cache hash).
+
 To fit a different variable, put `fit="true"` on its `<bins>` entry:
 
 ```xml
@@ -2490,6 +2501,97 @@ Notes:
   `_mesh/_bank/_brazil.bin` or PROjector constraint made with the old values
   (the same artifact class as gotcha 12 in CLAUDE.md) — regenerate those.
 
+### `LBL_3+1-vacuum_angles` — 3+1 sterile oscillations for long-baseline configs (vacuum)
+
+Exact four-flavour vacuum oscillations, for long-baseline (or any
+multi-baseline) analyses that need a sterile state *together with* the full
+3ν picture: atmospheric/solar oscillations, CP violation and the mass
+ordering. NuFast is three-flavour only, but vacuum 3+1 is closed form, so
+this model computes the 4×4 mixing matrix
+
+U = R₃₄ R̃₂₄ R̃₁₄ R₂₃ R̃₁₃ R₁₂
+
+directly. The phases use the PDG placement: δ_CP on R̃₁₃, δ₁₄ on R̃₁₄ and δ₂₄
+on R̃₂₄. Hence |Ue4|² = sin²θ₁₄, |Uμ4|² = cos²θ₁₄ sin²θ₂₄ and
+|Uτ4|² = cos²θ₁₄ cos²θ₂₄ sin²θ₃₄, the same relations as `SBL_3+1_angles`. At
+θ₁₄ = θ₂₄ = θ₃₄ = 0, U is the PDG PMNS matrix and the model reproduces
+`LBL_3nu-vacuum_angles` exactly.
+
+| # | name | meaning | fit space | bounds | default |
+|---|---|---|---|---|---|
+| 0 | `dmsq_41` | Δm²₄₁ [eV²] | log10 | 10⁻⁴ – 10² | 1 |
+| 1 | `sinsqt14` | sin²θ₁₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 2 | `sinsqt24` | sin²θ₂₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 3 | `sinsqt34` | sin²θ₃₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 4 | `delta_14` | δ₁₄ [rad] | linear | −π – π | 0 |
+| 5 | `delta_24` | δ₂₄ [rad] | linear | −π – π | 0 |
+| 6–11 | `dmsq_21` … `delta_CP` | the six `LBL_3nu-*` parameters | linear | as `LBL_3nu-*` | as `LBL_3nu-*` |
+
+The sterile block comes first because the harmonic seed scan of the global fit
+runs over physics parameter 0. Here that is Δm²₄₁, the parameter whose fast
+oscillation makes the χ² multimodal. The 3ν parameters keep their `LBL_3nu-*`
+names, so `--fix`/`-i` lines carry over. In practice you will usually `--fix`
+(or constrain) most of them, and θ₃₄ and the sterile phases only matter with
+NC samples or very long baselines.
+
+Rules: **0** = no osc; **1–9** = the full active 3×3 matrix in the
+`LBL_3nu-*` layout (**1** = Pee, **2** = Peμ, **3** = Peτ, **4** = Pμe,
+**5** = Pμμ, **6** = Pμτ, **7** = Pτe, **8** = Pτμ, **9** = Pττ), so a 3ν LBL
+config switches to 3+1 by changing only the tag; **10/11/12** = the NC
+weight 1 − P(α→s) for α = e, μ, τ. NC rates are flavour-blind, so only the
+sterile fraction is lost; give an NC sample from a νμ beam rule 11.
+
+Kinematic inputs and `baseline=` are exactly as for `LBL_3nu-vacuum_angles`
+(per-event `L`+`E`, `E` with `baseline=`, or one signed `L/E`). One extra
+warning applies: with several detectors at different baselines (a near
+detector at ~0.5 km sees the sterile oscillation, the far detector only its
+average), `baseline=` applies one number to every detector, and PROfit warns.
+Use per-event `L`+`E` there:
+
+```xml
+<model tag="LBL_3+1-vacuum_angles">
+    <parameter name="L" variable_index="1"/>   <!-- true baseline [km], per event -->
+    <parameter name="E" variable_index="2"/>   <!-- signed true energy [GeV] -->
+    ...
+</model>
+```
+
+**Truth-bin averaging (`bin_average=`, default `1`).** Binned fits evaluate
+the oscillation probability once per *truth* bin, at its midpoint. With
+Δm²₄₁ ~ 1 eV² at a 1300 km far detector the phase changes by hundreds of
+radians across one truth-E bin, so the midpoint value is effectively a random
+number and can fake a signal. This model therefore low-pass filters every
+oscillating term over its bin:
+
+⟨sin²X⟩ = ½ (1 − cos 2X · sinc h),  ⟨sin 2X⟩ = sin 2X · sinc h,
+
+where h is half the range of the phase 2X across the bin and the midpoint
+phase is kept. Slow oscillations are untouched (sinc → 1); fast ones average
+(sinc → 0). The filter is the exact bin average for an `L/E` variable (events
+uniform in L/E) and first order for E bins (the `L`+`E` pair multiplies the
+L-bin and E-bin factors). `--event-by-event` fits use each event's own
+energy, so they are exact and never filtered.
+
+⚠ *Averaging also applies to the 3ν terms*, and on coarse low-energy truth
+bins that matters. On 0.15 GeV truth-E bins at 1300 km, midpoint sampling
+(what `LBL_3nu-*` does) is badly wrong below ~0.9 GeV: for example Pμμ = 0.01
+at a bin midpoint against a true bin average of 0.55. The averaged value
+tracks the bin mean to within ~0.03. A pinned χ² comparison on such bins
+therefore differs strongly between `bin_average="1"` and `"0"`. Use
+`bin_average="0"` only to reproduce `LBL_3nu-vacuum_angles` numbers;
+otherwise keep the default. Where a truth bin spans more than about one
+cycle of a slow oscillation, refine that binning.
+
+| attribute | meaning | allowed | default |
+|---|---|---|---|
+| `baseline=` | fixed baseline L [km] (E-only mode) | > 0 | — (required with E-only) |
+| `bin_average=` | truth-bin averaging of oscillating terms | 0 or 1 | 1 |
+
+`density=`, `electron_fraction=` and `n_newton=` are ignored with a warning.
+Matter effects for 3+1 (which need the neutral-current potential seen by ν_s)
+are not implemented. The `LBL_3nu-*` models ignore `bin_average=` with a
+warning.
+
 ### `template` *(legacy alias: `template_fit`)* — per-subchannel normalization fit
 
 Not an oscillation model: each `<parameter>` in the model block is one
@@ -2532,6 +2634,55 @@ name, a `default=` outside `[min, max]`, and `subchannels=`/`default=` on
 any model other than `template`. As with every model setting the `<model>`
 block is not part of the `_prop/_syst.bin` hash, so editing it reuses those
 caches.
+
+### Gaussian priors on physics parameters: `<prior>`
+
+Any model can carry external constraints on its physics parameters, one
+`<prior>` element per constrained quantity inside `<model>`:
+
+```xml
+<model tag="LBL_3nu-vacuum_angles" baseline="1300">
+    <parameter name="E" variable_index="2"/>
+    <!-- |dm^2_32| = 2.5e-3 +- 0.5e-3 eV^2, whatever the mass ordering -->
+    <prior name="dmsq_32" center="0.0025" sigma="0.0005" abs="true"/>
+    <prior name="sinsqt13" center="0.0220" sigma="0.0007"/>
+</model>
+```
+
+Each adds ((q − center)/sigma)² to the χ² of every metric (neyman, pearson,
+CNP, poisson), and its exact derivative to every gradient mode:
+
+* `q` is the **physical** value of the parameter (10^x for log10
+  parameters such as the SBL `dmsq`), so `center` and `sigma` are always in
+  physical units.
+* `abs="true"` constrains |q|. A |Δm²| measurement then holds both mass
+  orderings equally.
+* `name` is a physics parameter of the model, or a **derived quantity** the
+  model defines. Both LBL models (`LBL_3nu-*`, `LBL_3+1-vacuum_angles`)
+  define `dmsq_32` = `dmsq_31` − `dmsq_21`. That is the right target for a
+  |Δm²₃₂| constraint: a prior on `dmsq_31` would be off by Δm²₂₁ ≈ 7.5·10⁻⁵ eV²
+  (0.15σ at σ = 5·10⁻⁴), in opposite directions for the two orderings.
+* An unknown name, a non-positive or non-numeric `sigma`, a second prior on
+  the same name, or `abs=` other than true/false is refused.
+
+A free parameter with a prior counts zero degrees of freedom, like a
+Gaussian-prior spline: the prior is one pseudo-measurement. Real data and
+fake (Asimov) data use the XML `center`. Inject a truth consistent with it,
+or the prior pulls the fit away from the injected point.
+
+**Pseudo-experiments re-measure the prior.** A prior is an external
+measurement, so every toy draws its own centre from N(q(truth), sigma)
+about that toy's truth. This covers `fc` toys, `fc-adaptive` bank PEs,
+prepass and brazil throws, surface brazil throws and `--pseudo-experiment`.
+In stat-only throw modes the centre is q(truth) exactly, the analogue of
+unthrown splines sitting at their centres. Holding the XML centre fixed
+instead would cancel the prior in the Neyman construction: at a tested point
+away from the centre, the toys would pay the same prior penalty as the data,
+so the critical value would absorb it. `fc` records the priors in `fc_meta`,
+and `--reuse` refuses a file thrown with different ones. `fc-adaptive`
+artifacts (`_mesh/_bank/_brazil.bin`) do not record them: like every
+`<model>` setting they are not hashed, so regenerate those after changing a
+prior.
 
 ---
 

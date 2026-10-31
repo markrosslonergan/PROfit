@@ -224,7 +224,20 @@ namespace PROfit{
         std::vector<std::unique_ptr<TTreeFormula>> fs;
         int treeNumber;
     };
- 
+
+    /**
+     * @brief A Gaussian prior on one physics parameter: <model><prior name= center= sigma= [abs=]/>.
+     * @details Adds ((q - center)/sigma)^2 to every metric, where q is the parameter's PHYSICAL
+     * value (10^x for a log10 parameter), |value| when abs. The name is checked against the model
+     * in get_model_from_string, which stores the resolved PROmodel::PhysicsPrior.
+     */
+    struct PhysicsPriorSpec {
+        std::string name;   ///< Physics parameter name.
+        double center = 0;  ///< Mean, in the parameter's physical units.
+        double sigma = 1;   ///< Width (> 0), same units.
+        bool abs = false;   ///< Constrain |value| (e.g. |dm^2_32| whatever the mass ordering).
+    };
+
 
     /**
      * @brief Primary configuration class: parses the analysis XML and stores the full
@@ -598,9 +611,11 @@ namespace PROfit{
             /// Template model only: the <parameter>'s default= value (CV, bkg-only seed and --fix
             /// point); nullopt = attribute absent, the model's own default applies.
             std::vector<std::optional<float>> m_model_parameter_default;
-            /// Numeric <model> attributes (density=, electron_fraction=, n_newton=);
-            /// consumed by PROLBL, fatal on non-LBL tags, not hashed.
+            /// Numeric <model> attributes (baseline=, density=, electron_fraction=, n_newton=,
+            /// bin_average=); consumed by PROLBL/PROLBL3p1, fatal on non-LBL tags, not hashed.
             std::map<std::string, double> m_model_options;
+            /// <prior> children of <model>, in XML order (one per parameter at most); not hashed.
+            std::vector<PhysicsPriorSpec> m_model_physics_priors;
 
             bool m_bool_rate_only;
             //----- PUBLIC FUNCTIONS ------
@@ -690,6 +705,17 @@ namespace PROfit{
 
             /** @brief Number of active collapsed bins for this variable (= total bins when no mask is set). Use for dof counting. */
             size_t NActiveBins(size_t var_index) const;
+
+            /**
+             * @brief True when FillSpectra may fill variable @p v in binned mode: the fitting
+             * variable, a plot="true" variable, or a systematic's binning variable.
+             * @details Every other variable (e.g. a fine true-L/E kept only as a model kinematic
+             * input) is carried along for its per-event values and bin indices alone: process
+             * stores no pre-binned migration matrices with it and models build no H_combined for
+             * it, which for a fine kinematic variable is most of both. Plot flags and binnings are
+             * not hashed, so run_process re-checks a loaded _prop.bin against this.
+             */
+            bool IsFilledVariable(size_t v) const;
 
             /* Function: return the unit string for a channel's variable
              * (e.g. "MeV"), preferring the per-variable <bins unit="..."> entry

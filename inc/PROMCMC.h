@@ -258,7 +258,7 @@ namespace PROfit {
 
         float operator()(Eigen::VectorXf &value) {
             Eigen::VectorXf nuisance = value.segment(metric.GetModel().nparams, metric.GetSysts().GetNSplines());
-            return -0.5f*metric.Pull(nuisance);
+            return -0.5f*(metric.Pull(nuisance) + metric.PhysicsPull(value.head(metric.GetModel().nparams)));
         }
     };
 

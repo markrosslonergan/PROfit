@@ -153,6 +153,12 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                     % __func__ % thrown_str.c_str();
 
                 variable_data.push_back(PROdata(newSpec.Spec(), newSpec.Error()));
+                // A pseudo-experiment re-measures any physics prior about the injected truth too.
+                variable_data.back().physics_prior_centers = ToyPhysicsPriorCenters(model, fakedataparams.head(nphys), true, PROseed::global_rng);
+                for (size_t k = 0; k < model.physics_priors.size(); ++k)
+                    log<LOG_INFO>(L"%1% || Pseudo-experiment physics prior on %2%: centre %3% (XML %4%).")
+                        % __func__ % model.physics_priors[k].name.c_str()
+                        % variable_data.back().physics_prior_centers[k] % model.physics_priors[k].center;
                 continue;
             }
 

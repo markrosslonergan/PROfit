@@ -284,6 +284,7 @@ std::vector<PROmesh::AMRResult> generate_throws(
                           CollapseMatrix(config, shifted.Error())),
                   dseed(proseed.global_rng));
         PROdata data(newSpec.Spec(), newSpec.Error());
+        data.physics_prior_centers = ToyPhysicsPriorCenters(model, fakeDataParams.head((Eigen::Index)N_phys_params), !acfg.stat_only_throws, PROseed::global_rng);
 
         log<LOG_INFO>(L"%1% || throw %2%/%3%: stat_only=%4%, n_splines_thrown=%5%, n_stat_bins=%6%.")
             % __func__ % t % acfg.n_throws % (int)acfg.stat_only_throws
@@ -776,7 +777,9 @@ PROdata generate_pseudo_experiment_data(
                     + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
                 CollapseMatrix(config, shifted.Error(), config.i_prime)),
         dseed(proseed.global_rng));
-    return PROdata(newSpec.Spec(), newSpec.Error());
+    PROdata data(newSpec.Spec(), newSpec.Error());
+    data.physics_prior_centers = ToyPhysicsPriorCenters(model, fakeDataParams.head((Eigen::Index)nphys), true, PROseed::global_rng);
+    return data;
 }
 
 } // namespace afc

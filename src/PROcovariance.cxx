@@ -184,7 +184,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     // Create reduced delta vector
     Eigen::VectorXf delta = collapsed_mc_spec(idx) - normdata(idx);
 
-    float pull = Pull(subvector2);
+    float pull = Pull(subvector2) + PhysicsPull(subvector1);
     // delta^T M^-1 delta via Cholesky solve: faster + more stable than forming the inverse.
     float covar_portion = delta.dot(M.llt().solve(delta));
     float value = covar_portion + pull;
@@ -256,11 +256,14 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         // For linearised modes we factorise the BASE M and reuse Minv_delta_b
         // across every FD step. The Pull derivative is computed analytically
         // from spline_centers / spline_priors (uncorrelated) or the precomputed
-        // prior_covariance_inv (correlated) — no FD on the pull.
+        // prior_covariance_inv (correlated) — no FD on the pull; likewise the
+        // physics-prior derivative.
         Eigen::VectorXf Minv_delta_b;
         Eigen::VectorXf pull_grad_nuis; // size = nsyst, dP/dθ_n
+        Eigen::VectorXf pull_grad_phys; // size = nphys, d PhysicsPull/dθ_p
         if (linearised || analytic) {
             Minv_delta_b = M.llt().solve(delta);
+            pull_grad_phys = PhysicsPullGradient(subvector1);
             Eigen::VectorXf centered = subvector2 - syst->spline_centers;
             // Match Pull(): uniform-prior splines contribute NO pull — mask them
             // here too, or the gradient carries a phantom Gaussian pull the value
@@ -384,6 +387,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
                                      - 2.0f * (G.transpose() * wg);
             if(shape_only) grad_vec += 2.0f * (TtG.transpose() * u_kappa);
             grad_vec.segment(model.nparams, nsyst) += pull_grad_nuis;
+            grad_vec.head(model.nparams) += pull_grad_phys;
 
             for (size_t i = 0; i < model.nparams + nsyst; i++) {
                 if(is_fixed.size() > 0 && is_fixed.at(i)) { gradient(i) = 0.0f; continue; }
@@ -444,7 +448,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             }
             Eigen::VectorXf dl    = cmcl(idx) - normdata(idx);
             Eigen::VectorXf nuis  = param_at.segment(model.nparams, syst->GetNSplines());
-            chi2_out = dl.dot(gM_lo.llt().solve(dl)) + Pull(nuis);
+            chi2_out = dl.dot(gM_lo.llt().solve(dl)) + Pull(nuis) + PhysicsPull(param_at.head(model.nparams));
             return true;
         };
 
@@ -521,9 +525,11 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
 
                 // Linearised chain rule: d(δ^T M⁻¹ δ)/dθ = 2 (M⁻¹δ_b)^T dδ/dθ
                 grad_i = 2.0f * Minv_delta_b.dot(ddelta_dtheta);
-                // Analytic pull contribution (zero for physics indices).
+                // Analytic pull contributions.
                 if (i >= model.nparams) {
                     grad_i += pull_grad_nuis(i - model.nparams);
+                } else {
+                    grad_i += pull_grad_phys(i);
                 }
                 gradient(i) = grad_i;
             } else {

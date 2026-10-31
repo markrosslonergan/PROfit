@@ -480,6 +480,7 @@ static PEBankRecord run_one_pe(const AdaptivePEArgs &args)
                 CollapseMatrix(config, shifted.Error())),
         dseed(rng));
     PROdata data(newSpec.Spec(), newSpec.Error());
+    data.physics_prior_centers = ToyPhysicsPriorCenters(model, throws.head((Eigen::Index)nphys), true, rng);
 
     // Build metric (unique_ptr — early-stop safe).
     PROmetric::EvalStrategy mstrat = args.binned ? PROmetric::BinnedChi2 : PROmetric::EventByEvent;
