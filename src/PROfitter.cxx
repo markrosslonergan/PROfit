@@ -146,6 +146,84 @@ std::vector<int> select_diverse_best(const std::vector<float>& chi2s, const std:
 }
 
 
+namespace {
+    /// χ²(x0 + s∘z) and its gradient s∘∇χ², the objective of a preconditioned descent.
+    struct ScaledObjective {
+        PROmetric &metric;
+        const Eigen::VectorXf &x0, &s, &lb, &ub;
+        Eigen::VectorXf gx;
+
+        Eigen::VectorXf toX(const Eigen::VectorXf &z) const {
+            return (x0 + s.cwiseProduct(z)).cwiseMax(lb).cwiseMin(ub);
+        }
+        float operator()(const Eigen::VectorXf &z, Eigen::VectorXf &gz) {
+            gx.resize(z.size());
+            const float f = metric(toX(z), gx, true);
+            gz = s.cwiseProduct(gx);
+            return f;
+        }
+    };
+}
+
+bool PROfitter::usePreconditioning(const PROmetric &metric) const {
+    if(fitconfig.precondition >= 0) return fitconfig.precondition == 1;
+    return metric.GetModel().wants_preconditioning();
+}
+
+Eigen::VectorXf PROfitter::preconditionScales(PROmetric &metric, const Eigen::VectorXf &x0,
+                                              const Eigen::VectorXf &lb, const Eigen::VectorXf &ub) {
+    const Eigen::VectorXf F = metric.GaussNewtonDiagonal(x0);
+    const bool have_F = F.size() == x0.size();
+    Eigen::VectorXf s = Eigen::VectorXf::Ones(x0.size());
+    for(Eigen::Index i = 0; i < x0.size(); ++i) {
+        if(!(ub(i) > lb(i))) continue;
+        const float R = (std::isinf(lb(i)) || std::isinf(ub(i))) ? 4.0f : ub(i) - lb(i);
+        float si = 1e-3f * R;
+        if(have_F && std::isfinite(F(i)) && F(i) * R * R > 1e-6f) si = 1.0f / std::sqrt(F(i));
+        s(i) = std::clamp(si, 1e-6f * R, 0.25f * R);
+    }
+    return s;
+}
+
+int PROfitter::localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
+                             const Eigen::VectorXf &lb, const Eigen::VectorXf &ub) {
+    last_scales.resize(0);
+    if(!usePreconditioning(metric)) return solver.minimize(metric, x, fx, lb, ub);
+
+    static std::atomic<bool> announced{false};
+    if(!announced.exchange(true))
+        log<LOG_INFO>(L"%1% || L-BFGS-B descents are preconditioned (per-parameter Gauss-Newton scales; fit option precondition).") % __func__;
+
+    constexpr int kMaxDescents = 2;
+    constexpr float kRescaleDistance = 3.0f;
+    int niter = 0;
+    for(int pass = 0; pass < kMaxDescents; ++pass) {
+        const Eigen::VectorXf x0 = x.cwiseMax(lb).cwiseMin(ub);
+        const Eigen::VectorXf s = preconditionScales(metric, x0, lb, ub);
+        log<LOG_DEBUG>(L"%1% || descent %2% scales: %3%") % __func__ % pass % s;
+        ScaledObjective obj{metric, x0, s, lb, ub, Eigen::VectorXf()};
+        const Eigen::VectorXf zlb = (lb - x0).cwiseQuotient(s), zub = (ub - x0).cwiseQuotient(s);
+        Eigen::VectorXf z = Eigen::VectorXf::Zero(x0.size());
+        float fz = fx;
+        if(pass == 0) {
+            niter += solver.minimize(obj, z, fz, zlb, zub);
+        } else {
+            // The first descent already succeeded: a throw here keeps its result.
+            try {
+                niter += solver.minimize(obj, z, fz, zlb, zub);
+            } catch (const std::exception &except) {
+                exception_string_map[std::string(except.what())]++;
+                break;
+            }
+        }
+        x = obj.toX(z);
+        fx = fz;
+        last_scales = s;
+        if(z.lpNorm<Eigen::Infinity>() <= kRescaleDistance) break;
+    }
+    return niter;
+}
+
 float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
     const std::vector<Eigen::VectorXf> seed_points = seed_pt.size() > 0 ? std::vector<Eigen::VectorXf>{seed_pt} : std::vector<Eigen::VectorXf>{};
     return Fit(metric, seed_points);
@@ -280,7 +358,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             x = PSO.getGlobalBestPosition();
             log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
-            niter = solver.minimize(metric, x, fx, lb, ub);
+            niter = localMinimize(metric, x, fx, lb, ub);
             total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
             chi2s_localfits.push_back(fx);
@@ -348,7 +426,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                     x = seed_points.at(s);
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
-                    niter = solver.minimize(metric, x, fx, lb, ub);
+                    niter = localMinimize(metric, x, fx, lb, ub);
                     total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                     chi2s_localfits.push_back(fx);
@@ -441,7 +519,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
                 x = x0;
                 log<LOG_INFO>(L"%1% || Starting fixed-seed local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
-                niter = solver.minimize(metric, x, fx, flb, fub);
+                niter = localMinimize(metric, x, fx, flb, fub);
                 total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                 chi2s_localfits.push_back(fx);
@@ -491,7 +569,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             try {
                 log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
-                niter = solver.minimize(metric, x, fx, lb, ub);
+                niter = localMinimize(metric, x, fx, lb, ub);
                 total_lbfgs_iterations += (size_t)std::max(niter, 0);
 
                 chi2s_localfits.push_back(fx);
@@ -730,7 +808,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
         float fit_fx = std::numeric_limits<float>::infinity();
         try {
             Eigen::VectorXf xf = x_warm;
-            solver.minimize(metric, xf, fit_fx, fit_lb, fit_ub);
+            localMinimize(metric, xf, fit_fx, fit_lb, fit_ub);
             if(std::isfinite(fit_fx) && fit_fx < best) { best = fit_fx; bx = xf; }
         } catch (const std::exception &except) {
             exception_string_map[std::string(except.what())]++;
@@ -742,7 +820,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
             try {
                 Eigen::VectorXf xf = x_slice;
                 float fx = std::numeric_limits<float>::infinity();
-                solver.minimize(metric, xf, fx, fit_lb, fit_ub);
+                localMinimize(metric, xf, fx, fit_lb, fit_ub);
                 if(std::isfinite(fx) && fx < best) { best = fx; bx = xf; }
             } catch (const std::exception &except) {
                 exception_string_map[std::string(except.what())]++;
@@ -890,7 +968,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
             try{
                 Eigen::VectorXf xf = best_x;
                 float fx = std::numeric_limits<float>::infinity();
-                solver.minimize(metric, xf, fx, full_lb, full_ub);
+                localMinimize(metric, xf, fx, full_lb, full_ub);
                 if(std::isfinite(fx) && fx < best_chi) { best_chi = fx; best_x = xf; }
             } catch (const std::exception &except) {
                 exception_string_map[std::string(except.what())]++;
@@ -908,7 +986,7 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
         try{
             Eigen::VectorXf xf = best_x;
             float fx = std::numeric_limits<float>::infinity();
-            solver.minimize(metric, xf, fx, full_lb, full_ub);
+            localMinimize(metric, xf, fx, full_lb, full_ub);
             if(std::isfinite(fx) && fx < best_chi) { best_chi = fx; best_x = xf; }
         } catch (const std::exception &except) {
             exception_string_map[std::string(except.what())]++;

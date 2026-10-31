@@ -85,6 +85,8 @@ public:
 
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 
+    bool wants_preconditioning() const override { return true; }
+
     bool matter;              ///< Matter (NuFast Probability_Matter_LBL) vs vacuum regime.
     InputMode input_mode;     ///< Kinematic input layout.
     double baseline_km;       ///< Fixed baseline [km] (EOnly mode; unset otherwise).

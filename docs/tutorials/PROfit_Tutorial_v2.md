@@ -1102,6 +1102,7 @@ highlights:
   n_localfit              : Total number of L-BFGS-B fits after PSO
   localfit_warm_nuisance  : 1 = warm-start nuisances at each multistart (grad-deep/overkill)
   n_max_local_retries     : Retries if L-BFGS-B throws
+  precondition            : -1 auto (on for LBL models), 1 on, 0 off — scale each descent (below)
 ------ Particle Swarm Optimization ------
   n_swarm_particles, n_swarm_iterations, n_swarm_max_stagnent_iterations,
   swarm_inertia_start/end, swarm_cognitive_score, swarm_social_score, ...
@@ -1118,6 +1119,27 @@ One benign scary-looking thing you WILL see in logs: L-BFGS-B throwing
 `"line search step became smaller than minimum"` on near-optimal starting
 points. This is routine (the seed's own χ² is kept as a candidate), not a
 failure.
+
+**Preconditioning (`precondition`).** L-BFGS-B starts from a Hessian guess
+that treats every parameter alike and stops a descent once an iteration
+improves χ² by less than ~10⁻⁶·χ². That is fine when the parameters have
+similar χ² curvature — log10 mixing and Δm² and σ-unit splines, as in the SBN
+models — but the LBL models fit Δm² in eV² and sin² linearly, so curvatures
+span ~10 orders of magnitude (MINOS-like 3+1: about 10⁻³ for log10 sin²θ₃₄,
+2×10³ for sin²θ₂₃, 4×10⁸ for Δm²₃₁). An unscaled descent then stops early,
+partway down a narrow valley. With preconditioning each descent instead runs
+in z = (x − x₀)/s, where sᵢ = 1/√Fᵢᵢ comes from the Gauss-Newton curvature
+of the χ² at the descent's start (data term plus prior pulls). Every free
+parameter then has curvature ≈ 1, and the descent reaches the minimum in a
+few iterations. Flat directions, such as a CP phase at zero mixing, fall back
+to 10⁻³ of the parameter's range. A descent that moves far from its start is
+rescaled once and continued, because a log10 mixing angle's curvature
+changes by orders of magnitude between small and large mixing. The default,
+`-1`, turns it on for the LBL models only. `--fit-options precondition 1`
+(and/or `--scan-fit-options precondition 1`) turns it on for any model;
+`precondition 0` turns it off. The Gauss-Newton scales need a binned
+covariance metric (neyman, pearson or CNP). With `poisson` or
+`--event-by-event` every parameter uses the range-based scale.
 
 ### Metric choice matters
 

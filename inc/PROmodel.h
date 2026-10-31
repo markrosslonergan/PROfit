@@ -255,6 +255,15 @@ public:
      */
     virtual bool has_analytic_gradient() const { return nparams == 0; }
 
+    /**
+     * @brief Should PROfitter precondition its L-BFGS-B descents for this model by default?
+     * @details True for models whose physics parameters live in raw units of very
+     * different size (the LBL models: Δm² in eV², linear sin²), where the χ² curvatures
+     * span ~10 orders of magnitude and an unscaled L-BFGS-B stops far from the minimum.
+     * Read only when the fit option `precondition` is left at its default (auto).
+     */
+    virtual bool wants_preconditioning() const { return false; }
+
     std::unordered_map<std::string, size_t> param_name_to_index; ///< Fast lookup: parameter name -> index in param_names.
 
     /**

@@ -723,6 +723,30 @@ run_test t78cpearsonshgrad -l logs/t78cpearsonshgrad.full.log -w 3 --use-fake-da
     scale-test --tests gradcheck -N 200
 grad_rel_check t78dpearsonshgradrel logs/t78cpearsonshgrad.full.log
 
+# --- 17. Preconditioned L-BFGS-B descents (fit option precondition) -----------
+# LBL raw-unit parameters (dmsq_31 in eV^2, linear sin^2) have chi2 curvatures
+# ~10 orders of magnitude apart: unscaled descents stop partway down the valley.
+# Same pseudo-experiment, preconditioning off vs auto (on for LBL): auto must
+# reach a clearly lower minimum. SBN with it forced on (shape-only exercises the
+# Gauss-Newton rescale chain rule) is a smoke test; a bad value is refused.
+COMMON=(-x local_lbl3p1_eonly.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset grad-fast)
+PCP=(--pseudo-experiment -i dmsq_31 2.45e-3 sinsqt23 0.55 sinsqt13 0.022 dmsq_41 1 sinsqt24 0.02
+     --fix dmsq_21 sinsqt12 delta_CP sinsqt14 "${FLAT[@]}")
+run_test t79aprecondoff -l logs/t79aprecondoff.full.log -w 3 "${PCP[@]}" --fit-options precondition 0 global
+run_test t79bprecondauto -l logs/t79bprecondauto.full.log -w 3 "${PCP[@]}" global
+c_off=$(global_chi2 t79aprecondoff); c_on=$(global_chi2 t79bprecondauto)
+if [ -n "$c_off" ] && [ -n "$c_on" ] && awk -v a="$c_off" -v b="$c_on" 'BEGIN { exit !(b < a - 0.1) }' \
+        && grep -q "descents are preconditioned" logs/t79bprecondauto.full.log; then
+    note "PASS  t79cprecondbetter  (chi2 $c_on preconditioned vs $c_off unscaled)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t79cprecondbetter  (preconditioned chi2 '$c_on' not below unscaled '$c_off' - 0.1, or not preconditioned)"
+    FAIL=$((FAIL+1))
+fi
+expect_fail t79dprecondbad --pseudo-experiment --fit-options precondition 2 global
+COMMON=("${SAVED_COMMON[@]}")
+run_test t79eprecondsbn --use-fake-data -i dmsq 1 sinsq2thme 0.02 --shapeonly --fit-options precondition 1 global
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

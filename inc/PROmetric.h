@@ -234,6 +234,34 @@ namespace PROfit {
             /** @brief The physics priors as this metric applies them (centres included). */
             const std::vector<PROmodel::PhysicsPrior> &GetPhysicsPriors() const { return physics_priors; }
             /**
+             * @brief Diagonal of the chi2 Hessian contributed by the penalty terms at @p param:
+             * 2 x the spline prior precision (Pull) and sum_k 2 (dq_k/dx)^2 / sigma_k^2 (PhysicsPull).
+             * Size nParams(); uniform-prior splines and unconstrained physics get 0.
+             */
+            Eigen::VectorXf PriorCurvatureDiagonal(const Eigen::VectorXf &param) const {
+                const size_t nphys = model.nparams;
+                Eigen::VectorXf h = Eigen::VectorXf::Zero(param.size());
+                const Eigen::VectorXf phys = param.head(nphys);
+                for(const auto &p : physics_priors) {
+                    Eigen::VectorXf dq = Eigen::VectorXf::Zero(nphys);
+                    model.physics_prior_quantity(p, phys, &dq);
+                    h.head(nphys) += (2.0f / (p.sigma * p.sigma)) * dq.cwiseProduct(dq);
+                }
+                if(syst->GetNSplines() > 0)
+                    h.segment(nphys, syst->GetNSplines()) = 2.0f * SplinePriorPrecision().diagonal();
+                return h;
+            }
+            /**
+             * @brief Diagonal of the Gauss-Newton approximation to the chi2 Hessian at @p param.
+             * @details F_ii = 2 J_i^T M^-1 J_i (J = d prediction / d theta over the bins in the
+             * sum, M frozen) plus PriorCurvatureDiagonal(). PROfitter uses 1/sqrt(F_ii) as the
+             * scale of each parameter when it preconditions its L-BFGS-B descents. Empty = not
+             * available here (the fitter then falls back to a bound-width scale).
+             */
+            virtual Eigen::VectorXf GaussNewtonDiagonal([[maybe_unused]] const Eigen::VectorXf &param) {
+                return Eigen::VectorXf();
+            }
+            /**
              * @brief Print a human-readable summary of the metric evaluation at @p param.
              * @param param  Parameter vector to evaluate at.
              */

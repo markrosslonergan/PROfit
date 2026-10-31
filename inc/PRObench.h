@@ -113,6 +113,8 @@ namespace PRObench {
         /// per-universe metrics.
         std::string chi2 = "neyman";
         bool shape_only = false;
+        /// (p) benchmark: the `precondition` fit option for every preset (from --fit-options).
+        int precondition = -1;
     };
 
     /**

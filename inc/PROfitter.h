@@ -143,6 +143,13 @@ namespace PROfit {
         /// See PROmetric::GradientMode for the full mode matrix.
         PROmetric::GradientMode gradient_mode = PROmetric::GradientAnalytic; ///< Gradient mode PROfitter::Fit sets on the metric (default: exact analytic; see PROmetric::GradientMode for the fallback).
 
+        /// Diagonal preconditioning of every L-BFGS-B descent: 1 = on, 0 = off, -1 = auto
+        /// (on when the model asks for it, PROmodel::wants_preconditioning — the LBL models).
+        /// Each descent runs in z = (x − x0)/s with s_i = 1/sqrt(F_ii), F the Gauss-Newton
+        /// Hessian diagonal at its start x0 (PROmetric::GaussNewtonDiagonal), so every free
+        /// parameter has χ² curvature ~1; see PROfitter::localMinimize.
+        int precondition = -1;
+
         /** @brief Default constructor — leaves all parameters at their default values. */
         PROfitterConfig(){};
 
@@ -359,6 +366,13 @@ namespace PROfit {
                     n_max_local_retries = value;
                 } else if(param_name == "use_bkg_seed") {
                     use_bkg_seed = (value != 0);
+                } else if(param_name == "precondition") {
+                    precondition = (int)value;
+                    if(precondition < -1 || precondition > 1 || (float)precondition != value) {
+                        log<LOG_ERROR>(L"%1% || precondition must be -1 (auto), 0 (off) or 1 (on). Provided value is %2%.")
+                            % __func__ % value;
+                        exit(EXIT_FAILURE);
+                    }
 
                 // Particle Swarm Optimization parameters
                 } else if(param_name == "n_swarm_particles") {
@@ -473,6 +487,7 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || n_localfit: %2%  ") % __func__ % n_localfit;
             log<LOG_INFO>(L"%1% || n_max_local_retries: %2%  ") % __func__ % n_max_local_retries;
             log<LOG_INFO>(L"%1% || use_bkg_seed: %2%  ") % __func__ % use_bkg_seed;
+            log<LOG_INFO>(L"%1% || precondition: %2%  ") % __func__ % precondition;
             
             log<LOG_INFO>(L"%1% || ------------ Particle Swarm Optimization -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || n_swarm_particles: %2%  ") % __func__ % n_swarm_particles;
@@ -539,6 +554,7 @@ namespace PROfit {
             log<LOG_INFO>(L"  n_localfit                           : Total number of L-BFGS-B fits to do after PSO");
             log<LOG_INFO>(L"  n_max_local_retries                  : Maximum retries if L-BFGS-B throws an exception");
             log<LOG_INFO>(L"  use_bkg_seed                         : 1 (default) fits the background-only fixed seed (physics pinned at model defaults) as a candidate; 0 disables");
+            log<LOG_INFO>(L"  precondition                         : Scale each L-BFGS-B descent by the Gauss-Newton curvature of every parameter: -1 (default) auto = on for LBL models, 1 on, 0 off");
             
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ Particle Swarm Optimization (PSO) Parameters ------");
@@ -700,14 +716,25 @@ namespace PROfit {
                     progress = pin;
                     return;
             }
+            // The solver's state belongs to the LAST descent; a preconditioned descent ran in
+            // z = (x − x0)/s, so these map it back to x with that descent's scales.
             /** @brief Return the gradient vector at the final L-BFGS-B solution. */
-            Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
-            /** @brief Return the L2 norm of the gradient at the final solution. */
+            Eigen::VectorXf FinalGradient() const {
+                return last_scales.size() ? Eigen::VectorXf(solver.final_grad().cwiseQuotient(last_scales)) : solver.final_grad();
+            }
+            /** @brief Return the projected-gradient norm at the final solution (in the descent's own variables). */
             float FinalGradientNorm() const {return solver.final_grad_norm();}
             /** @brief Return the approximate Hessian matrix at the final solution (from L-BFGS-B). */
-            Eigen::MatrixXf Hessian() const {return solver.final_approx_hessian();}
+            Eigen::MatrixXf Hessian() const {
+                if(!last_scales.size()) return solver.final_approx_hessian();
+                const Eigen::VectorXf inv = last_scales.cwiseInverse();
+                return inv.asDiagonal() * solver.final_approx_hessian() * inv.asDiagonal();
+            }
             /** @brief Return the approximate inverse Hessian (parameter covariance) at the final solution. */
-            Eigen::MatrixXf InverseHessian() const {return solver.final_approx_inverse_hessian();}
+            Eigen::MatrixXf InverseHessian() const {
+                if(!last_scales.size()) return solver.final_approx_inverse_hessian();
+                return last_scales.asDiagonal() * solver.final_approx_inverse_hessian() * last_scales.asDiagonal();
+            }
             /** @brief Return the parameter covariance matrix (alias for InverseHessian()). */
             Eigen::MatrixXf Covariance() const {return InverseHessian();}
             /** @brief Return the best-fit parameter vector. */
@@ -731,6 +758,37 @@ namespace PROfit {
                 return Covariance()*chi2/float(ndof);
             }
 
+        private:
+            Eigen::VectorXf last_scales; ///< Scales of the last descent when it was preconditioned, else empty.
+
+            /// True if this fitter's descents on @p metric are preconditioned (fit option `precondition`).
+            bool usePreconditioning(const PROmetric &metric) const;
+
+            /**
+             * @brief Per-parameter scales for a preconditioned descent starting at @p x0.
+             * @details s_i = 1/sqrt(F_ii) from PROmetric::GaussNewtonDiagonal, clamped to
+             * [1e-6, 0.25] × R_i, with R_i the bound width (4 for an infinite bound, as the Latin
+             * hypercube). Falls back to 1e-3 R_i where F is unavailable or the direction is
+             * numerically flat (F_ii R_i² < 1e-6, e.g. a phase at zero mixing). Fixed (zero-width)
+             * parameters get 1.
+             */
+            Eigen::VectorXf preconditionScales(PROmetric &metric, const Eigen::VectorXf &x0,
+                                               const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
+
+            /**
+             * @brief One local L-BFGS-B descent from @p x within [lb, ub]; the single entry point
+             * of every local fit in Fit() and calcFreqSeedPoints().
+             * @details Without preconditioning this is solver.minimize(metric, x, fx, lb, ub).
+             * With it, the solver minimises χ²(x0 + s∘z) over z in [(lb − x0)/s, (ub − x0)/s]
+             * (gradient s∘∇χ²) and x is mapped back (clamped into the box against rounding).
+             * The curvature of a log10 mixing angle changes by orders of magnitude along a
+             * descent, so a descent that ends more than 3 scales from its start in any
+             * parameter is rescaled at its end point and run once more; if that second
+             * descent throws, the first one's result is kept.
+             * @return L-BFGS-B iterations, summed over both descents. Throws like solver.minimize.
+             */
+            int localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
+                              const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
 
     };
     

@@ -365,31 +365,21 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             const Eigen::VectorXf g_full = syst->fractional_covariance * w_full.cwiseProduct(spec_full);
             const Eigen::VectorXf wg = w_full.cwiseProduct(g_full);
 
-            Eigen::MatrixXf G = FillSpectraGradient(config, peller, *syst, model, param, fs_cache, config.i_prime);
+            const Eigen::MatrixXf G = spectrumJacobian(param, result, shape_r);
             Eigen::VectorXf u_kappa;
             if(shape_only) {
-                // Chain rule for the per-channel rescale s̃ = s ∘ (T r), r_c = ΣD_c / ΣP_c(θ):
-                //   ds̃_i/dθ = r_c ds_i/dθ + s_i dr_c/dθ,   dr_c/dθ = −(r_c/ΣP_c) Σ_{b∈c} (TᵀG)_b
-                // (i in channel c). A rank-one correction per channel block.
                 // The projector R = I − P̃1ᵀ/ΣP̃_c also moves with P̃ (ΣP̃_c = ΣD_c is fixed):
                 // −uᵀ(dR Q Rᵀ + R Q dRᵀ)u = 2 Σ_c (u_c·dP̃_c) Σ_c(Q v)_c / ΣP̃_c.
                 const Eigen::VectorXf q = collapsed_full_covariance * v_c;
                 u_kappa = Eigen::VectorXf::Zero(u_c.size());
-                const Eigen::MatrixXf TtG_raw = T.transpose() * G;
-                const Eigen::VectorXf collapsed_raw = T.transpose() * result.Spec();
-                const auto full_blocks = PROsyst::ChannelBlocks(config, config.i_prime);
-                size_t cstart = 0, gci = 0;
-                for(const auto &[fs, fl]: full_blocks) {
+                const size_t nblocks = PROsyst::ChannelBlocks(config, config.i_prime).size();
+                size_t cstart = 0;
+                for(size_t gci = 0; gci < nblocks; ++gci) {
                     const size_t cl = config.GetChannelVariableBins(gci, config.i_prime).NBins();
-                    const float sumP = collapsed_raw.segment(cstart, cl).sum();
-                    const float rc = shape_r(cstart);
-                    Eigen::RowVectorXf dr = Eigen::RowVectorXf::Zero(G.cols());
-                    if(sumP > 0.0f) dr = -(rc / sumP) * TtG_raw.middleRows(cstart, cl).colwise().sum();
-                    G.middleRows(fs, fl) = rc * G.middleRows(fs, fl) + result.Spec().segment(fs, fl) * dr;
                     const float sumPt = collapsed_mc_spec.segment(cstart, cl).sum();
                     if(sumPt > 0.0f && std::isfinite(sumPt))
                         u_kappa.segment(cstart, cl) = u_c.segment(cstart, cl) * (q.segment(cstart, cl).sum() / sumPt);
-                    cstart += cl; ++gci;
+                    cstart += cl;
                 }
             }
             Eigen::MatrixXf TtG = T.transpose() * G; // collapsed-space Jacobian (ncollapsed × nparams)
@@ -595,6 +585,66 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     last_value = value;
 
     return value;
+}
+
+Eigen::MatrixXf PROcovariance::spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
+                                                const Eigen::VectorXf &shape_r) {
+    Eigen::MatrixXf G = FillSpectraGradient(config, peller, *syst, model, param, fs_cache, config.i_prime);
+    if(!shape_only) return G;
+    // Chain rule for the per-channel rescale s̃ = s ∘ (T r), r_c = ΣD_c / ΣP_c(θ):
+    //   ds̃_i/dθ = r_c ds_i/dθ + s_i dr_c/dθ,   dr_c/dθ = −(r_c/ΣP_c) Σ_{b∈c} (TᵀG)_b
+    // (i in channel c). A rank-one correction per channel block.
+    const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+    const Eigen::MatrixXf TtG_raw = T.transpose() * G;
+    const Eigen::VectorXf collapsed_raw = T.transpose() * result.Spec();
+    const auto full_blocks = PROsyst::ChannelBlocks(config, config.i_prime);
+    size_t cstart = 0, gci = 0;
+    for(const auto &[fs, fl]: full_blocks) {
+        const size_t cl = config.GetChannelVariableBins(gci, config.i_prime).NBins();
+        const float sumP = collapsed_raw.segment(cstart, cl).sum();
+        const float rc = shape_r(cstart);
+        Eigen::RowVectorXf dr = Eigen::RowVectorXf::Zero(G.cols());
+        if(sumP > 0.0f) dr = -(rc / sumP) * TtG_raw.middleRows(cstart, cl).colwise().sum();
+        G.middleRows(fs, fl) = rc * G.middleRows(fs, fl) + result.Spec().segment(fs, fl) * dr;
+        cstart += cl; ++gci;
+    }
+    return G;
+}
+
+Eigen::VectorXf PROcovariance::GaussNewtonDiagonal(const Eigen::VectorXf &param) {
+    if(strat == EventByEvent) return Eigen::VectorXf();
+    if(model.model_constraint && !model.model_constraint(param.head(model.nparams))) return Eigen::VectorXf();
+
+    // Same prediction, bin reduction and M as operator(), without the residual.
+    PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, true, config.i_prime);
+    Eigen::VectorXf shape_r;
+    const Eigen::VectorXf spec_full = shape_only
+        ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime, &shape_r)
+        : result.Spec();
+    const Eigen::VectorXf collapsed = CollapseMatrix(config, spec_full);
+    const Eigen::VectorXf var = statisticalVariances(collapsed, data.Spec(), &param);
+    std::vector<Eigen::Index> bins;
+    for(Eigen::Index i = 0; i < var.size(); ++i)
+        if(var(i) > 0 && binActive(i)) bins.push_back(i);
+    if(bins.empty()) return Eigen::VectorXf();
+    const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
+        idx(bins.data(), (Eigen::Index)bins.size());
+
+    Eigen::MatrixXf cov = CollapsedScaledCovariance(config, syst->fractional_covariance, spec_full);
+    if(shape_only) {
+        const Eigen::SparseMatrix<float> R = ShapeProjectorCollapsed(config, collapsed, config.i_prime);
+        cov = Eigen::MatrixXf(R * cov * R.transpose());
+    }
+    const Eigen::MatrixXf M = Eigen::MatrixXf(var(idx).asDiagonal()) + cov(idx, idx);
+    const Eigen::LLT<Eigen::MatrixXf> llt(M);
+    if(llt.info() != Eigen::Success) return Eigen::VectorXf();
+
+    const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+    const Eigen::MatrixXf G = spectrumJacobian(param, result, shape_r);
+    const Eigen::MatrixXf J = Eigen::MatrixXf(T.transpose() * G)(idx, Eigen::all);
+    // diag(Jᵀ M⁻¹ J) = column norms² of L⁻¹ J.
+    const Eigen::MatrixXf W = llt.matrixL().solve(J);
+    return 2.0f * W.colwise().squaredNorm().transpose() + PriorCurvatureDiagonal(param);
 }
 
 std::vector<Eigen::Index> PROcovariance::contributingBins() const {

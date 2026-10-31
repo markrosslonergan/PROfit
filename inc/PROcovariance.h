@@ -121,6 +121,16 @@ namespace PROfit{
              */
             void buildConstantStatCache(const Eigen::VectorXf &variances);
 
+            /**
+             * @brief Full-binning spectrum Jacobian ds/dθ (N × nParams, FillSpectraGradient).
+             * @details In shape_only mode the per-channel rescale chain rule is applied, so
+             * Tᵀ G is the Jacobian of the collapsed, rescaled prediction. Binned strategies only.
+             * @param result   The prediction FillSpectra returned at @p param.
+             * @param shape_r  Per-collapsed-bin rescale factors from ShapeRescaleToData (shape_only).
+             */
+            Eigen::MatrixXf spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
+                                             const Eigen::VectorXf &shape_r);
+
         public:
             const PROconfig &config;  ///< Analysis configuration (non-owning reference).
             const PROpeller &peller;  ///< MC event store (non-owning reference).
@@ -161,6 +171,13 @@ namespace PROfit{
              * pearson floor theirs so every active bin stays. Used by PROmetric::GetNdof().
              */
             std::vector<Eigen::Index> contributingBins() const override;
+
+            /**
+             * @brief Gauss-Newton Hessian diagonal 2 diag(Jᵀ M⁻¹ J) + prior curvature (see
+             * PROmetric). M is the metric's own stat + systematic covariance at @p param, held
+             * fixed. Binned strategies only; empty for EventByEvent or a rejected point.
+             */
+            Eigen::VectorXf GaussNewtonDiagonal(const Eigen::VectorXf &param) override;
 
             Eigen::VectorXf GetStatVariances(const Eigen::VectorXf &collapsed_prediction,
                                              const Eigen::VectorXf &comparison,
