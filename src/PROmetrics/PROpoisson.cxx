@@ -15,21 +15,28 @@ namespace {
     // penalty so the minimizer can still move away from it.
     // When a fit-region mask is given, bin b is skipped unless active[b + offset]
     // is nonzero (offset supports channel-local segments with a global mask).
-    float BakerCousinsChi2(const Eigen::VectorXf &vmc, const Eigen::VectorXf &vdata,
-                           const std::vector<char> *active = nullptr, Eigen::Index offset = 0) {
-        float sum = 0.0f;
+    //
+    // Evaluated as 2 n [r − log1p(r)], r = (s − n)/n, and summed, in double. The textbook
+    // form is a difference of nearly equal large numbers: for ~10⁶-event bins near the
+    // minimum each part is ~10³ while the bin's term is ~1, and float rounding (~0.06 per
+    // part) made χ² jump by O(1) between nearby points, ending L-BFGS descents early. s − n
+    // is exact in double for float inputs, so what is left is s's own float rounding.
+    double BakerCousinsChi2(const Eigen::VectorXf &vmc, const Eigen::VectorXf &vdata,
+                            const std::vector<char> *active = nullptr, Eigen::Index offset = 0) {
+        double sum = 0.0;
         for(Eigen::Index b = 0; b < vmc.size(); ++b) {
             if(active && !active->empty() && !(*active)[(size_t)(b + offset)]) continue;
-            const float s = vmc(b), n = vdata(b);
-            if(n <= 0.0f) {
-                if(s > 0.0f) sum += s;
-            } else if(s > 0.0f) {
-                sum += s - n + n * std::log(n / s);
+            const double s = vmc(b), n = vdata(b);
+            if(n <= 0.0) {
+                if(s > 0.0) sum += s;
+            } else if(s > 0.0) {
+                const double r = (s - n) / n;
+                sum += n * (r - std::log1p(r));
             } else {
-                sum += 1e8f;
+                sum += 1e8;
             }
         }
-        return 2.0f * sum;
+        return 2.0 * sum;
     }
 }
 
@@ -90,6 +97,76 @@ void PROpoisson::reset() {
     fs_cache.invalidate();
 }
 
+double PROpoisson::pullDouble(const Eigen::VectorXf &systs) const {
+    Eigen::VectorXd centered = (systs - syst->spline_centers).cast<double>();
+    for(size_t i = 0; i < syst->spline_prior_types.size(); ++i)
+        if(syst->spline_prior_types[i] == SplinePriorType::Uniform) centered(i) = 0.0;
+    if(!correlated_systematics)
+        return (centered.array().square() / syst->spline_priors.cast<double>().array().square()).sum();
+    return centered.dot(prior_covariance_inv.cast<double>() * centered);
+}
+
+double PROpoisson::ValueDouble(const Eigen::VectorXf &param) {
+    const Eigen::VectorXf phys = param.head(model.nparams);
+    if(model.model_constraint && !model.model_constraint(phys)) return 1e10;
+    PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, strat != EventByEvent, config.i_prime);
+    const Eigen::VectorXf vmc = CollapseMatrix(config, shape_only
+        ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime)
+        : result.Spec());
+    return BakerCousinsChi2(vmc, data.Spec(), &active_bins)
+         + pullDouble(param.segment(model.nparams, syst->GetNSplines())) + PhysicsPull(phys);
+}
+
+bool PROpoisson::GaussNewtonSystem(const Eigen::VectorXf &param, double &value,
+                                   Eigen::VectorXd &grad, Eigen::MatrixXd &hess) {
+    if(strat == EventByEvent) return false;
+    const size_t nphys = model.nparams, nsyst = syst->GetNSplines();
+    const Eigen::VectorXf phys = param.head(nphys);
+    if(model.model_constraint && !model.model_constraint(phys)) return false;
+
+    PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, true, config.i_prime);
+    Eigen::VectorXf shape_r;
+    const Eigen::VectorXf &vdata = data.Spec();
+    const Eigen::VectorXf vmc = CollapseMatrix(config, shape_only
+        ? ShapeRescaleToData(config, result.Spec(), vdata, config.i_prime, &shape_r)
+        : result.Spec());
+    const Eigen::VectorXf nuis = param.segment(nphys, nsyst);
+    value = BakerCousinsChi2(vmc, vdata, &active_bins) + pullDouble(nuis) + PhysicsPull(phys);
+
+    // Per collapsed bin: dχ²/ds = 2(s − n)/s and d²χ²/ds² = 2n/s², zero where masked or s <= 0.
+    Eigen::VectorXd w = Eigen::VectorXd::Zero(vmc.size()), c = Eigen::VectorXd::Zero(vmc.size());
+    for(Eigen::Index b = 0; b < vmc.size(); ++b) {
+        if(!binActive(b)) continue;
+        const double s = vmc(b), n = vdata(b);
+        if(s <= 0.0) continue;
+        w(b) = 2.0 * (s - n) / s;
+        if(n > 0.0) c(b) = 2.0 * n / (s * s);
+    }
+    const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+    const Eigen::MatrixXd J = Eigen::MatrixXf(T.transpose() * spectrumJacobian(param, result, shape_r)).cast<double>();
+    grad = J.transpose() * w;
+    hess = J.transpose() * c.asDiagonal() * J;
+
+    // Spline pull (as pullDouble) and the <model> physics priors.
+    Eigen::VectorXd centered = (nuis - syst->spline_centers).cast<double>();
+    for(size_t i = 0; i < syst->spline_prior_types.size(); ++i)
+        if(syst->spline_prior_types[i] == SplinePriorType::Uniform) centered(i) = 0.0;
+    const Eigen::MatrixXd prec = SplinePriorPrecision().cast<double>();
+    if(nsyst > 0) {
+        grad.segment(nphys, nsyst) += 2.0 * (prec * centered);
+        hess.block(nphys, nphys, nsyst, nsyst) += 2.0 * prec;
+    }
+    for(const auto &p : physics_priors) {
+        Eigen::VectorXf dq = Eigen::VectorXf::Zero(nphys);
+        const double q = model.physics_prior_quantity(p, phys, &dq);
+        const Eigen::VectorXd dqd = dq.cast<double>();
+        const double s2 = (double)p.sigma * p.sigma;
+        grad.head(nphys) += (2.0 * (q - p.center) / s2) * dqd;
+        hess.topLeftCorner(nphys, nphys) += (2.0 / s2) * dqd * dqd.transpose();
+    }
+    return true;
+}
+
 PROmetric *PROpoisson::Clone() const {
     return new PROpoisson(model_tag, config, peller, syst, model, data, strat, shape_only, physics_param_fixed);
 }
@@ -123,9 +200,9 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
     const Eigen::VectorXf vmc = CollapseMatrix(config, shape_only
         ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime, &shape_r)
         : result.Spec());
-    float poisson = BakerCousinsChi2(vmc, vdata, &active_bins);
-    float pull = Pull(subvector2) + PhysicsPull(subvector1);
-    float value = poisson + pull;
+    const double poisson = BakerCousinsChi2(vmc, vdata, &active_bins);
+    const double pull = pullDouble(subvector2) + PhysicsPull(subvector1);
+    float value = (float)(poisson + pull);
 
     if(rungradient){
         // ----- Gradient mode dispatch (see PROmetric::GradientMode) -----
@@ -167,7 +244,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
 
         // Base spectrum + per-bin sensitivity for linearised modes.
         // vdata and vmc were already computed for the base value.
-        Eigen::VectorXf w_base;     // 2 (1 - n/s) at base, used by linearised and analytic
+        Eigen::VectorXd w_base;     // 2 (1 - n/s) at base, used by linearised and analytic
         Eigen::VectorXf pull_grad_nuis;
         Eigen::VectorXf pull_grad_phys;
         Eigen::VectorXf vmc_base = vmc;  // base collapsed MC (preserve before perturbed FillSpectra calls)
@@ -175,13 +252,15 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         if (linearised || analytic) {
             // Guard against zero/negative s entries. This is dχ²/ds of BakerCousinsChi2 in
             // every case: n <= 0 < s gives 2, and s <= 0 gives 0 (the penalty is constant).
+            // In double, as 2 (s − n)/s: s − n is exact for float inputs, while 1 − n/s
+            // loses the small difference for large counts.
             w_base.resize(vmc_base.size());
             for (long b = 0; b < vmc_base.size(); ++b) {
                 // Masked-out bins get zero sensitivity so they contribute nothing to
                 // the linearised chain rule w_base . ds/dtheta.
-                if (!binActive(b)) { w_base(b) = 0.0f; continue; }
-                const float s = vmc_base(b);
-                w_base(b) = (s > 0.0f) ? 2.0f * (1.0f - vdata_base(b) / s) : 0.0f;
+                if (!binActive(b)) { w_base(b) = 0.0; continue; }
+                const double s = vmc_base(b), n = vdata_base(b);
+                w_base(b) = (s > 0.0) ? 2.0 * (s - n) / s : 0.0;
             }
             pull_grad_phys = PhysicsPullGradient(subvector1);
             Eigen::VectorXf centered = subvector2 - syst->spline_centers;
@@ -205,7 +284,9 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         if (analytic) {
             const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
             const Eigen::MatrixXf G = spectrumJacobian(param, result, shape_r);
-            Eigen::VectorXf grad_vec = G.transpose() * (T * w_base);
+            // Accumulated in double: the per-bin terms are large and cancel near the minimum.
+            const Eigen::VectorXd w_full = T.cast<double>() * w_base;
+            Eigen::VectorXf grad_vec = (G.cast<double>().transpose() * w_full).cast<float>();
             grad_vec.segment(model.nparams, nsyst) += pull_grad_nuis;
             grad_vec.head(model.nparams) += pull_grad_phys;
             for (size_t i = 0; i < nparams; i++) {
@@ -249,9 +330,9 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
             const Eigen::VectorXf vmc_l = CollapseMatrix(config, shape_only
                 ? ShapeRescaleToData(config, rl.Spec(), vdata, config.i_prime)
                 : rl.Spec());
-            float pois = BakerCousinsChi2(vmc_l, vdata, &active_bins);
+            const double pois = BakerCousinsChi2(vmc_l, vdata, &active_bins);
             Eigen::VectorXf nuis = param_at.segment(nparams - nsyst, nsyst);
-            chi2_out = pois + Pull(nuis) + PhysicsPull(phys);
+            chi2_out = (float)(pois + pullDouble(nuis) + PhysicsPull(phys));
             return true;
         };
 
@@ -309,7 +390,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
                     ds_dtheta = (sign * (vmc_plus - vmc_base)) / h;
                 }
 
-                float grad_i = w_base.dot(ds_dtheta);
+                float grad_i = (float)w_base.dot(ds_dtheta.cast<double>());
                 if (i >= (size_t)(nparams - nsyst)) {
                     grad_i += pull_grad_nuis(i - (nparams - nsyst));
                 } else {
@@ -402,7 +483,7 @@ float PROpoisson::getSingleChannelChi(size_t global_channel_index, const PROspec
         vmc = projection * vmc;
         vdata = projection * vdata;
     }
-    float poisson = BakerCousinsChi2(vmc, vdata,
+    float poisson = (float)BakerCousinsChi2(vmc, vdata,
         projection.size() ? nullptr : (masked ? &active_bins : nullptr),
         projection.size() ? 0 : (Eigen::Index)startBin);
     //float pull = Pull(subvector2);

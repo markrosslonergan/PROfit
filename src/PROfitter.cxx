@@ -185,9 +185,142 @@ Eigen::VectorXf PROfitter::preconditionScales(PROmetric &metric, const Eigen::Ve
     return s;
 }
 
+int PROfitter::solveNuisances(PROmetric &metric, Eigen::VectorXf &x, const Eigen::VectorXf &lbv,
+                              const Eigen::VectorXf &ubv, double &value, Eigen::VectorXd &grad,
+                              Eigen::MatrixXd &hess) {
+    const Eigen::Index nphys = (Eigen::Index)metric.GetModel().nparams;
+    std::vector<Eigen::Index> free_nuis;
+    for(Eigen::Index i = nphys; i < x.size(); ++i) if(lbv(i) < ubv(i)) free_nuis.push_back(i);
+    x = x.cwiseMax(lbv).cwiseMin(ubv);
+    if(!metric.GaussNewtonSystem(x, value, grad, hess)) return -1;
+
+    constexpr int kMaxIter = 50;
+    int it = 0;
+    for(; it < kMaxIter; ++it) {
+        // Active set: a nuisance at a bound whose gradient pushes further out stays there.
+        std::vector<Eigen::Index> F;
+        for(Eigen::Index i : free_nuis) {
+            const bool held = (x(i) <= lbv(i) && grad(i) > 0) || (x(i) >= ubv(i) && grad(i) < 0);
+            if(!held) F.push_back(i);
+        }
+        if(F.empty()) break;
+        const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>> idx(F.data(), (Eigen::Index)F.size());
+        const Eigen::MatrixXd HF = hess(idx, idx);
+        const Eigen::VectorXd gF = grad(idx);
+        const double hscale = std::max(1.0, HF.diagonal().cwiseAbs().maxCoeff());
+
+        bool stepped = false, converged = false;
+        double lambda = 0.0;
+        for(int damp = 0; damp < 8 && !stepped && !converged; ++damp) {
+            Eigen::MatrixXd A = HF;
+            A.diagonal().array() += lambda;
+            const Eigen::LLT<Eigen::MatrixXd> llt(A);
+            if(llt.info() != Eigen::Success) { lambda = lambda > 0 ? 10.0 * lambda : 1e-8 * hscale; continue; }
+            const Eigen::VectorXd d = llt.solve(-gF);
+            // Newton decrement: -gᵀd is twice the predicted decrease.
+            if(-gF.dot(d) < 2e-10 * std::max(1.0, std::fabs(value))) { converged = true; break; }
+            for(double t = 1.0; t > 1e-6; t *= 0.5) {
+                Eigen::VectorXf xn = x;
+                for(Eigen::Index k = 0; k < idx.size(); ++k)
+                    xn(F[k]) = (float)std::clamp((double)x(F[k]) + t * d(k), (double)lbv(F[k]), (double)ubv(F[k]));
+                const double slope = gF.dot(Eigen::VectorXd((xn - x)(idx).cast<double>()));
+                const double fn = metric.ValueDouble(xn);
+                if(fn < value && fn <= value + 1e-4 * std::min(slope, 0.0)) { x = xn; stepped = true; break; }
+            }
+            if(!stepped) lambda = lambda > 0 ? 10.0 * lambda : 1e-6 * hscale;
+        }
+        if(converged || !stepped) break;
+        if(!metric.GaussNewtonSystem(x, value, grad, hess)) return -1;
+    }
+    return it;
+}
+
+int PROfitter::profiledMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
+                                const Eigen::VectorXf &lbv, const Eigen::VectorXf &ubv) {
+    const Eigen::Index nphys = (Eigen::Index)metric.GetModel().nparams;
+    Eigen::VectorXf xc = x.cwiseMax(lbv).cwiseMin(ubv);
+    double value = 0.0;
+    Eigen::VectorXd grad;
+    Eigen::MatrixXd hess;
+    const int first = solveNuisances(metric, xc, lbv, ubv, value, grad, hess);
+    if(first < 0) return -1;
+    int total = first;
+
+    std::vector<Eigen::Index> fp;  // free physics
+    for(Eigen::Index i = 0; i < nphys; ++i) if(lbv(i) < ubv(i)) fp.push_back(i);
+    if(!fp.empty()) {
+        const Eigen::Index m = (Eigen::Index)fp.size();
+        // Outer scales (with preconditioning on): the profiled curvature, i.e. the diagonal of
+        // the Schur complement H_pp − H_pn H_nn⁻¹ H_np of the Gauss-Newton Hessian.
+        Eigen::VectorXf sc = Eigen::VectorXf::Ones(m);
+        if(usePreconditioning(metric)) {
+            std::vector<Eigen::Index> fn;
+            for(Eigen::Index i = nphys; i < xc.size(); ++i) if(lbv(i) < ubv(i)) fn.push_back(i);
+            const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>> ip(fp.data(), m), in(fn.data(), (Eigen::Index)fn.size());
+            Eigen::MatrixXd S = hess(ip, ip);
+            if(!fn.empty()) {
+                const Eigen::LDLT<Eigen::MatrixXd> ldlt(hess(in, in));
+                if(ldlt.info() == Eigen::Success) S -= Eigen::MatrixXd(hess(ip, in)) * ldlt.solve(Eigen::MatrixXd(hess(in, ip)));
+            }
+            for(Eigen::Index k = 0; k < m; ++k) {
+                const Eigen::Index i = fp[k];
+                const float R = (std::isinf(lbv(i)) || std::isinf(ubv(i))) ? 4.0f : ubv(i) - lbv(i);
+                float si = 1e-3f * R;
+                if(std::isfinite(S(k, k)) && S(k, k) * R * R > 1e-6) si = (float)(1.0 / std::sqrt(S(k, k)));
+                sc(k) = std::clamp(si, 1e-6f * R, 0.25f * R);
+            }
+        }
+        Eigen::VectorXf p0(m), zlb(m), zub(m);
+        for(Eigen::Index k = 0; k < m; ++k) {
+            p0(k) = xc(fp[k]);
+            zlb(k) = (lbv(fp[k]) - p0(k)) / sc(k);
+            zub(k) = (ubv(fp[k]) - p0(k)) / sc(k);
+        }
+        Eigen::VectorXf xcur = xc;  // nuisances warm-start from the last evaluation
+        int inner = 0;
+        auto at_z = [&](const Eigen::VectorXf &z) {
+            Eigen::VectorXf xt = xcur;
+            for(Eigen::Index k = 0; k < m; ++k)
+                xt(fp[k]) = std::clamp(p0(k) + sc(k) * z(k), lbv(fp[k]), ubv(fp[k]));
+            return xt;
+        };
+        auto objective = [&](const Eigen::VectorXf &z, Eigen::VectorXf &gz) -> float {
+            Eigen::VectorXf xt = at_z(z);
+            double v = 0.0;
+            Eigen::VectorXd g;
+            Eigen::MatrixXd h;
+            const int n = solveNuisances(metric, xt, lbv, ubv, v, g, h);
+            gz = Eigen::VectorXf::Zero(m);
+            if(n < 0) return 1e10f;
+            inner += n;
+            xcur = xt;
+            for(Eigen::Index k = 0; k < m; ++k) gz(k) = (float)(sc(k) * g(fp[k]));
+            return (float)v;
+        };
+        Eigen::VectorXf z = Eigen::VectorXf::Zero(m);
+        float fz = (float)value;
+        total += solver.minimize(objective, z, fz, zlb, zub);
+        // Re-solve at the accepted point: the last evaluation may have been a line-search trial.
+        xc = at_z(z);
+        const int last = solveNuisances(metric, xc, lbv, ubv, value, grad, hess);
+        if(last < 0) return -1;
+        total += inner + last;
+    }
+    x = xc;
+    fx = (float)value;
+    return total;
+}
+
 int PROfitter::localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
                              const Eigen::VectorXf &lb, const Eigen::VectorXf &ub) {
     last_scales.resize(0);
+    if(fitconfig.profile_nuisances) {
+        const int n = profiledMinimize(metric, x, fx, lb, ub);
+        if(n >= 0) return n;
+        static std::atomic<bool> warned_profile{false};
+        if(!warned_profile.exchange(true))
+            log<LOG_WARNING>(L"%1% || profile_nuisances: this metric/strategy has no Gauss-Newton system (binned -c poisson only so far); using the normal descent.") % __func__;
+    }
     if(!usePreconditioning(metric)) return solver.minimize(metric, x, fx, lb, ub);
 
     static std::atomic<bool> announced{false};

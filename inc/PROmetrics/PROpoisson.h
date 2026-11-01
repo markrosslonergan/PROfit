@@ -46,6 +46,10 @@ namespace PROfit{
             Eigen::MatrixXf spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
                                              const Eigen::VectorXf &shape_r);
 
+            /// Pull() accumulated in double. Next to the double Baker-Cousins sum, a float sum
+            /// of ~10² nuisance terms would be the largest rounding left in the value.
+            double pullDouble(const Eigen::VectorXf &systs) const;
+
         public:
             const PROconfig &config; ///< Analysis configuration (non-owning reference).
             const PROpeller &peller; ///< MC event store (non-owning reference).
@@ -59,6 +63,21 @@ namespace PROfit{
 
             /** @brief Reset cached state and clear any fixed-parameter list. */
             virtual void reset();
+
+            /** @brief The Gaussian spline pull, summed in double (see pullDouble). */
+            float Pull(const Eigen::VectorXf &systs) override { return (float)pullDouble(systs); }
+
+            /**
+             * @brief chi2, gradient and Gauss-Newton Hessian in double (see PROmetric).
+             * @details H = Jᵀ diag(2n/s²) J + prior curvature, J = d(collapsed prediction)/dθ
+             * over the active bins with s > 0 (n = 0 bins are linear in s: no curvature). For
+             * splines whose response is linear (eigenmode decomposition knobs) this is the exact
+             * Hessian of the nuisance block. Binned strategies only.
+             */
+            bool GaussNewtonSystem(const Eigen::VectorXf &param, double &value,
+                                   Eigen::VectorXd &grad, Eigen::MatrixXd &hess) override;
+
+            double ValueDouble(const Eigen::VectorXf &param) override;
 
             /** @brief Return a heap-allocated copy of this PROpoisson. */
             virtual PROmetric *Clone() const;

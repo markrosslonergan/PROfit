@@ -503,7 +503,7 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
                         const std::string &preset_filter,
                         bool throw_systs, bool throw_phys,
                         const std::string &chi2_kind, bool shape_only, int precondition, bool ordering_octant_seeds,
-                        bool ordering_octant_polish)
+                        bool ordering_octant_polish, bool profile_nuisances)
 {
     const PROmodel &model = base_metric.GetModel();
     const PROsyst  &syst  = base_metric.GetSysts();
@@ -662,6 +662,7 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
         pcfg.precondition = precondition;
         pcfg.ordering_octant_seeds = ordering_octant_seeds;
         pcfg.ordering_octant_polish = ordering_octant_polish;
+        pcfg.profile_nuisances = profile_nuisances;
         for (auto mode : *cell.modes) {
             pcfg.gradient_mode = mode;
 
@@ -866,7 +867,7 @@ std::vector<BenchResult> run_scale_test(
                            opts.grad_csv, opts.grad_presets,
                            opts.throw_systs, opts.throw_phys,
                            opts.chi2, opts.shape_only, opts.precondition, opts.ordering_octant_seeds,
-                           opts.ordering_octant_polish);
+                           opts.ordering_octant_polish, opts.profile_nuisances);
     }
 
     log<LOG_INFO>(L"%1% || ===== PRObench scale-test complete: %2% tests =====")

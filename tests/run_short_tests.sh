@@ -879,6 +879,19 @@ else
     FAIL=$((FAIL+1))
 fi
 
+# --- 21. --profile-nuisances (Gauss-Newton nuisance solve, -c poisson only) -------
+# Neyman has no Gauss-Newton system: the flag falls back to the normal descent, so an
+# SBN fit with it is byte-identical to t01. Poisson with it: smoke run.
+run_test t85aprofsbn --use-fake-data --profile-nuisances global
+if cmp -s "${TAG}_t01global_global_fit.txt" "${TAG}_t85aprofsbn_global_fit.txt"; then
+    note "PASS  t85bprofsbnsame  (SBN global fit byte-identical with --profile-nuisances)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t85bprofsbnsame  (--profile-nuisances changed a neyman fit)"
+    FAIL=$((FAIL+1))
+fi
+run_test t85cprofpois --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c poisson "${PEX[@]}" --profile-nuisances global
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

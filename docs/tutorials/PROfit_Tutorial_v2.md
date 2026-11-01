@@ -1141,6 +1141,19 @@ changes by orders of magnitude between small and large mixing. The default,
 covariance metric (neyman, pearson or CNP). With `poisson` or
 `--event-by-event` every parameter uses the range-based scale.
 
+**Profiling the nuisances (`--profile-nuisances`, `-c poisson` only so
+far).** With ~10² nuisance parameters whose data constraints mix them (e.g.
+covariance eigenmodes against bins spanning 10–10⁶ events), the nuisance
+block alone can have a Hessian condition number around 10⁵. L-BFGS then needs
+thousands of iterations. With this flag each local descent splits the
+problem in two. L-BFGS-B runs over the free physics parameters only. At every
+physics point it tries, the nuisances are solved directly by damped
+Gauss-Newton steps on their full Hessian, computed in double: 2Jᵀdiag(n/μ²)J
+plus the prior. That solve is exact in a few steps when the nuisance response
+is linear, as for eigenmode knobs. With all physics fixed (`--syst-only`) it
+is pure Gauss-Newton. It is off by default. With any other metric the flag
+warns and the normal descent is used.
+
 ### Metric choice matters
 
 ```bash

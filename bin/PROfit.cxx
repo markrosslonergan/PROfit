@@ -159,6 +159,13 @@ int main(int argc, char* argv[])
         fitConfig.ordering_octant_polish = true;
         scanFitConfig.ordering_octant_polish = true;
     }
+    if (options.profile_nuisances) {
+        if (options.chi2 != "poisson")
+            log<LOG_WARNING>(L"%1% || --profile-nuisances is implemented for -c poisson only so far; with %2% the fits use the normal descent.")
+                % __func__ % options.chi2.c_str();
+        fitConfig.profile_nuisances = true;
+        scanFitConfig.profile_nuisances = true;
+    }
     log<LOG_INFO>(L"%1% || Gradient mode: %2% (global) / %3% (scan)") % __func__
         % PROmetric::gradientModeName(fitConfig.gradient_mode)
         % PROmetric::gradientModeName(scanFitConfig.gradient_mode);

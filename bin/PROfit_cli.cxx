@@ -116,6 +116,11 @@ PROpt::PROpt(int argc, char **argv) {
                 "more from the three mass-ordering x theta23-octant variants of its best point (3 extra descents per fit). "
                 "Independent of --ordering-octant-seeds: use either or both. No effect on other models. Same as "
                 "--fit-options/--scan-fit-options ordering_octant_polish 1.");
+        app.add_flag("--profile-nuisances", profile_nuisances,
+                "-c poisson only (so far): every local descent runs L-BFGS-B over the free physics parameters only and, at "
+                "each physics point, solves the nuisances by damped Gauss-Newton steps on the full Hessian. For many "
+                "nuisances whose data constraints mix them. Default off. Same as --fit-options/--scan-fit-options "
+                "profile_nuisances 1.");
         auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");

@@ -268,6 +268,23 @@ namespace PROfit {
              */
             virtual float CovarianceLnDetTerm([[maybe_unused]] const Eigen::VectorXf &param) { return 0.0f; }
             /**
+             * @brief chi2, its gradient and its Gauss-Newton Hessian at @p param, all in double.
+             * @details Used by PROfitter's opt-in nuisance profiling (fit option
+             * `profile_nuisances`): the nuisance block is solved by damped Gauss-Newton steps.
+             * Full nParams() vector and matrix; the Hessian holds the data term plus the prior
+             * curvature. Returns false where not implemented (default) or when the point is
+             * rejected; only PROpoisson implements it so far.
+             */
+            virtual bool GaussNewtonSystem([[maybe_unused]] const Eigen::VectorXf &param, [[maybe_unused]] double &value,
+                                           [[maybe_unused]] Eigen::VectorXd &grad, [[maybe_unused]] Eigen::MatrixXd &hess) {
+                return false;
+            }
+            /** @brief chi2 at @p param in double where the metric evaluates it in double (PROpoisson). */
+            virtual double ValueDouble(const Eigen::VectorXf &param) {
+                Eigen::VectorXf g = Eigen::VectorXf::Zero(param.size());
+                return (*this)(param, g, false);
+            }
+            /**
              * @brief Print a human-readable summary of the metric evaluation at @p param.
              * @param param  Parameter vector to evaluate at.
              */

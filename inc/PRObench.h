@@ -117,6 +117,7 @@ namespace PRObench {
         int precondition = -1;
         bool ordering_octant_seeds = false; ///< (p) benchmark: the `ordering_octant_seeds` fit option for every preset.
         bool ordering_octant_polish = false; ///< (p) benchmark: the `ordering_octant_polish` fit option for every preset.
+        bool profile_nuisances = false;      ///< (p) benchmark: the `profile_nuisances` fit option for every preset.
     };
 
     /**
