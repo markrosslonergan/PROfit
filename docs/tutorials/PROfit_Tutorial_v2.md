@@ -717,9 +717,9 @@ through the oscillation models and splines, *plus* the exact
 covariance-scaling term the old Gauss-Newton `-lin` modes dropped): as
 accurate as `central-full` at the cost of roughly one evaluation, so it is
 the right choice for scans *and* publication runs. It applies to the
-`neyman` and `pearson` binned strategies (for `pearson` it also
-differentiates the prediction-valued statistical variance); `CNP`,
-`poisson`, and `--eventbyevent` automatically
+`neyman`, `pearson` and `poisson` binned strategies (for `pearson` it also
+differentiates the prediction-valued statistical variance); `CNP` and
+`--eventbyevent` automatically
 fall back to `central-lin` (`pearson` with `--eventbyevent` to
 `one-sided-full`: its statistical variance IS the prediction, so the term
 Gauss-Newton drops is first-order and the lin modes can stall), each with
@@ -1165,9 +1165,10 @@ PROjector every covariance must be promoted (`--projector-knobs -1`, no
 `--projector-keep-cov`). The legacy
 spellings `PROchi`, `PROCNP`, and `Poisson` still work as deprecated
 aliases (mapping to `neyman`/`CNP`/`poisson` with a one-time warning).
-`neyman` and `pearson` have the closed-form analytic gradient (and the
-`grad-*` preset defaults); `CNP`/`poisson` fall back to `central-lin` and
-use the legacy `good`/`fast` presets. Adding a
+`neyman`, `pearson` and `poisson` have the closed-form analytic gradient
+(and the `grad-*` preset defaults); `CNP` falls back to `central-lin` and
+uses the legacy `good`/`fast` presets (with `--frozen-cov` it has the
+analytic gradient too). Adding a
 new metric
 is deliberately easy — they all implement the same `PROmetric` interface.
 

@@ -119,8 +119,9 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
     // Shape-only: the PREDICTION is rescaled onto the data per channel; n stays the
     // observed integer counts so Baker-Cousins remains a likelihood ratio.
     const Eigen::VectorXf &vdata = data.Spec();
+    Eigen::VectorXf shape_r;  // per-collapsed-bin rescale factors, for the analytic chain rule
     const Eigen::VectorXf vmc = CollapseMatrix(config, shape_only
-        ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime)
+        ? ShapeRescaleToData(config, result.Spec(), data.Spec(), config.i_prime, &shape_r)
         : result.Spec());
     float poisson = BakerCousinsChi2(vmc, vdata, &active_bins);
     float pull = Pull(subvector2) + PhysicsPull(subvector1);
@@ -134,7 +135,12 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         // with analytic per-bin sensitivity
         //     d chi²_Pois / d s_b = 2 (1 - n_b / s_b)
         //
-        // Linearised modes here compose this analytic ∂chi²/∂s with an FD on s:
+        // The analytic mode composes it with the exact spectrum Jacobian G = ds/dθ
+        // (FillSpectraGradient; per-channel rescale chain rule in shape_only mode):
+        //     d chi²/dθ = Gᵀ (T w) + dP/dθ,   w_b = 2 (1 - n_b / s_b)
+        // where T broadcasts the collapsed weights to the full binning. It is exact:
+        // there is no covariance term to differentiate.
+        // Linearised modes compose ∂chi²/∂s with an FD on s instead:
         //     d chi²/dθ_i ≈ Σ_b 2(1 - n_b/s_b^base) · (ds_b/dθ_i)_FD + dP/dθ_i
         // In shape_only mode s_b is the per-channel rescaled prediction (recomputed
         // at every FD point below); n_b is the observed data in every mode.
@@ -147,26 +153,28 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
         // the LBFGS-direction-tracking heuristic, which was always somewhat
         // approximate.
         GradientMode mode = gradient_mode;
-        // Analytic gradient is implemented in PROchi only so far. For Poisson the
-        // linearised chain rule is already exact modulo FD truncation in dδ/dθ.
-        if (mode == GradientAnalytic) {
+        // FillSpectraGradient needs the binned factorised spectrum. For the event-by-event
+        // fill the linearised chain rule is already exact modulo FD truncation in ds/dθ.
+        if (mode == GradientAnalytic && strat == EventByEvent) {
             static std::atomic<bool> warned_analytic{false};
             if(!warned_analytic.exchange(true))
-                log<LOG_WARNING>(L"%1% || Analytic gradient not implemented for PROpoisson; falling back to %2%.") % __func__ % gradientModeName(GradientFallback);
+                log<LOG_WARNING>(L"%1% || Analytic gradient not available for the event-by-event strategy; falling back to %2%.") % __func__ % gradientModeName(GradientFallback);
             mode = GradientFallback;
         }
+        const bool analytic   = (mode == GradientAnalytic);
         const bool linearised = (mode == GradientCentralLin) || (mode == GradientOneSidedLin);
         const bool one_sided  = (mode == GradientOneSidedFull) || (mode == GradientOneSidedLin);
 
         // Base spectrum + per-bin sensitivity for linearised modes.
         // vdata and vmc were already computed for the base value.
-        Eigen::VectorXf w_base;     // 2 (1 - n/s) at base, used by linearised
+        Eigen::VectorXf w_base;     // 2 (1 - n/s) at base, used by linearised and analytic
         Eigen::VectorXf pull_grad_nuis;
         Eigen::VectorXf pull_grad_phys;
         Eigen::VectorXf vmc_base = vmc;  // base collapsed MC (preserve before perturbed FillSpectra calls)
         Eigen::VectorXf vdata_base = vdata;
-        if (linearised) {
-            // Guard against zero/negative s entries.
+        if (linearised || analytic) {
+            // Guard against zero/negative s entries. This is dχ²/ds of BakerCousinsChi2 in
+            // every case: n <= 0 < s gives 2, and s <= 0 gives 0 (the penalty is constant).
             w_base.resize(vmc_base.size());
             for (long b = 0; b < vmc_base.size(); ++b) {
                 // Masked-out bins get zero sensitivity so they contribute nothing to
@@ -192,6 +200,29 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
                 for(size_t i = 0; i < syst->spline_prior_types.size(); ++i)
                     if(syst->spline_prior_types[i] == SplinePriorType::Uniform) pull_grad_nuis(i) = 0.0f;
             }
+        }
+
+        if (analytic) {
+            const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+            const Eigen::MatrixXf G = spectrumJacobian(param, result, shape_r);
+            Eigen::VectorXf grad_vec = G.transpose() * (T * w_base);
+            grad_vec.segment(model.nparams, nsyst) += pull_grad_nuis;
+            grad_vec.head(model.nparams) += pull_grad_phys;
+            for (size_t i = 0; i < nparams; i++) {
+                if (is_fixed.size() > 0 && is_fixed.at(i)) { gradient(i) = 0.0f; continue; }
+                gradient(i) = grad_vec(i);
+                // Same boundary "bounce" as the FD paths: zero the gradient when it would
+                // push further out of the box.
+                const bool have_bounds = (lb.size() > (Eigen::Index)i && ub.size() > (Eigen::Index)i);
+                const float boundary_tol = 2.0f * std::numeric_limits<float>::epsilon();
+                const bool at_lower = have_bounds && std::fabs(param(i) - lb(i)) < boundary_tol;
+                const bool at_upper = have_bounds && std::fabs(ub(i) - param(i)) < boundary_tol;
+                if ((at_lower && gradient(i) > 0) || (at_upper && gradient(i) < 0)) gradient(i) = 0.0f;
+                if (!std::isfinite(gradient(i))) gradient(i) = 0.0f;
+            }
+            last_param = param;
+            last_value = value;
+            return value;
         }
 
         // Helper: collapsed MC spec at arbitrary param (per-channel rescaled onto the
@@ -324,6 +355,30 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
     last_value = value;
 
     return value;
+}
+
+Eigen::MatrixXf PROpoisson::spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
+                                             const Eigen::VectorXf &shape_r) {
+    Eigen::MatrixXf G = FillSpectraGradient(config, peller, *syst, model, param, fs_cache, config.i_prime);
+    if(!shape_only) return G;
+    // Chain rule for the per-channel rescale s̃ = s ∘ (T r), r_c = ΣD_c / ΣP_c(θ):
+    //   ds̃_i/dθ = r_c ds_i/dθ + s_i dr_c/dθ,   dr_c/dθ = −(r_c/ΣP_c) Σ_{b∈c} (TᵀG)_b
+    // (i in channel c). A rank-one correction per channel block.
+    const Eigen::SparseMatrix<float> &T = config.GetCollapsingMatrixSparse();
+    const Eigen::MatrixXf TtG_raw = T.transpose() * G;
+    const Eigen::VectorXf collapsed_raw = T.transpose() * result.Spec();
+    const auto full_blocks = PROsyst::ChannelBlocks(config, config.i_prime);
+    size_t cstart = 0, gci = 0;
+    for(const auto &[fs, fl]: full_blocks) {
+        const size_t cl = config.GetChannelVariableBins(gci, config.i_prime).NBins();
+        const float sumP = collapsed_raw.segment(cstart, cl).sum();
+        const float rc = shape_r(cstart);
+        Eigen::RowVectorXf dr = Eigen::RowVectorXf::Zero(G.cols());
+        if(sumP > 0.0f) dr = -(rc / sumP) * TtG_raw.middleRows(cstart, cl).colwise().sum();
+        G.middleRows(fs, fl) = rc * G.middleRows(fs, fl) + result.Spec().segment(fs, fl) * dr;
+        cstart += cl; ++gci;
+    }
+    return G;
 }
 
 float PROpoisson::getSingleChannelChi(size_t global_channel_index, const PROspec &cv, size_t var_index, const Eigen::MatrixXf &projection) {

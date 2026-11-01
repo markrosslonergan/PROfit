@@ -855,6 +855,30 @@ else
     FAIL=$((FAIL+1))
 fi
 
+# --- 20. Poisson analytic gradient ---------------------------------------------
+# G^T (T w) with w = 2(1 - n/s), the linearised mode's weight with the exact
+# Jacobian. Poisson refuses covariance systematics, so exclude them. At random
+# spline points Poisson chi2 is huge (and s <= 0 bins add a 2e8 penalty), so the
+# float central-full reference is noise: pin the splines. Shape-only makes some
+# physics components ~0, which inflates mean_rel for every mode, so there the
+# analytic mode must match the (FD-exact) linearised mode's absolute error.
+PEX=(--exclude-systs MCStat RPA_CCQE NormCCMEC CoulombCCQE MaCCRES MvCCRES)
+run_test t84apoisgrad -l logs/t84apoisgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c poisson "${PEX[@]}" \
+    --fix "${SPLINES[@]}" scale-test --tests gradcheck -N 200
+grad_rel_check t84bpoisgradrel logs/t84apoisgrad.full.log
+run_test t84cpoisshgrad -l logs/t84cpoisshgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c poisson "${PEX[@]}" --shapeonly \
+    --fix "${SPLINES[@]}" scale-test --tests gradcheck -N 200
+an_abs=$(sed -n 's/.*\[GRADCHECK\] mode=analytic .*max_abs=\([^ ]*\) mean_abs=\([^ ]*\) .*/\1 \2/p' logs/t84cpoisshgrad.full.log | tail -n 1)
+lin_abs=$(sed -n 's/.*\[GRADCHECK\] mode=central-linearised .*mean_abs=\([^ ]*\) .*/\1/p' logs/t84cpoisshgrad.full.log | tail -n 1)
+if [ -n "$an_abs" ] && [ -n "$lin_abs" ] && awk -v a="$an_abs" -v l="$lin_abs" 'BEGIN { split(a, v, " "); exit !(v[1] < 1 && v[2] <= 2*l + 1e-4) }' \
+        && ! grep -q "falling back" logs/t84cpoisshgrad.full.log; then
+    note "PASS  t84dpoisshgradabs  (analytic max_abs/mean_abs $an_abs vs central-lin mean_abs $lin_abs)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t84dpoisshgradabs  (analytic '$an_abs' vs central-lin mean_abs '$lin_abs', or fell back)"
+    FAIL=$((FAIL+1))
+fi
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

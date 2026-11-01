@@ -304,7 +304,7 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
 // hypercube, PSO effectively off, the budget spent on many cheap multistart
 // descents. That shape only pays off when a gradient really costs ~one evaluation
 // and is exact. Three things can take that away:
-//   * a metric other than neyman/pearson (CNP / poisson demote to central-lin),
+//   * a metric other than neyman/pearson/poisson (CNP demotes to central-lin),
 //   * --event-by-event (the unbinned strategy demotes too),
 //   * a model without closed-form get_probs_grad (PROmodel's base class falls back
 //     to a central finite difference on the probabilities, so every gradient costs
@@ -314,7 +314,8 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
 void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel &model) {
     std::vector<std::string> reasons;
     // A frozen M gives every covariance metric (CNP too) the analytic gradient.
-    const bool analytic_metric = options.chi2 == "neyman" || options.chi2 == "pearson" || (options.chi2 == "CNP" && options.frozen_cov);
+    const bool analytic_metric = options.chi2 == "neyman" || options.chi2 == "pearson" || options.chi2 == "poisson"
+                              || (options.chi2 == "CNP" && options.frozen_cov);
     if(!analytic_metric) reasons.push_back(options.chi2);
     if(options.eventbyevent)            reasons.push_back("--event-by-event");
     if(!model.has_analytic_gradient())  reasons.push_back("model '" + config.m_model_tag +

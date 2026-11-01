@@ -37,11 +37,14 @@ namespace PROfit{
      * All heavy objects are stored as (const) references or pointers owned by the calling
      * executable.
      * @todo Add capability to define the chi-squared function externally.
-     * @todo Improve analytic gradient calculation.
      */
     class PROpoisson : public PROmetric
     {
         private:
+            /// Full-binning spectrum Jacobian ds/dθ with the shape-only rescale chain rule
+            /// (same as PROcovariance::spectrumJacobian, kept separate on purpose).
+            Eigen::MatrixXf spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
+                                             const Eigen::VectorXf &shape_r);
 
         public:
             const PROconfig &config; ///< Analysis configuration (non-owning reference).
