@@ -131,6 +131,26 @@ namespace PROfit{
             Eigen::MatrixXf spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
                                              const Eigen::VectorXf &shape_r);
 
+            // Covariance options (PROconfig::CovarianceOptions), read at construction.
+            bool cov_lndet = false;               ///< Add ln det M − ln det M(reference) to χ².
+            bool cov_frozen = false;              ///< M held at the reference prediction.
+            std::vector<float> cov_reference_in;  ///< Configured reference vector (may be empty).
+
+            // Lazily built at the first evaluation (it calls the subclasses' statisticalVariances,
+            // so it cannot run in this constructor); reset by override_systs.
+            mutable bool cov_ref_ready = false;
+            mutable double lndet_ref = 0.0;                  ///< ln det M at the reference.
+            mutable std::vector<Eigen::Index> frozen_idx;    ///< Usable bins of the frozen M.
+            mutable Eigen::VectorXf frozen_var;              ///< Statistical variances at the reference (collapsed).
+            mutable Eigen::LLT<Eigen::MatrixXf> frozen_llt;  ///< Cholesky factor of the frozen M.
+            mutable float last_lndet_term = 0.0f;            ///< ln det part of the last operator() value.
+
+            /// The reference parameter vector: configured physics (and splines, when the vector
+            /// matches nParams()), else model defaults and the splines' prior centres.
+            Eigen::VectorXf covarianceReferenceParams() const;
+            /// Build lndet_ref (and the frozen M) at the reference prediction, once.
+            void ensureCovarianceReference() const;
+
         public:
             const PROconfig &config;  ///< Analysis configuration (non-owning reference).
             const PROpeller &peller;  ///< MC event store (non-owning reference).
@@ -159,6 +179,7 @@ namespace PROfit{
             virtual void override_systs(const PROsyst &new_syst) {
                 syst = &new_syst;
                 fs_cache.invalidate();
+                cov_ref_ready = false;
             }
 
             /** @brief The analysis configuration (also public as `config`). */
@@ -179,9 +200,13 @@ namespace PROfit{
              */
             Eigen::VectorXf GaussNewtonDiagonal(const Eigen::VectorXf &param) override;
 
+            float CovarianceLnDetTerm(const Eigen::VectorXf &param) override;
+
+            /// With a frozen M, the variances frozen at the reference prediction.
             Eigen::VectorXf GetStatVariances(const Eigen::VectorXf &collapsed_prediction,
                                              const Eigen::VectorXf &comparison,
                                              const Eigen::VectorXf &param) const override {
+                if(cov_frozen) { ensureCovarianceReference(); return frozen_var; }
                 return statisticalVariances(collapsed_prediction, comparison, &param);
             }
 

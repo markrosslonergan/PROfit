@@ -247,6 +247,56 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
     }
 }
 
+// --lndet / --frozen-cov / --cov-reference become PROconfig::CovarianceOptions, which every
+// PROcovariance reads at construction: install them before the first metric is built.
+void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs) {
+    if(!options.lndet && !options.frozen_cov) {
+        if(!options.cov_reference.empty())
+            log<LOG_WARNING>(L"%1% || --cov-reference is only used with --lndet or --frozen-cov; ignoring it.") % __func__;
+        return;
+    }
+    if(options.chi2 == "poisson") {
+        log<LOG_ERROR>(L"%1% || -c poisson has no covariance matrix: --lndet and --frozen-cov apply to neyman, pearson and CNP only.") % __func__;
+        exit(EXIT_FAILURE);
+    }
+    if(options.lndet && options.frozen_cov)
+        log<LOG_WARNING>(L"%1% || With --frozen-cov, ln det M is a constant: --lndet adds nothing.") % __func__;
+
+    const size_t nphys = model.nparams, nsyst = systs.GetNSplines();
+    std::vector<float> ref(nphys + nsyst, 0.0f);
+    for(size_t i = 0; i < nphys; ++i) ref[i] = model.default_val(i);
+    for(size_t i = 0; i < nsyst && i < (size_t)systs.spline_centers.size(); ++i) ref[nphys + i] = systs.spline_centers(i);
+    for(const auto &[name, value]: options.cov_reference) {
+        const auto pit = std::find(model.param_names.begin(), model.param_names.end(), name);
+        if(pit != model.param_names.end()) {
+            const size_t i = std::distance(model.param_names.begin(), pit);
+            if(model.is_log10[i] && !(value > 0)) {
+                log<LOG_ERROR>(L"%1% || --cov-reference %2% = %3%: a log10 parameter takes a positive physical value.") % __func__ % name.c_str() % value;
+                exit(EXIT_FAILURE);
+            }
+            ref[i] = model.is_log10[i] ? std::log10(value) : value;
+            if(ref[i] < model.lb(i) || ref[i] > model.ub(i))
+                log<LOG_WARNING>(L"%1% || --cov-reference %2% = %3% lies outside the parameter's fit range.") % __func__ % name.c_str() % value;
+            continue;
+        }
+        const auto sit = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
+        if(sit != systs.spline_names.end()) {
+            ref[nphys + std::distance(systs.spline_names.begin(), sit)] = value;
+            continue;
+        }
+        log<LOG_ERROR>(L"%1% || --cov-reference: '%2%' is neither a physics parameter of model %3% %4% nor a spline systematic.")
+            % __func__ % name.c_str() % config.m_model_tag.c_str() % model.param_names;
+        exit(EXIT_FAILURE);
+    }
+    config.m_covariance_options.lndet = options.lndet;
+    config.m_covariance_options.frozen = options.frozen_cov;
+    config.m_covariance_options.reference = ref;
+    Eigen::VectorXf phys(nphys);
+    for(size_t i = 0; i < nphys; ++i) phys(i) = model.is_log10[i] ? std::pow(10.0f, ref[i]) : ref[i];
+    log<LOG_INFO>(L"%1% || Covariance options: ln det M %2%, frozen M %3%; reference physics (physical units) %4%")
+        % __func__ % (options.lndet ? "on" : "off") % (options.frozen_cov ? "on" : "off") % phys;
+}
+
 // Decide which fitter presets this run actually gets, now that both the metric
 // choice and the model are known.
 //
@@ -263,7 +313,9 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
 // them unless the user picked a preset themselves — an explicit -p is always honoured.
 void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel &model) {
     std::vector<std::string> reasons;
-    if(options.chi2 != "neyman" && options.chi2 != "pearson") reasons.push_back(options.chi2);
+    // A frozen M gives every covariance metric (CNP too) the analytic gradient.
+    const bool analytic_metric = options.chi2 == "neyman" || options.chi2 == "pearson" || (options.chi2 == "CNP" && options.frozen_cov);
+    if(!analytic_metric) reasons.push_back(options.chi2);
     if(options.eventbyevent)            reasons.push_back("--event-by-event");
     if(!model.has_analytic_gradient())  reasons.push_back("model '" + config.m_model_tag +
                                                           "' (no closed-form get_probs_grad)");
@@ -513,7 +565,7 @@ void set_global_bounds(Eigen::VectorXf &lb, Eigen::VectorXf &ub, std::vector<int
     }
 }
 
-void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, const PROmetric &metric) {
+void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, PROmetric &metric) {
     std::ofstream global_fit_out;
     if(global_fit_result.size() > 0) {
         global_fit_out.open(options.final_output_tag+"_global_fit.txt");
@@ -521,6 +573,8 @@ void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &glob
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % global_fit_chi2;
+        if(config.m_covariance_options.lndet && !config.m_covariance_options.frozen)
+            log<LOG_INFO>(L"%1% || of which ln det M - ln det M(reference): %2%") % __func__ % metric.CovarianceLnDetTerm(global_fit_result);
         log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
 
         global_fit_out << "Global best fit:\n";

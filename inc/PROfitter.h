@@ -150,6 +150,14 @@ namespace PROfit {
         /// parameter has χ² curvature ~1; see PROfitter::localMinimize.
         int precondition = -1;
 
+        /// Ordering × octant seeding (off by default; `--ordering-octant-seeds`): every Fit also
+        /// starts from the four ordering/octant variants of each of its start points — every
+        /// passed-in seed and the best Latin/swarm point (PROmodel::degenerate_variants: mass
+        /// ordering × θ23 octant for the LBL models; a no-op for every other model) — and the
+        /// harmonic-scan minima in calcFreqSeedPoints are polished from their variants too. The
+        /// variants are extra descents: they do not take budget from the Latin multistarts.
+        bool ordering_octant_seeds = false;
+
         /** @brief Default constructor — leaves all parameters at their default values. */
         PROfitterConfig(){};
 
@@ -366,6 +374,8 @@ namespace PROfit {
                     n_max_local_retries = value;
                 } else if(param_name == "use_bkg_seed") {
                     use_bkg_seed = (value != 0);
+                } else if(param_name == "ordering_octant_seeds") {
+                    ordering_octant_seeds = (value != 0);
                 } else if(param_name == "precondition") {
                     precondition = (int)value;
                     if(precondition < -1 || precondition > 1 || (float)precondition != value) {
@@ -488,6 +498,7 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || n_max_local_retries: %2%  ") % __func__ % n_max_local_retries;
             log<LOG_INFO>(L"%1% || use_bkg_seed: %2%  ") % __func__ % use_bkg_seed;
             log<LOG_INFO>(L"%1% || precondition: %2%  ") % __func__ % precondition;
+            log<LOG_INFO>(L"%1% || ordering_octant_seeds: %2%  ") % __func__ % ordering_octant_seeds;
             
             log<LOG_INFO>(L"%1% || ------------ Particle Swarm Optimization -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || n_swarm_particles: %2%  ") % __func__ % n_swarm_particles;
@@ -555,6 +566,7 @@ namespace PROfit {
             log<LOG_INFO>(L"  n_max_local_retries                  : Maximum retries if L-BFGS-B throws an exception");
             log<LOG_INFO>(L"  use_bkg_seed                         : 1 (default) fits the background-only fixed seed (physics pinned at model defaults) as a candidate; 0 disables");
             log<LOG_INFO>(L"  precondition                         : Scale each L-BFGS-B descent by the Gauss-Newton curvature of every parameter: -1 (default) auto = on for LBL models, 1 on, 0 off");
+            log<LOG_INFO>(L"  ordering_octant_seeds                : 1 = also refine every seed / start point from its mass-ordering x theta23-octant mirrors (LBL models only); 0 (default) off");
             
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ Particle Swarm Optimization (PSO) Parameters ------");
@@ -789,6 +801,15 @@ namespace PROfit {
              */
             int localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
                               const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
+
+            /**
+             * @brief The model's degenerate mirrors of point @p x that fit in [lb, ub].
+             * @details Full parameter vectors (splines as in @p x, clamped into the box). A mirror
+             * is dropped when it changes a pinned (zero-width) parameter — e.g. the scanned axis
+             * of a profile or surface point — or moves one outside its bounds, or equals @p x.
+             */
+            std::vector<Eigen::VectorXf> degenerateSeedVariants(const PROmetric &metric, const Eigen::VectorXf &x,
+                                                                const Eigen::VectorXf &lb, const Eigen::VectorXf &ub) const;
 
     };
     

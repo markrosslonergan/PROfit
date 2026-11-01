@@ -44,6 +44,8 @@ PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROp
                           " Poisson log likelihood ratio. This is not supported and the covariance"
                           " systematics will be ignored.") % __func__;
     }
+    if(conin.m_covariance_options.lndet || conin.m_covariance_options.frozen)
+        log<LOG_WARNING>(L"%1% || The covariance options (ln det M, frozen M) do not apply to the Poisson likelihood; ignored.") % __func__;
 
     // Build the correlation matrix between priors if configured to
     if (conin.m_mcgen_correlations.size()) {

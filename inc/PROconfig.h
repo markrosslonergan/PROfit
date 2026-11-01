@@ -500,6 +500,18 @@ namespace PROfit{
              *  studies), not part of the analysis definition. */
             std::vector<std::vector<char>> m_variable_active_bins_collapsed;
 
+            /** @brief Runtime-only covariance options of the Gaussian metrics (neyman, pearson, CNP).
+             *  @details Like the active-bins mask: set BEFORE any PROmetric is constructed (main
+             *  does it from --lndet / --frozen-cov / --cov-reference); every PROcovariance reads
+             *  it at construction, so Clone(), the fc/fc-adaptive/brazil workers and their toys
+             *  all carry it with no extra plumbing. Not hashed, not serialized. */
+            struct CovarianceOptions {
+                bool lndet = false;            ///< Add ln det M − ln det M(reference) to χ² (−2 ln L of a Gaussian with θ-dependent M).
+                bool frozen = false;           ///< Hold the whole M (stat + syst) at its value at the reference prediction.
+                std::vector<float> reference;  ///< Reference parameter vector (physics in internal units, then splines); empty = model defaults with splines at their prior centres.
+            };
+            CovarianceOptions m_covariance_options;
+
             std::vector<Eigen::MatrixXf> variable_collapsing_matrices;
             // Sparse companions to variable_collapsing_matrices (one nonzero per row).
             // Used by CollapseMatrix in the chi^2 inner loop; built once in construct_variable_collapsing_matrices.

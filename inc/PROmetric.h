@@ -262,6 +262,11 @@ namespace PROfit {
                 return Eigen::VectorXf();
             }
             /**
+             * @brief The ln det M − ln det M(reference) part of this metric's value at @p param
+             * (PROconfig::CovarianceOptions::lndet). 0 when the term is off or M is frozen.
+             */
+            virtual float CovarianceLnDetTerm([[maybe_unused]] const Eigen::VectorXf &param) { return 0.0f; }
+            /**
              * @brief Print a human-readable summary of the metric evaluation at @p param.
              * @param param  Parameter vector to evaluate at.
              */

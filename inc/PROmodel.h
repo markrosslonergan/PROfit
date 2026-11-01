@@ -264,6 +264,15 @@ public:
      */
     virtual bool wants_preconditioning() const { return false; }
 
+    /**
+     * @brief Physics points this model treats as discrete degeneracies of @p phys.
+     * @details Used only by PROfitter's opt-in ordering × octant seeding (fit option
+     * `ordering_octant_seeds`): every start point of a fit is also refined from these.
+     * Default: none, so the option is a no-op for the model. The LBL models return the
+     * mass-ordering mirror, the θ23-octant mirror and both (lbl_ordering_octant_variants).
+     */
+    virtual std::vector<Eigen::VectorXf> degenerate_variants([[maybe_unused]] const Eigen::VectorXf &phys) const { return {}; }
+
     std::unordered_map<std::string, size_t> param_name_to_index; ///< Fast lookup: parameter name -> index in param_names.
 
     /**

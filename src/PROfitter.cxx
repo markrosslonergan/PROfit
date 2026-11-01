@@ -224,6 +224,24 @@ int PROfitter::localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
     return niter;
 }
 
+std::vector<Eigen::VectorXf> PROfitter::degenerateSeedVariants(const PROmetric &metric, const Eigen::VectorXf &x,
+                                                               const Eigen::VectorXf &lbv, const Eigen::VectorXf &ubv) const {
+    std::vector<Eigen::VectorXf> out;
+    const PROmodel &model = metric.GetModel();
+    const Eigen::Index nphys = (Eigen::Index)model.nparams;
+    const Eigen::VectorXf x0 = x.cwiseMax(lbv).cwiseMin(ubv);
+    for(const Eigen::VectorXf &phys : model.degenerate_variants(x0.head(nphys))) {
+        bool ok = (phys - x0.head(nphys)).squaredNorm() > 0;
+        for(Eigen::Index i = 0; i < nphys && ok; ++i)
+            if(phys(i) != x0(i) && !(lbv(i) < ubv(i) && phys(i) >= lbv(i) && phys(i) <= ubv(i))) ok = false;
+        if(!ok) continue;
+        Eigen::VectorXf v = x0;
+        v.head(nphys) = phys;
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
 float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
     const std::vector<Eigen::VectorXf> seed_points = seed_pt.size() > 0 ? std::vector<Eigen::VectorXf>{seed_pt} : std::vector<Eigen::VectorXf>{};
     return Fit(metric, seed_points);
@@ -393,13 +411,27 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
 
 
 
+    // Ordering × octant seeding: every passed-in seed and the best Latin/swarm point are also
+    // refined from their four ordering/octant variants. The variants are extra descents, so
+    // fudge (the Latin budget the seeds consume) still counts only the passed-in seeds.
+    const bool have_seeds = seed_points.size()>0 && seed_points.front().size()>0;
+    std::vector<Eigen::VectorXf> seed_list;
+    if(have_seeds) seed_list = seed_points;
+    if(fitconfig.ordering_octant_seeds) {
+        std::vector<Eigen::VectorXf> starts = seed_list;
+        starts.push_back(PSO.getGlobalBestPosition());
+        for(const Eigen::VectorXf &st : starts)
+            for(Eigen::VectorXf &v : degenerateSeedVariants(metric, st, lb, ub)) seed_list.push_back(std::move(v));
+        log<LOG_DEBUG>(L"%1% || Ordering x octant seeding: %2% extra start points") % __func__ % (seed_list.size() - (have_seeds ? seed_points.size() : 0));
+    }
+
     int fudge = 0;
-    if(seed_points.size()>0 && seed_points.front().size()>0){
-        fudge = seed_points.size();
+    if(!seed_list.empty()){
+        fudge = have_seeds ? seed_points.size() : 0;
         log<LOG_INFO>(L"%1% || Starting local fit of seed point. ") % __func__ ;
 
         if(run_progress)progress->increment_bar(2);
-        for(size_t s = 0; s < seed_points.size();s++){
+        for(size_t s = 0; s < seed_list.size();s++){
             // Candidate guarantee: the (bound-clamped) seed is itself a valid
             // point whose chi2 costs one evaluation. Record it BEFORE the LBFGS
             // refinement: a seed that is already at/near a minimum routinely
@@ -412,7 +444,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             // above their neighbours. With the seed recorded first, refinement
             // failure degrades to "keep the seed's own chi2".
             {
-                Eigen::VectorXf x0 = seed_points.at(s).cwiseMax(lb).cwiseMin(ub);
+                Eigen::VectorXf x0 = seed_list.at(s).cwiseMax(lb).cwiseMin(ub);
                 Eigen::VectorXf g0 = Eigen::VectorXf::Zero(x0.size());
                 const float f0 = metric(x0, g0, false);
                 if (std::isfinite(f0) && f0 < chimin) {
@@ -423,7 +455,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
             bool seed_success = false;
             for (size_t attempt = 1; attempt <= fitconfig.n_max_local_retries; ++attempt) {
                 try {
-                    x = seed_points.at(s);
+                    x = seed_list.at(s);
                     log<LOG_INFO>(L"%1% || Starting local minimization attempt %2%/%3%") % __func__ % attempt % fitconfig.n_max_local_retries;
 
                     niter = localMinimize(metric, x, fx, lb, ub);
@@ -983,13 +1015,19 @@ int PROfitter::calcFreqSeedPoints(PROmetric &metric) {
         full_ub(osc_par)=metric.GetModel().ub(osc_par);
         metric.setBounds(full_lb,full_ub);
 
-        try{
-            Eigen::VectorXf xf = best_x;
-            float fx = std::numeric_limits<float>::infinity();
-            localMinimize(metric, xf, fx, full_lb, full_ub);
-            if(std::isfinite(fx) && fx < best_chi) { best_chi = fx; best_x = xf; }
-        } catch (const std::exception &except) {
-            exception_string_map[std::string(except.what())]++;
+        // Ordering × octant seeding: polish from this minimum's mirrors too.
+        std::vector<Eigen::VectorXf> polish_starts = {best_x};
+        if(fitconfig.ordering_octant_seeds)
+            for(Eigen::VectorXf &v : degenerateSeedVariants(metric, best_x, full_lb, full_ub)) polish_starts.push_back(std::move(v));
+        for(const Eigen::VectorXf &ps : polish_starts) {
+            try{
+                Eigen::VectorXf xf = ps;
+                float fx = std::numeric_limits<float>::infinity();
+                localMinimize(metric, xf, fx, full_lb, full_ub);
+                if(std::isfinite(fx) && fx < best_chi) { best_chi = fx; best_x = xf; }
+            } catch (const std::exception &except) {
+                exception_string_map[std::string(except.what())]++;
+            }
         }
 
         log<LOG_INFO>(L"%1% || Local min num (%2%) with floating frequency (%3%) has chi %4% (but bf freq was %5%) ") %__func__% p % mpos % best_chi % best_x(osc_par);

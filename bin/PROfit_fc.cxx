@@ -175,6 +175,16 @@ static FCMeta makeFCMeta(const PROconfig &config, const PROmodel &model, const E
     m.strs.push_back({"preset", options.fit_preset.back()});
     m.strs.push_back({"grad_mode", PROmetric::gradientModeName(scanFitConfig.gradient_mode)});
     m.strs.push_back({"version", PROJECT_VERSION_STR});
+    // ln det M / a frozen M change the statistic of every toy and of the data.
+    const PROconfig::CovarianceOptions &co = config.m_covariance_options;
+    if(co.lndet) m.nums.push_back({"cov_lndet", 1.0f});
+    if(co.frozen) m.nums.push_back({"cov_frozen", 1.0f});
+    if((co.lndet || co.frozen) && co.reference.size() >= model.nparams) {
+        for(size_t i = 0; i < model.nparams; ++i)
+            m.nums.push_back({"covref_" + model.param_names[i], model.is_log10[i] ? std::pow(10.0f, co.reference[i]) : co.reference[i]});
+        for(size_t i = model.nparams; i < co.reference.size(); ++i)
+            if(co.reference[i] != 0.0f) m.nums.push_back({"covref_s" + std::to_string(i - model.nparams), co.reference[i]});
+    }
     // Physics priors shape every toy (re-observed centres) and the data statistic.
     for(const auto &p : model.physics_priors) {
         const std::string &n = p.name;
@@ -234,7 +244,7 @@ static bool checkFCMeta(const std::string &filename, const FCMeta &now) {
 
     // Run settings (seed, threads, preset...) may differ between the throwing run and the reuse.
     auto checked_num = [](const std::string &k) {
-        for(const char *pre: {"test_", "fixed_", "profiled_", "truth_", "prior_"})
+        for(const char *pre: {"test_", "fixed_", "profiled_", "truth_", "prior_", "cov_", "covref_"})
             if(k.rfind(pre, 0) == 0) return true;
         return k == "shape_only";
     };

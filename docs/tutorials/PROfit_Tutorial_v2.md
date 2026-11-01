@@ -1171,6 +1171,53 @@ use the legacy `good`/`fast` presets. Adding a
 new metric
 is deliberately easy — they all implement the same `PROmetric` interface.
 
+### ln det M and a frozen covariance (`--lndet`, `--frozen-cov`)
+
+For Gaussian data, −2 ln L = rᵀM⁻¹r + ln det M + const. The covariance
+metrics (`neyman`, `pearson`, `CNP`) minimise only the first term, which is
+exact when M is the same for every hypothesis. But PROfit rebuilds M at every
+tested point: the systematic part is always F∘(μμᵀ), and pearson's
+statistical part is diag(μ). So ln det M changes with θ, and dropping it
+biases fits toward larger predictions. A one-bin example: with a 10%
+uncertainty, μ = 110 is preferred to μ = 90 for an observation of 100. For a
+disappearance search this makes exclusions artificially strong. Two options
+address it:
+
+```bash
+# keep the dynamic M, add ln det M (reported relative to M at the reference)
+PROfit -x tutorial.xml -t TUT -o globld --seed 405 -n 8 --lndet global
+# hold M fixed at a reference prediction instead
+PROfit -x tutorial.xml -t TUT -o globfr --seed 405 -n 8 --frozen-cov --cov-reference dmsq 1 sinsq2thme 0.01 global
+```
+
+* **`--lndet`** adds ln det M − ln det M(reference) to χ². Subtracting the
+  reference keeps χ² and Δχ² readable; it is a constant, so fits and Δχ² are
+  unchanged by the choice of reference. The global-fit log reports how much of
+  the best-fit χ² is the ln det part. The analytic gradient includes
+  tr(M⁻¹ ∂M/∂θ) in closed form for neyman and pearson, shape-only included.
+  The linearised gradient modes would drop it (it does not vanish at the
+  minimum), so with `--lndet` they run as their full finite-difference
+  versions instead.
+* **`--frozen-cov`** evaluates the whole M once, statistical part (by the
+  metric's own convention) and systematic part, at the reference prediction,
+  and keeps it for every tested point. Every metric, CNP included, then has
+  the analytic gradient, and fits are faster, because M is factorised only
+  once.
+* **`--cov-reference name value …`** sets the reference point for both: physics
+  in physical units (like `-i`), splines in σ. Unlisted parameters sit at the
+  model defaults and the splines at their prior centres. For the LBL models
+  give a physical 3ν point here, because the model defaults (e.g. dmsq_31 =
+  1e-3) are not physical.
+
+The options reach everything that builds a metric: profile, surface, fc,
+fc-adaptive and the pseudo-experiments (each toy measures ln det against
+its own reference). `fc` records them in its `fc_meta` and `--reuse` refuses a
+mismatch, and a PROjector constraint records them too. Two things stay
+physical on purpose. Toy data are still generated with the covariance at the
+toy's truth. The post-fit error bands still condition on the dynamic
+covariance at the best fit. `poisson` has no covariance matrix, so the options
+are refused with it.
+
 ### Are the pulls healthy? Pull distributions
 
 The posteriors and the profile 1σ plots show the systematics one at a time.
@@ -2543,13 +2590,19 @@ on R̃₂₄. Hence |Ue4|² = sin²θ₁₄, |Uμ4|² = cos²θ₁₄ sin²θ₂
 
 | # | name | meaning | fit space | bounds | default |
 |---|---|---|---|---|---|
-| 0 | `dmsq_41` | Δm²₄₁ [eV²] | log10 | 10⁻⁴ – 10² | 1 |
+| 0 | `dmsq_41` | Δm²₄₁ [eV²] | log10 | 10⁻⁴ – 10³ | 1 |
 | 1 | `sinsqt14` | sin²θ₁₄ | log10 | 0 – ~1 | 10⁻⁸ |
 | 2 | `sinsqt24` | sin²θ₂₄ | log10 | 0 – ~1 | 10⁻⁸ |
 | 3 | `sinsqt34` | sin²θ₃₄ | log10 | 0 – ~1 | 10⁻⁸ |
 | 4 | `delta_14` | δ₁₄ [rad] | linear | −π – π | 0 |
 | 5 | `delta_24` | δ₂₄ [rad] | linear | −π – π | 0 |
-| 6–11 | `dmsq_21` … `delta_CP` | the six `LBL_3nu-*` parameters | linear | as `LBL_3nu-*` | as `LBL_3nu-*` |
+| 6–11 | `dmsq_21` … `delta_CP` | the six `LBL_3nu-*` parameters | linear | as `LBL_3nu-*`, except `dmsq_31` ±6×10⁻³ and `sinsqt23` 10⁻⁴ – 1−10⁻⁴ | as `LBL_3nu-*` |
+
+The 3ν ranges are wider than for `LBL_3nu-*`. With large sterile mixing the
+minima move to θ₂₃ ≈ θ₃₄ ≈ π/2, with |Δm²₃₂| up to about 4.8×10⁻³ eV². The
+θ₂₃ range is symmetric about maximal mixing, so the octant mirror of every
+point is also in range. It stops 10⁻⁴ short of 0 and 1, where the derivative
+of a linear sin² diverges.
 
 The sterile block comes first because the harmonic seed scan of the global fit
 runs over physics parameter 0. Here that is Δm²₄₁, the parameter whose fast
@@ -2557,6 +2610,22 @@ oscillation makes the χ² multimodal. The 3ν parameters keep their `LBL_3nu-*`
 names, so `--fix`/`-i` lines carry over. In practice you will usually `--fix`
 (or constrain) most of them, and θ₃₄ and the sterile phases only matter with
 NC samples or very long baselines.
+
+**Ordering × octant seeding (`--ordering-octant-seeds`).** With θ₂₃ and Δm²₃₁
+profiled, the χ² has four separate minima: normal or inverted ordering, each
+with a lower and an upper θ₂₃ octant. A scan fit warm-started in one of them
+can stay there when another is lower. In a MINOS-like 3+1 grid this happened
+at about 2% of points and cost up to 1.9 in χ². The flag starts every fit
+from all four variants of each of its start points: the passed-in seeds
+(warm starts, harmonic seeds) and the best Latin-hypercube point. It also
+polishes every harmonic-scan minimum from its variants. The flips are
+Δm²₃₁ → 2Δm²₂₁ − Δm²₃₁ (the sign of Δm²₃₂ flips, its size is kept) and
+sin²θ₂₃ → 1 − sin²θ₂₃. A variant that would move a scanned (pinned)
+parameter, such as Δm²₃₁ on a profile axis, is skipped. It applies to every
+fit PROfit runs (global, profile, surface, every level of the adaptive
+mesh, fc) and is off by default. The cost grows with the number of seeds a
+fit carries; scan fits carry the most. It works
+for both LBL models. For any other model it does nothing and warns.
 
 Rules: **0** = no osc; **1–9** = the full active 3×3 matrix in the
 `LBL_3nu-*` layout (**1** = Pee, **2** = Peμ, **3** = Peτ, **4** = Pμe,

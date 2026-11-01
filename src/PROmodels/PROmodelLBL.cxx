@@ -11,6 +11,16 @@
 
 namespace PROfit {
 
+std::vector<Eigen::VectorXf> lbl_ordering_octant_variants(const Eigen::VectorXf &phys, int i_dm21, int i_dm31, int i_s23) {
+    Eigen::VectorXf ordering = phys;
+    ordering(i_dm31) = 2.0f * phys(i_dm21) - phys(i_dm31);
+    Eigen::VectorXf octant = phys;
+    octant(i_s23) = 1.0f - phys(i_s23);
+    Eigen::VectorXf both = ordering;
+    both(i_s23) = octant(i_s23);
+    return {ordering, octant, both};
+}
+
 LBLInputMode resolve_lbl_inputs(const PROconfig &config, bool matter, std::vector<int> &ivars, double &baseline_km) {
     const std::map<std::string, int> &pmap = config.m_model_parameter_map;
     const bool has_L = pmap.count("L"), has_E = pmap.count("E"), has_LE = pmap.count("L/E");

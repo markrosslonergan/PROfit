@@ -747,6 +747,95 @@ expect_fail t79dprecondbad --pseudo-experiment --fit-options precondition 2 glob
 COMMON=("${SAVED_COMMON[@]}")
 run_test t79eprecondsbn --use-fake-data -i dmsq 1 sinsq2thme 0.02 --shapeonly --fit-options precondition 1 global
 
+# --- 18. ln det M (--lndet) and the frozen covariance (--frozen-cov) -----------
+# Exact: pearson with no covariance systematics and one template scale k on every
+# subchannel, pinned at k = 2 (default=2, --fix) against Asimov data at k = 1, with
+# the reference at k = 1. Then M = diag(k mu), so
+#   ln det M(2) - ln det M(1) = N ln 2  (N = bins in the sum, every mu > 0 here)
+#   chi2 with M frozen at k = 1 = 2 x the dynamic chi2,
+# and with the reference at the tested point the ln det term is 0.
+tmpl_xml local_tmpl_all.xml template '<parameter name="mu" subchannels="." min="0.1" max="5" default="2"/>'
+COMMON=(-x local_tmpl_all.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast -c pearson
+        --exclude-systs MCStat RPA_CCQE NormCCMEC CoulombCCQE MaCCRES MvCCRES)
+LDP=(--use-fake-data -i mu 1 --fix mu "${SPLINES[@]}")
+run_test t80acovdyn    -l logs/t80acovdyn.full.log -w 3 "${LDP[@]}" global
+run_test t80bcovlndet  -l logs/t80bcovlndet.full.log -w 3 "${LDP[@]}" --lndet --cov-reference mu 1 global
+run_test t80ccovfrozen -l logs/t80ccovfrozen.full.log -w 3 "${LDP[@]}" --frozen-cov --cov-reference mu 1 global
+run_test t80dcovlndetref -l logs/t80dcovlndetref.full.log -w 3 "${LDP[@]}" --lndet --cov-reference mu 2 global
+c_dyn=$(global_chi2 t80acovdyn); c_ld=$(global_chi2 t80bcovlndet); c_fr=$(global_chi2 t80ccovfrozen); c_ref=$(global_chi2 t80dcovlndetref)
+# chi2 is logged to 6 significant digits, so compare the logged ln det part itself.
+nb=$(sed -n 's/.*ndf = \([0-9]*\) bins.*/\1/p' logs/t80acovdyn.full.log | tail -n 1)
+ld=$(sed -n 's/.*ln det M - ln det M(reference): *\([-+0-9.eE]*\).*/\1/p' logs/t80bcovlndet.full.log | tail -n 1)
+if [ -n "$ld" ] && [ -n "$nb" ] && awk -v l="$ld" -v n="$nb" 'BEGIN { d=l-n*log(2); if (d<0) d=-d; exit !(d <= 1e-4*n) }'; then
+    note "PASS  t80ecovlndetexact  (ln det term $ld = $nb ln 2; chi2 $c_ld vs $c_dyn)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t80ecovlndetexact  (ln det term '$ld' should be $nb ln 2)"
+    FAIL=$((FAIL+1))
+fi
+if [ -n "$c_dyn" ] && [ -n "$c_fr" ] && [ -n "$c_ref" ] && awk -v a="$c_dyn" -v f="$c_fr" -v r="$c_ref" \
+        'BEGIN { d=f-2*a; e=r-a; if (d<0) d=-d; if (e<0) e=-e; exit !(d <= 1e-5*f && e <= 1e-5*a) }'; then
+    note "PASS  t80fcovfrozenexact  (frozen $c_fr = 2 x $c_dyn; reference at the point: $c_ref)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t80fcovfrozenexact  (frozen '$c_fr' vs 2 x '$c_dyn', reference-at-point '$c_ref' vs '$c_dyn')"
+    FAIL=$((FAIL+1))
+fi
+COMMON=("${SAVED_COMMON[@]}")
+# Gradients: the closed-form tr(M^-1 dM/dtheta) terms (neyman, pearson incl. its
+# diag(dvar) term, shape-only projector) and the frozen-M gradient (CNP gains the
+# analytic mode). A frozen M does not grow with the prediction, so at the random
+# spline points of gradcheck chi2 is huge and the float FD reference is noise: the
+# frozen and pearson checks pin the splines.
+run_test t81aldgrad -l logs/t81aldgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --lndet \
+    scale-test --tests gradcheck -N 200
+grad_rel_check t81bldgradrel logs/t81aldgrad.full.log
+run_test t81cldshgrad -l logs/t81cldshgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --lndet --shapeonly \
+    scale-test --tests gradcheck -N 200
+grad_rel_check t81dldshgradrel logs/t81cldshgrad.full.log
+run_test t81eldpeagrad -l logs/t81eldpeagrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --fix "${SPLINES[@]}" \
+    -c pearson --lndet scale-test --tests gradcheck -N 200
+grad_rel_check t81fldpeagradrel logs/t81eldpeagrad.full.log
+run_test t81gfrcnpgrad -l logs/t81gfrcnpgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --fix "${SPLINES[@]}" \
+    -c CNP --frozen-cov scale-test --tests gradcheck -N 200
+grad_rel_check t81hfrcnpgradrel logs/t81gfrcnpgrad.full.log
+# Provenance and refusals: fc records the options (fc_meta); --reuse without them,
+# poisson, an unknown reference name and a PROjector constraint built without
+# --lndet are refused.
+run_test t82aldfc --use-fake-data --lndet --cov-reference dmsq 1 sinsq2thme 0.01 fc -u 2
+expect_fail_tag t82bldfcreuse t82aldfc --use-fake-data fc --reuse
+expect_fail t82cldpoisson --use-fake-data -c poisson --exclude-systs MCStat RPA_CCQE NormCCMEC CoulombCCQE MaCCRES MvCCRES --lndet global
+expect_fail t82dldbadref --use-fake-data --frozen-cov --cov-reference NotAParam 1 global
+[ -f "$CONSTRAINT" ] && expect_fail t82eldprojector --use-fake-data --projector "$CONSTRAINT" --lndet global
+
+# --- 19. Ordering x octant seeding (--ordering-octant-seeds, LBL models only) --
+# SBN: the flag is a no-op, byte-identical to t01. LBL: Asimov at normal ordering /
+# upper octant, fitted from one start at inverted / lower (--inject-cv) with no Latin
+# multistarts: without the flag the fit stays in that basin, with it a mirror of the
+# start reaches the exact minimum (chi2 = 0).
+run_test t83aossbn --use-fake-data --ordering-octant-seeds global
+if cmp -s "${TAG}_t01global_global_fit.txt" "${TAG}_t83aossbn_global_fit.txt"; then
+    note "PASS  t83bossbnsame  (SBN global fit byte-identical with --ordering-octant-seeds)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t83bossbnsame  (--ordering-octant-seeds changed an SBN fit)"
+    FAIL=$((FAIL+1))
+fi
+COMMON=(-x local_lbl3nu_eonly.xml -t "${TAG}l3p1" -n 1 -v 2 --seed 405 --preset grad-fast)
+OSP=(--use-fake-data -i dmsq_31 2.45e-3 sinsqt23 0.6 --inject-cv dmsq_31 -2.4e-3 sinsqt23 0.4
+     --fix dmsq_21 sinsqt12 sinsqt13 delta_CP "${SPLINES[@]}" --fit-options n_latin_points 1 n_localfit 1)
+run_test t83coslbloff -l logs/t83coslbloff.full.log -w 3 "${OSP[@]}" global
+run_test t83doslblon  -l logs/t83doslblon.full.log -w 3 "${OSP[@]}" --ordering-octant-seeds global
+c_off=$(global_chi2 t83coslbloff); c_on=$(global_chi2 t83doslblon)
+if [ -n "$c_off" ] && [ -n "$c_on" ] && awk -v a="$c_off" -v b="$c_on" 'BEGIN { exit !(b < 1e-3 && a > 1) }'; then
+    note "PASS  t83eosrecover  (chi2 $c_on with the mirrors vs $c_off from the wrong-basin start alone)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t83eosrecover  (chi2 with mirrors '$c_on' (want < 1e-3), without '$c_off' (want > 1))"
+    FAIL=$((FAIL+1))
+fi
+COMMON=("${SAVED_COMMON[@]}")
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

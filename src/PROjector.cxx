@@ -325,6 +325,11 @@ namespace PROfit {
                     % __func__ % (c.shape_only ? "with" : "without") % (pjconf.shape_only ? "shape-only" : "not shape-only");
                 return false;
             }
+            if(c.lndet != pjconf.lndet || c.frozen_cov != pjconf.frozen_cov) {
+                log<LOG_ERROR>(L"%1% || PROjector constraint was produced with --lndet %2% / --frozen-cov %3%, this run has %4% / %5%; the nuisance posterior is not transferable.")
+                    % __func__ % c.lndet % c.frozen_cov % pjconf.lndet % pjconf.frozen_cov;
+                return false;
+            }
 
             std::vector<size_t> matched_channels;
             if(!PROjectorSelectChannels(config, c.prefit_pattern, matched_channels)) return false;
@@ -566,6 +571,8 @@ namespace PROfit {
         c.physics_were_fixed = !pjconf.float_physics;
         c.prefit_chi2 = chi2;
         c.shape_only = metric.ShapeOnly();
+        c.lndet = metric.GetConfig().m_covariance_options.lndet;
+        c.frozen_cov = metric.GetConfig().m_covariance_options.frozen;
 
         log<LOG_INFO>(L"%1% || ############ PROjector pre-fit posterior summary ############") % __func__;
         int n_widened = 0;

@@ -26,6 +26,13 @@ enum class LBLInputMode { PairLE, EOnly, RatioLE };
 LBLInputMode resolve_lbl_inputs(const PROconfig &config, bool matter, std::vector<int> &ivars, double &baseline_km);
 
 /**
+ * @brief Mass-ordering × θ23-octant mirrors of an LBL physics point (PROmodel::degenerate_variants).
+ * @details Ordering: Δm²₃₁ → 2Δm²₂₁ − Δm²₃₁, which flips the sign of Δm²₃₂ and keeps its size.
+ * Octant: sin²θ23 → 1 − sin²θ23. Returns the three non-identity combinations.
+ */
+std::vector<Eigen::VectorXf> lbl_ordering_octant_variants(const Eigen::VectorXf &phys, int i_dm21, int i_dm31, int i_s23);
+
+/**
  * @brief Standard three-flavour long-baseline oscillation model, in matter or in vacuum.
  * @details Wraps the NuFastLBL library (Denton, arXiv:2405.02400) to compute the full 3x3
  * oscillation probability matrix. Two model tags share this class:
@@ -86,6 +93,10 @@ public:
     Eigen::MatrixXf get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const override;
 
     bool wants_preconditioning() const override { return true; }
+
+    std::vector<Eigen::VectorXf> degenerate_variants(const Eigen::VectorXf &phys) const override {
+        return lbl_ordering_octant_variants(phys, 0, 1, 4);
+    }
 
     bool matter;              ///< Matter (NuFast Probability_Matter_LBL) vs vacuum regime.
     InputMode input_mode;     ///< Kinematic input layout.

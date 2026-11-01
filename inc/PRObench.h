@@ -115,6 +115,7 @@ namespace PRObench {
         bool shape_only = false;
         /// (p) benchmark: the `precondition` fit option for every preset (from --fit-options).
         int precondition = -1;
+        bool ordering_octant_seeds = false; ///< (p) benchmark: the `ordering_octant_seeds` fit option for every preset.
     };
 
     /**

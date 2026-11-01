@@ -95,6 +95,22 @@ PROpt::PROpt(int argc, char **argv) {
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
                 "Implies --area-norm for the plots. fc / brazil / fc-adaptive inherit the flag.");
+        app.add_flag("--lndet", lndet,
+                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries when its covariance M "
+                "is rebuilt from the prediction at every tested point (without it fits lean towards larger predictions). "
+                "Reported relative to ln det M at --cov-reference.");
+        app.add_flag("--frozen-cov", frozen_cov,
+                "Hold the whole covariance M (statistical + systematic) at its value at the --cov-reference prediction instead "
+                "of rebuilding it at every tested point (neyman / pearson / CNP).");
+        app.add_option("--cov-reference", cov_reference,
+                "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
+                "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
+            ->expected(-1);
+        app.add_flag("--ordering-octant-seeds", ordering_octant_seeds,
+                "LBL models only: start every fit (global, profile, surface, adaptive mesh, fc) also from the four mass-ordering x "
+                "theta23-octant variants of each of its start points (every seed and the best Latin/swarm point), and polish every "
+                "harmonic-scan minimum from its variants. No effect on other models. Same as --fit-options/--scan-fit-options "
+                "ordering_octant_seeds 1.");
         auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");

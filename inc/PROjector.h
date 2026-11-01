@@ -60,6 +60,8 @@ namespace PROfit {
         bool float_physics = false;   ///< Pre-fit: float physics parameters and save the marginal nuisance covariance (default: fix at CV).
         bool force = false;           ///< Skip config-hash consistency check when loading a constraint.
         bool shape_only = false;      ///< This run is --shapeonly; must match the constraint's (stage 2).
+        bool lndet = false;           ///< This run is --lndet; must match the constraint's (stage 2).
+        bool frozen_cov = false;      ///< This run is --frozen-cov; must match the constraint's (stage 2).
 
         bool prefit_mode() const { return !prefit_pattern.empty(); }
         bool projector_mode() const { return !constraint_file.empty(); }
@@ -84,6 +86,8 @@ namespace PROfit {
         bool physics_were_fixed = true;   ///< True if physics parameters were held fixed during the pre-fit.
         float prefit_chi2 = 0;            ///< Pre-fit best-fit chi2 (record keeping).
         bool shape_only = false;          ///< Pre-fit ran --shapeonly (class version >= 1; older files load as false).
+        bool lndet = false;               ///< Pre-fit ran --lndet (class version >= 2; older files load as false).
+        bool frozen_cov = false;          ///< Pre-fit ran --frozen-cov (class version >= 2; older files load as false).
 
         template<class Archive>
         void serialize(Archive &ar, const unsigned int version) {
@@ -100,6 +104,7 @@ namespace PROfit {
             ar & physics_were_fixed;
             ar & prefit_chi2;
             if(version >= 1) ar & shape_only;
+            if(version >= 2) { ar & lndet; ar & frozen_cov; }
         }
 
         void save(const std::string &filename) const;
@@ -185,6 +190,6 @@ namespace PROfit {
 
 }
 
-BOOST_CLASS_VERSION(PROfit::PROjectorConstraint, 1)
+BOOST_CLASS_VERSION(PROfit::PROjectorConstraint, 2)
 
 #endif
