@@ -147,12 +147,17 @@ int main(int argc, char* argv[])
         fitConfig.gradient_mode     = gmode_a;
         scanFitConfig.gradient_mode = gmode_a;
     }
+    if ((options.ordering_octant_seeds || options.ordering_octant_polish)
+        && model->degenerate_variants(model->default_val).empty())
+        log<LOG_WARNING>(L"%1% || --ordering-octant-seeds/--ordering-octant-polish: model %2% has no ordering/octant mirrors (LBL models only); the flags do nothing here.")
+            % __func__ % config.m_model_tag.c_str();
     if (options.ordering_octant_seeds) {
-        if (model->degenerate_variants(model->default_val).empty())
-            log<LOG_WARNING>(L"%1% || --ordering-octant-seeds: model %2% has no ordering/octant mirrors (LBL models only); the flag does nothing here.")
-                % __func__ % config.m_model_tag.c_str();
         fitConfig.ordering_octant_seeds = true;
         scanFitConfig.ordering_octant_seeds = true;
+    }
+    if (options.ordering_octant_polish) {
+        fitConfig.ordering_octant_polish = true;
+        scanFitConfig.ordering_octant_polish = true;
     }
     log<LOG_INFO>(L"%1% || Gradient mode: %2% (global) / %3% (scan)") % __func__
         % PROmetric::gradientModeName(fitConfig.gradient_mode)

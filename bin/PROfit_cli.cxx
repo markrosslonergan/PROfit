@@ -111,6 +111,11 @@ PROpt::PROpt(int argc, char **argv) {
                 "theta23-octant variants of each of its start points (every seed and the best Latin/swarm point), and polish every "
                 "harmonic-scan minimum from its variants. No effect on other models. Same as --fit-options/--scan-fit-options "
                 "ordering_octant_seeds 1.");
+        app.add_flag("--ordering-octant-polish", ordering_octant_polish,
+                "LBL models only: after its usual descents, every fit (global, profile, surface, adaptive mesh, fc) refines once "
+                "more from the three mass-ordering x theta23-octant variants of its best point (3 extra descents per fit). "
+                "Independent of --ordering-octant-seeds: use either or both. No effect on other models. Same as "
+                "--fit-options/--scan-fit-options ordering_octant_polish 1.");
         auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");

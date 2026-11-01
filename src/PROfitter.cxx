@@ -633,6 +633,26 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
         }
     }
 
+    // Ordering × octant polish: refine once more from each variant of the best point, so every
+    // ordering/octant basin is tried from the fit's own minimum (3 extra descents per fit).
+    if(fitconfig.ordering_octant_polish) {
+        for(const Eigen::VectorXf &v : degenerateSeedVariants(metric, best_fit, lb, ub)) {
+            Eigen::VectorXf g0 = Eigen::VectorXf::Zero(v.size());
+            const float f0 = metric(v, g0, false);
+            if(std::isfinite(f0) && f0 < chimin) { best_fit = v; chimin = f0; }
+            try {
+                x = v;
+                niter = localMinimize(metric, x, fx, lb, ub);
+                total_lbfgs_iterations += (size_t)std::max(niter, 0);
+                chi2s_localfits.push_back(fx);
+                if(fx < chimin) { best_fit = x; chimin = fx; }
+            } catch (const std::exception &except) {
+                exception_string_map[std::string(except.what())]++;
+                fit_exception_counts[std::string(except.what())]++;
+            }
+        }
+    }
+
     const size_t n_fail_total = n_fail_pso + n_fail_seed + n_fail_latin;
     if (n_fail_total > 0) {
         std::string exc_breakdown;

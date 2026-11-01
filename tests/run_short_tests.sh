@@ -834,7 +834,26 @@ else
     note "FAIL  t83eosrecover  (chi2 with mirrors '$c_on' (want < 1e-3), without '$c_off' (want > 1))"
     FAIL=$((FAIL+1))
 fi
+# --ordering-octant-polish (variants of each fit's best point), alone and with the seeds.
+run_test t83fospolish -l logs/t83fospolish.full.log -w 3 "${OSP[@]}" --ordering-octant-polish global
+run_test t83gosboth   -l logs/t83gosboth.full.log -w 3 "${OSP[@]}" --ordering-octant-seeds --ordering-octant-polish global
+c_po=$(global_chi2 t83fospolish); c_bo=$(global_chi2 t83gosboth)
+if [ -n "$c_po" ] && [ -n "$c_bo" ] && awk -v p="$c_po" -v b="$c_bo" 'BEGIN { exit !(p < 1e-3 && b < 1e-3) }'; then
+    note "PASS  t83hospolishrecover  (chi2 $c_po with the polish, $c_bo with both)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t83hospolishrecover  (chi2 with the polish '$c_po', with both '$c_bo'; want < 1e-3)"
+    FAIL=$((FAIL+1))
+fi
 COMMON=("${SAVED_COMMON[@]}")
+run_test t83iospolishsbn --use-fake-data --ordering-octant-polish global
+if cmp -s "${TAG}_t01global_global_fit.txt" "${TAG}_t83iospolishsbn_global_fit.txt"; then
+    note "PASS  t83jospolishsbnsame  (SBN global fit byte-identical with --ordering-octant-polish)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t83jospolishsbnsame  (--ordering-octant-polish changed an SBN fit)"
+    FAIL=$((FAIL+1))
+fi
 
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"

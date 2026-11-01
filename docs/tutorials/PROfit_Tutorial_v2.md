@@ -2624,8 +2624,15 @@ sin²θ₂₃ → 1 − sin²θ₂₃. A variant that would move a scanned (pinn
 parameter, such as Δm²₃₁ on a profile axis, is skipped. It applies to every
 fit PROfit runs (global, profile, surface, every level of the adaptive
 mesh, fc) and is off by default. The cost grows with the number of seeds a
-fit carries; scan fits carry the most. It works
-for both LBL models. For any other model it does nothing and warns.
+fit carries; scan fits carry the most.
+
+`--ordering-octant-polish` is the complementary option. After its usual
+descents, every fit refines once more from the three variants of its best
+point, a fixed three extra descents per fit. The seeds option varies where a
+fit starts, the polish option varies where it ended. On a test sample they
+recovered different stuck fits, so use either one or both together. Both
+flags work for both LBL models. For any other model they do nothing and
+warn.
 
 Rules: **0** = no osc; **1–9** = the full active 3×3 matrix in the
 `LBL_3nu-*` layout (**1** = Pee, **2** = Peμ, **3** = Peτ, **4** = Pμe,

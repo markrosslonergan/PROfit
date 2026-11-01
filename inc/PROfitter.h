@@ -158,6 +158,12 @@ namespace PROfit {
         /// variants are extra descents: they do not take budget from the Latin multistarts.
         bool ordering_octant_seeds = false;
 
+        /// Ordering × octant polish (off by default; `--ordering-octant-polish`), independent of
+        /// ordering_octant_seeds (either, or both): after its usual descents every Fit refines once
+        /// more from each degenerate variant of its best point, so all four basins are tried from
+        /// the fit's own minimum — a fixed 3 extra descents per fit (LBL models only).
+        bool ordering_octant_polish = false;
+
         /** @brief Default constructor — leaves all parameters at their default values. */
         PROfitterConfig(){};
 
@@ -376,6 +382,8 @@ namespace PROfit {
                     use_bkg_seed = (value != 0);
                 } else if(param_name == "ordering_octant_seeds") {
                     ordering_octant_seeds = (value != 0);
+                } else if(param_name == "ordering_octant_polish") {
+                    ordering_octant_polish = (value != 0);
                 } else if(param_name == "precondition") {
                     precondition = (int)value;
                     if(precondition < -1 || precondition > 1 || (float)precondition != value) {
@@ -499,6 +507,7 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || use_bkg_seed: %2%  ") % __func__ % use_bkg_seed;
             log<LOG_INFO>(L"%1% || precondition: %2%  ") % __func__ % precondition;
             log<LOG_INFO>(L"%1% || ordering_octant_seeds: %2%  ") % __func__ % ordering_octant_seeds;
+            log<LOG_INFO>(L"%1% || ordering_octant_polish: %2%  ") % __func__ % ordering_octant_polish;
             
             log<LOG_INFO>(L"%1% || ------------ Particle Swarm Optimization -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || n_swarm_particles: %2%  ") % __func__ % n_swarm_particles;
@@ -567,6 +576,7 @@ namespace PROfit {
             log<LOG_INFO>(L"  use_bkg_seed                         : 1 (default) fits the background-only fixed seed (physics pinned at model defaults) as a candidate; 0 disables");
             log<LOG_INFO>(L"  precondition                         : Scale each L-BFGS-B descent by the Gauss-Newton curvature of every parameter: -1 (default) auto = on for LBL models, 1 on, 0 off");
             log<LOG_INFO>(L"  ordering_octant_seeds                : 1 = also refine every seed / start point from its mass-ordering x theta23-octant mirrors (LBL models only); 0 (default) off");
+            log<LOG_INFO>(L"  ordering_octant_polish               : 1 = after the usual descents, refine from the mass-ordering x theta23-octant mirrors of the best point (LBL models only); 0 (default) off");
             
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ Particle Swarm Optimization (PSO) Parameters ------");

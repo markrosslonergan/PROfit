@@ -136,6 +136,7 @@ struct PROpt {
     bool frozen_cov = false;   // --frozen-cov: hold M at the --cov-reference prediction
     std::map<std::string, float> cov_reference;
     bool ordering_octant_seeds = false;  // --ordering-octant-seeds (LBL models only)
+    bool ordering_octant_polish = false; // --ordering-octant-polish (LBL models only)
     bool rateonly = false;
     int fit_variable = -1; // -1 => take the fitting variable from the XML (fit="true", else var0)
     bool force = false;
