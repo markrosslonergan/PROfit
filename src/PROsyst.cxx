@@ -13,6 +13,7 @@
 #include <thread>
 #include <algorithm>
 #include <random>
+#include <cstdlib>
 #include <set>
 #include <limits>
 
@@ -658,6 +659,43 @@ namespace PROfit {
         PROtimer::Accum t_fn("PROsyst::spline2cov");
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
+        // Fast path: a throw changes only this spline, and the binned prediction is
+        // cv(k) * prod_i f_i(k), so throw(k) = cv(k) * f_s(k; x) / f_s(k; x0).
+        // Only for numudis, no decay migration, and splines outside quadratic groups;
+        // PROFIT_SPLINE2COV_FAST=0 forces the full path.
+        const char *fast_env = std::getenv("PROFIT_SPLINE2COV_FAST");
+        const bool numudis = config.m_model_tag == "numudis" || config.m_model_tag == "SBL_2flav_numudis";
+        const bool in_group = spline < (int)quadratic_group_of.size() && quadratic_group_of[spline] >= 0;
+        bool fast = numudis && !model.uses_get_counts() && !in_group && !(fast_env && std::string(fast_env) == "0");
+
+        const size_t nb = config.m_num_variable_bins_total[other_index];
+        const size_t sb = (size_t)spline_binnings[spline];
+        Eigen::VectorXf unweighted;
+        if(fast && sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
+        // This spline's factor per bin of other_index at knob value t, exactly as FillSpectra builds it.
+        auto factor = [&](float t) {
+            Eigen::VectorXf f = Eigen::VectorXf::Ones(nb);
+            if(sb == (size_t)other_index) {
+                for(size_t k = 0; k < nb; ++k) f(k) = GetSplineShift(spline, t, k);
+            } else {
+                const size_t ns = config.m_num_variable_bins_total[sb];
+                Eigen::VectorXf sh(ns);
+                for(size_t j = 0; j < ns; ++j) sh(j) = GetSplineShift(spline, t, j);
+                const Eigen::VectorXf w = prop.variable_hist_storage.WeightedColSum(sb, other_index, sh);
+                for(size_t k = 0; k < nb; ++k) if(unweighted(k) > 0) f(k) = w(k) / unweighted(k);
+            }
+            return f;
+        };
+        Eigen::VectorXf f0;
+        if(fast) {
+            f0 = factor(params(model.nparams + spline));
+            if(!f0.allFinite() || (f0.array() == 0.0f).any()) {
+                fast = false;   // cannot divide this spline out of cv
+                log<LOG_DEBUG>(L"%1% || %2%: zero/non-finite factor at the CV value, using the full path") % __func__ % spline_names[spline].c_str();
+            }
+        }
+        PROtimer::Accum t_path(fast ? "PROsyst::spline2cov fast path" : "PROsyst::spline2cov full path");
+
         // Distinct seed per throw: FillSplineRandomThrow now uses its seed
         // argument on every call (it used to hold a function-local static RNG
         // that ignored the seed after the first-ever call).
@@ -666,8 +704,17 @@ namespace PROfit {
         std::vector<Eigen::VectorXf> specs(spline2cov_throws);
         std::atomic<size_t> next{0};
         auto worker = [&]() {
-            for(size_t i = next++; i < specs.size(); i = next++)
-                specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
+            for(size_t i = next++; i < specs.size(); i = next++) {
+                if(fast) {
+                    // Same draw as FillSplineRandomThrow: mt19937(seed+i), N(center, prior).
+                    std::mt19937 rng{seed + (uint32_t)i};
+                    std::normal_distribution<float> d(spline_centers(spline), spline_priors(spline));
+                    const float x = d(rng);
+                    specs[i] = cv.col(0).cwiseProduct(factor(x)).cwiseQuotient(f0);
+                } else {
+                    specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
+                }
+            }
         };
         const size_t nthreads = std::max<size_t>(1, std::min(spline2cov_nthreads, specs.size()));
         std::vector<std::thread> pool;
