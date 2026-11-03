@@ -138,15 +138,24 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     if(need_main_process){
         log<LOG_INFO>(L"%1% || Processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
         //Process the CAF files to grab and fill all SystStructs and PROpeller
-        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd);
-        prop.save(propBinName);
-        saveSystStructVector(systsstructs, systBinName);
+        {
+            PROtimer::Stage t("process: PROcess_CAFAna (all MCFiles)");
+            PROcess_CAFAna(config, systsstructs, prop, options.noxrootd);
+        }
+        {
+            PROtimer::Stage t("process: save prop/syst binaries");
+            prop.save(propBinName);
+            saveSystStructVector(systsstructs, systBinName);
+        }
         log<LOG_INFO>(L"%1% || Done processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
 
     }else{
         log<LOG_INFO>(L"%1% || Loading PROpeller and PROsysts from precalc binary input: %2%") % __func__ % propBinName.c_str();
-        prop.load(propBinName);
-        loadSystStructVector(systsstructs, systBinName);
+        {
+            PROtimer::Stage t("process: load prop/syst binaries");
+            prop.load(propBinName);
+            loadSystStructVector(systsstructs, systBinName);
+        }
 
         //is hash right for PROpeller first?
         log<LOG_INFO>(L"%1% || Done loading. Config hash (%2%) and binary loaded PROpeller (%3%) are here. ") % __func__ %  config.hash % prop.hash ;
@@ -186,24 +195,32 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
 
         if(need_detvar_process) {
             log<LOG_INFO>(L"%1% || Processing all DetVar files into combined binary: %2%") % __func__ % dvAllPropsBin.c_str();
+            PROtimer::Stage t_all("process: all DetVar files");
             for(size_t idv = 0; idv < config.GetNumDetVarFiles(); ++idv) {
                 const std::string& name = config.m_detvar_files[idv].name;
                 const std::string key = DetVarKey(config, idv);
                 log<LOG_INFO>(L"%1% || Processing DetVar file '%2%'") % __func__ % name.c_str();
+                const auto t_dv0 = PROtimer::clock_t_::now();
                 PROconfig dvconfig = config.BuildDetVarConfig(idv);
                 PROpeller dvprop;
                 std::vector<std::vector<SystStruct>> dvsystsstructs;
-                PROcess_CAFAna(dvconfig, dvsystsstructs, dvprop, options.noxrootd);
+                {
+                    PROtimer::Accum a("process: DetVar PROcess_CAFAna (summed over files)");
+                    PROcess_CAFAna(dvconfig, dvsystsstructs, dvprop, options.noxrootd);
+                }
                 // DetVar spectra come from per-event weights (NullModel, no splines); the
                 // dense hist matrices are never read and were nearly all of this binary.
                 dvprop.ClearHistStorage();
                 dvprops[key] = std::move(dvprop);
-                log<LOG_INFO>(L"%1% || Done processing DetVar file '%2%'") % __func__ % name.c_str();
+                log<LOG_INFO>(L"%1% || Done processing DetVar file '%2%' [TIMER] %3%") % __func__ % name.c_str() % PROtimer::Fmt(PROtimer::Since(t_dv0)).c_str();
             }
+            PROtimer::Stage t_save("process: save DetVar binary");
             saveDetVarProps(dvprops, config.detvar_hash, dvAllPropsBin);
         } else {
             log<LOG_INFO>(L"%1% || Loading DetVar props from combined binary: %2%") % __func__ % dvAllPropsBin.c_str();
+            PROtimer::Stage t_load("process: load DetVar binary");
             uint32_t loaded_detvar_hash = loadDetVarProps(dvprops, dvAllPropsBin);
+            t_load.Stop();
             log<LOG_INFO>(L"%1% || Config detvar_hash (%2%) and binary detvar_hash (%3%).") % __func__ % config.detvar_hash % loaded_detvar_hash;
             if(config.detvar_hash != loaded_detvar_hash) {
                 if(options.force) {
@@ -218,6 +235,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
         // Build DetVar SystStructs in memory from dvprops (not stored in syst.bin —
         // they live in the DetVar binary so either binary can be regenerated independently).
         log<LOG_INFO>(L"%1% || Building DetVar SystStructs from DetVar props...") % __func__;
+        PROtimer::Stage t_dvsyst("process: build DetVar SystStructs");
         PROsyst emptySyst;
 
         // A DetVar name may appear in several sections (e.g. one knob shared by several
@@ -403,6 +421,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     //}
 
     //Scale events by some percentage of total detector POT
+    PROtimer::Stage t_scale("process: POT scaling", LOG_DEBUG);
     if(options.scale_arg.size()) {
         if (options.scale_arg.size() % 2 != 0) {
             log<LOG_ERROR>(L"%1% || Expected pairs of detector and scaling values (e.g., ICARUS 0.5)") % __func__;

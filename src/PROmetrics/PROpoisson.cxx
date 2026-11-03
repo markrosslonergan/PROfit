@@ -1,4 +1,5 @@
 #include "PROmetrics/PROpoisson.h"
+#include "PROtimer.h"
 #include "PROcess.h"
 #include "PROdata.h"
 #include "PROlog.h"
@@ -93,6 +94,7 @@ PROmetric *PROpoisson::Clone() const {
 }
 
 float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
+    PROtimer::Accum t_eval(rungradient ? "metric: Poisson eval WITH gradient" : "metric: Poisson eval, no gradient");
     call_count++;
     size_t nparams = model.nparams+syst->GetNSplines();
     size_t nsyst = syst->GetNSplines();

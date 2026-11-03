@@ -34,6 +34,7 @@
 #include "PROjector.h"
 #include "PRObench.h"
 #include "PROletariat.h"
+#include "PROtimer.h"
 
 #include "CLI11.h"
 #include "LBFGSB.h"
