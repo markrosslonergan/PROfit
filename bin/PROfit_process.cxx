@@ -140,7 +140,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     if(need_main_process){
         log<LOG_INFO>(L"%1% || Processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
         //Process the CAF files to grab and fill all SystStructs and PROpeller
-        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd);
+        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd, options.nthread);
         prop.save(propBinName);
         saveSystStructVector(systsstructs, systBinName);
         log<LOG_INFO>(L"%1% || Done processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();

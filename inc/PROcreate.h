@@ -284,9 +284,12 @@ namespace PROfit{
      * @param syst_vector Output vector of SystStruct vectors (one inner vector per file); filled in-place.
      * @param inprop      Output PROpeller; filled in-place with per-event data.
      * @param noxrootd    If true, disable XRootD URL rewriting and use local paths directly.
+     * @param nthreads    MC files read in parallel. Each file accumulates separately and files are
+     *                    merged in file order, so the result does not depend on this number
+     *                    (a single-file config is identical to a serial read).
      * @return 0 on success; non-zero on failure.
      */
-    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false);
+    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false, size_t nthreads = 1);
 
 
     /**

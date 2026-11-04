@@ -1,4 +1,6 @@
 #include "PROcreate.h"
+#include <mutex>
+#include "PROparallel.h"
 #include "PROdata.h"
 #include "PROlog.h"
 #include "PROpeller.h"
@@ -224,7 +226,78 @@ namespace PROfit {
         return;
     }
 
-    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller& inprop,bool noxrootd){
+
+    namespace {
+        /// One MCFile's share of everything PROcess_CAFAna accumulates.
+        struct FileAccumulator {
+            PROpeller prop;
+            std::vector<std::vector<SystStruct>> syst;
+        };
+
+        /// Empty accumulators shaped like inprop's / syst_vector's, with their own zeroed spectra.
+        std::unique_ptr<FileAccumulator> EmptyFileAccumulator(const PROconfig &inconfig, const std::vector<std::vector<SystStruct>> &syst_vector) {
+            auto acc = std::make_unique<FileAccumulator>();
+            PROpeller &p = acc->prop;
+            p.variable_hist_storage.init(inconfig.m_num_variables);
+            for(size_t i = 0; i < inconfig.m_num_variables; ++i) {
+                p.variable_mc_stat_err.push_back(Eigen::VectorXf::Zero(inconfig.m_num_variable_bins_total[i]));
+                for(size_t j = i; j < inconfig.m_num_variables; ++j)
+                    p.variable_hist_storage.set(i,j) = Eigen::MatrixXf::Zero(inconfig.m_num_variable_bins_total[i], inconfig.m_num_variable_bins_total[j]);
+                p.variable_values.emplace_back();
+                p.variable_bin_indices.emplace_back();
+            }
+            acc->syst = syst_vector;   // copies share the spectra: give each its own
+            for(auto &sv : acc->syst)
+                for(auto &s : sv) {
+                    if(s.p_cv) s.p_cv = std::make_shared<PROspec>(s.p_cv->GetNbins());
+                    for(auto &u : s.p_multi_spec) if(u) u = std::make_shared<PROspec>(u->GetNbins());
+                }
+            return acc;
+        }
+
+        void AddSpectrum(PROspec &dst, const PROspec &src) {
+            dst.Spec() += src.Spec();
+            dst.Error() = (dst.Error().array().square() + src.Error().array().square()).sqrt().matrix();
+        }
+
+        /// Append a file's events and add its sums. The first file is moved in as is, so a
+        /// single-file config is identical to filling inprop directly; later files are added.
+        void MergeFileAccumulator(PROpeller &dst, std::vector<std::vector<SystStruct>> &dst_syst, FileAccumulator &src, bool first) {
+            PROpeller &sp = src.prop;
+            auto append = [](auto &to, const auto &from) { to.insert(to.end(), from.begin(), from.end()); };
+            append(dst.added_weights, sp.added_weights);
+            append(dst.model_rule, sp.model_rule);
+            for(size_t v = 0; v < dst.variable_values.size(); ++v) {
+                append(dst.variable_values[v], sp.variable_values[v]);
+                append(dst.variable_bin_indices[v], sp.variable_bin_indices[v]);
+            }
+            if(sp.has_matching_vars) {
+                if(dst.matching_var_values.empty()) dst.matching_var_values.resize(sp.matching_var_values.size());
+                dst.has_matching_vars = true;
+                for(size_t iv = 0; iv < sp.matching_var_values.size(); ++iv) append(dst.matching_var_values[iv], sp.matching_var_values[iv]);
+            }
+            const size_t nv = dst.variable_mc_stat_err.size();
+            for(size_t i = 0; i < nv; ++i) {
+                if(first) dst.variable_mc_stat_err[i] = std::move(sp.variable_mc_stat_err[i]);
+                else      dst.variable_mc_stat_err[i] += sp.variable_mc_stat_err[i];
+                for(size_t j = i; j < nv; ++j) {
+                    if(first) dst.variable_hist_storage.set(i,j) = std::move(sp.variable_hist_storage.set(i,j));
+                    else      dst.variable_hist_storage.set(i,j) += sp.variable_hist_storage.set(i,j);
+                }
+            }
+            for(size_t iv = 0; iv < dst_syst.size(); ++iv)
+                for(size_t is = 0; is < dst_syst[iv].size(); ++is) {
+                    SystStruct &d = dst_syst[iv][is];
+                    SystStruct &s = src.syst[iv][is];
+                    if(first) { d.p_cv = s.p_cv; d.p_multi_spec = s.p_multi_spec; continue; }
+                    if(d.p_cv && s.p_cv) AddSpectrum(*d.p_cv, *s.p_cv);
+                    for(size_t u = 0; u < d.p_multi_spec.size() && u < s.p_multi_spec.size(); ++u)
+                        if(d.p_multi_spec[u] && s.p_multi_spec[u]) AddSpectrum(*d.p_multi_spec[u], *s.p_multi_spec[u]);
+                }
+        }
+    }
+
+    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller& inprop,bool noxrootd, size_t nthreads){
 
         log<LOG_DEBUG>(L"%1% || Loading Monte Carlo Files") % __func__ ;
 
@@ -876,9 +949,22 @@ namespace PROfit {
             }
         }
 
-        time_t start_time = time(nullptr), time_stamp = time(nullptr);
+        time_t start_time = time(nullptr);
         log<LOG_INFO>(L"%1% || Start reading the files..") % __func__;
-        for(int fid=0; fid < num_files; ++fid) {
+
+        // Each MCFile is read into its own accumulators (events, MC-stat, hist storage, systematic
+        // spectra), on up to nthreads threads, and merged in file order as soon as the files
+        // before it are done: the result does not depend on the thread count, and a single-file
+        // config is identical to reading straight into inprop.
+        std::vector<std::unique_ptr<FileAccumulator>> finished(num_files);
+        std::mutex merge_mutex;
+        int next_merge = 0;
+        auto read_file = [&](size_t file_index) {
+            const int fid = (int)file_index;
+            time_t time_stamp = time(nullptr);
+            std::unique_ptr<FileAccumulator> acc = EmptyFileAccumulator(inconfig, syst_vector);
+            PROpeller &fprop = acc->prop;
+            std::vector<std::vector<SystStruct>> &fsyst = acc->syst;
             const auto& fn = inconfig.m_mcgen_file_name.at(fid);
             long int nevents = std::min(inconfig.m_mcgen_maxevents[fid], (long int)(nentries[fid] * inconfig.m_mcgen_partial_load_frac[fid]));
             log<LOG_DEBUG>(L"%1% || Start @files: %2% which has %3% total events, loading fraction %4% (%5% events)") % __func__ % fn.c_str() % nentries[fid] % inconfig.m_mcgen_partial_load_frac[fid] % nevents;
@@ -889,7 +975,7 @@ namespace PROfit {
             // set up systematic weight formula
             std::vector<float> sys_weight_value(total_num_systematics, 1.0);
             std::vector<std::unique_ptr<TTreeFormula>> sys_weight_formula;
-            for(const auto& sv : syst_vector){
+            for(const auto& sv : fsyst){
                 for(const auto &s: sv) {
                     if(s.HasWeightFormula())
                         sys_weight_formula.push_back(std::make_unique<TTreeFormula>(("weightMapsFormulas_"+std::to_string(fid)+"_"+ s.GetSysName()).c_str(), s.GetWeightFormula().c_str(),chains[fid]));
@@ -903,9 +989,9 @@ namespace PROfit {
             const bool has_matching_vars = !inconfig.m_detvar_matching_vars.empty();
             std::vector<std::unique_ptr<TTreeFormula>> matching_var_formulas;
             if(has_matching_vars) {
-                if(inprop.matching_var_values.empty()) {
-                    inprop.matching_var_values.resize(inconfig.m_detvar_matching_vars.size());
-                    inprop.has_matching_vars = true;
+                if(fprop.matching_var_values.empty()) {
+                    fprop.matching_var_values.resize(inconfig.m_detvar_matching_vars.size());
+                    fprop.has_matching_vars = true;
                 }
                 for(size_t iv = 0; iv < inconfig.m_detvar_matching_vars.size(); ++iv) {
                     const std::string& vname = inconfig.m_detvar_matching_vars[iv];
@@ -932,13 +1018,13 @@ namespace PROfit {
             // varies events from this branch's subchannel; 0 = fill universes at CV).
             std::vector<std::vector<char>> branch_syst_applies(num_branch, std::vector<char>(total_num_systematics, 1));
             for(size_t is = 0; is < total_num_systematics; ++is){
-                const std::string &pattern = syst_vector[0][is].apply_to_subchannel;
+                const std::string &pattern = fsyst[0][is].apply_to_subchannel;
                 if(pattern.empty()) continue;
-                std::regex re = CompilePattern(pattern, "apply_to_subchannel of systematic " + syst_vector[0][is].GetSysName());
+                std::regex re = CompilePattern(pattern, "apply_to_subchannel of systematic " + fsyst[0][is].GetSysName());
                 for(int ib = 0; ib != num_branch; ++ib){
                     if(!PatternMatches(branches[ib]->associated_hist, re)){
                         branch_syst_applies[ib][is] = 0;
-                        log<LOG_DEBUG>(L"%1% || Systematic %2% will NOT vary subchannel %3% (apply_to_subchannel='%4%').") % __func__ % syst_vector[0][is].GetSysName().c_str() % branches[ib]->associated_hist.c_str() % pattern.c_str();
+                        log<LOG_DEBUG>(L"%1% || Systematic %2% will NOT vary subchannel %3% (apply_to_subchannel='%4%').") % __func__ % fsyst[0][is].GetSysName().c_str() % branches[ib]->associated_hist.c_str() % pattern.c_str();
                     }
                 }
             }
@@ -993,7 +1079,7 @@ namespace PROfit {
                     for(const auto& wname : inconfig.m_mcgen_weight_names[fid][ib])
                         ROOTFormula::ExtractExprTokens(wname, needed);
                 }
-                for(const auto& sv : syst_vector)
+                for(const auto& sv : fsyst)
                     for(const auto& s : sv)
                         if(s.HasWeightFormula())
                             ROOTFormula::ExtractExprTokens(s.GetWeightFormula(), needed);
@@ -1013,7 +1099,7 @@ namespace PROfit {
                 log<LOG_INFO>(L"%1% || Branch pruning fid=%2%: keeping %3% branches") % __func__ % fid % needed.size();
             }
 
-            const std::vector<SystFillPlan> fill_plan = BuildSystFillPlan(inconfig, syst_vector, f_event_weights[fid][0]);
+            const std::vector<SystFillPlan> fill_plan = BuildSystFillPlan(inconfig, fsyst, f_event_weights[fid][0]);
 
             chains[fid]->SetCacheSize(100000000); // 100 MB read-ahead cache
             chains[fid]->AddBranchToCache("*", kTRUE); // cache all active branches
@@ -1053,7 +1139,7 @@ namespace PROfit {
                     currentTreeNumber = chains[fid]->GetTreeNumber();
 
                    for(size_t is = 0; is != total_num_systematics; ++is){
-                        if(syst_vector[0][is].HasWeightFormula()){
+                        if(fsyst[0][is].HasWeightFormula()){
                             sys_weight_formula[is]->UpdateFormulaLeaves();
                             sys_weight_formula[is]->GetNdata();
                         }
@@ -1073,7 +1159,7 @@ namespace PROfit {
 
                 // grab additional weight for systematics
                 for(size_t is = 0; is != total_num_systematics; ++is){
-                    if(syst_vector[0][is].HasWeightFormula()){
+                    if(fsyst[0][is].HasWeightFormula()){
                         sys_weight_value[is] = sys_weight_formula[is]->EvalInstance();
                     }
                 }
@@ -1087,19 +1173,29 @@ namespace PROfit {
 
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
-                    const size_t prop_size_before = inprop.NEvent();
-                    process_cafana_event(inconfig, branches[ib], fill_plan, inconfig.m_mcgen_pot[fid]  / inconfig.m_mcgen_scale[fid] * inconfig.m_mcgen_partial_load_frac[fid], subchannel_index[ib], syst_vector, sys_weight_value, branch_force_cv_fill[ib] ? zero_syst_applies : branch_syst_applies[ib], inprop, (bool)branch_force_cv_fill[ib]);
+                    const size_t prop_size_before = fprop.NEvent();
+                    process_cafana_event(inconfig, branches[ib], fill_plan, inconfig.m_mcgen_pot[fid]  / inconfig.m_mcgen_scale[fid] * inconfig.m_mcgen_partial_load_frac[fid], subchannel_index[ib], fsyst, sys_weight_value, branch_force_cv_fill[ib] ? zero_syst_applies : branch_syst_applies[ib], fprop, (bool)branch_force_cv_fill[ib]);
                     // Store matching vars only if process_cafana_event actually added an entry
                     // (it skips zero-weight events without pushing to added_weights).
-                    if(has_matching_vars && inprop.NEvent() > prop_size_before) {
+                    if(has_matching_vars && fprop.NEvent() > prop_size_before) {
                         for(size_t iv = 0; iv < current_matching_vals.size(); ++iv)
-                            inprop.matching_var_values[iv].push_back(current_matching_vals[iv]);
+                            fprop.matching_var_values[iv].push_back(current_matching_vals[iv]);
                     }
                 }
 
             } //end of entry loop
 
-        } //end of file loop
+
+            std::lock_guard<std::mutex> lock(merge_mutex);
+            finished[fid] = std::move(acc);
+            for(; next_merge < num_files && finished[next_merge]; ++next_merge) {
+                MergeFileAccumulator(inprop, syst_vector, *finished[next_merge], next_merge == 0);
+                finished[next_merge].reset();
+            }
+        };
+        const size_t file_threads = std::max<size_t>(1, std::min(nthreads, (size_t)std::max(num_files, 1)));
+        if(file_threads > 1) log<LOG_INFO>(L"%1% || Reading %2% MC files on %3% threads") % __func__ % num_files % file_threads;
+        parallel_for((size_t)num_files, file_threads, read_file);
 
         //ensure hash is correctly assigned
         inprop.hash=inconfig.hash;

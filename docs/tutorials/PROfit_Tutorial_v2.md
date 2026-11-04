@@ -1006,8 +1006,9 @@ The minimization itself is usually the *fast* part of `global`. The **pre-fit
 error band** is built by throwing a few thousand spectra from the priors and
 covariances (random — fix `--seed`, and bump the sample count for
 publication-quality plots, since sparsely-filled bins jitter). The **post-fit
-error band, correlation matrix, and posteriors** come from an MCMC sampled
-around the best fit (tens of thousands of samples after burn-in): post-fit
+error band, correlation matrix, and posteriors** come from MCMC chains sampled
+around the best fit (20,000 kept samples, split over one chain per `-n`
+thread, so `-n` speeds them up and changes their random stream): post-fit
 pulls can be strongly correlated, so marginal errors must be sampled
 simultaneously rather than read off one parameter at a time. This MCMC
 covariance is also the *trusted* post-fit covariance — the L-BFGS internal
@@ -2684,8 +2685,16 @@ frozen `L` of C.0 is only a band-reconstruction approximation, never a fit
 approximation), and the spline pull terms including any configured
 correlations. In plain words: the chain wanders through spline space visiting
 each point in proportion to how well it describes the data, given everything
-else the fit knew. Defaults: 25,000 burn-in + 20,000 kept steps
-(`--fit-options MCMCburn/MCMCiter`). Each kept step `i` gives a spectrum
+else the fit knew. Defaults: 20,000 kept steps in total, split over
+independent chains run in parallel (one per `-n` thread), each with 5,000
+burn-in steps (`--fit-options MCMC-Iterations`, `MCMC-Chains`,
+`MCMC-Burnin`). A short burn-in suffices because each chain's proposal starts
+from the linearised (Gauss-Newton) posterior covariance of the splines at the
+best fit, the same system the pull distributions use (Appendix F); physics
+parameters start at their box variance, since oscillation posteriors are often
+flat or multimodal around a narrow best-fit dip. The seed only changes how fast
+a chain adapts: the kept steps run with a frozen proposal, i.e. plain
+Metropolis on the unchanged target. Each kept step `i` gives a spectrum
 
 ```
 S⁽ⁱ⁾ = P(φ̂, s⁽ⁱ⁾)        (collapsed; NO prior covariance throw here)

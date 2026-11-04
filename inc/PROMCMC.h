@@ -478,10 +478,14 @@ namespace PROfit {
          * @p n_prior pseudo-samples of the running covariance (0: 20 per moving parameter). Each
          * variance is capped at its sampling box's W^2/12 (1 when unbounded), so a direction the
          * data leaves free does not propose far outside the box. An empty or non-finite seed falls
-         * back to the diagonal prior variances. The target is untouched: kept steps run with a
-         * frozen proposal, i.e. plain Metropolis.
+         * back to the diagonal prior variances. Unless @p local_physics, physics parameters take
+         * their box variance with no correlations instead of the seed: the linearised posterior is
+         * local, and an oscillation posterior is often flat or multimodal around a narrow best-fit
+         * dip. A local seed traps the chain in the dip (ICARUS tutorial, injected signal: dmsq
+         * posterior sigma 0.14-0.6 against the true 1.17). The target is untouched: kept steps
+         * run with a frozen proposal, i.e. plain Metropolis.
          */
-        void seed_proposal(const Eigen::MatrixXf &seed_cov, const Eigen::VectorXf &start, size_t n_prior = 0) {
+        void seed_proposal(const Eigen::MatrixXf &seed_cov, const Eigen::VectorXf &start, size_t n_prior = 0, bool local_physics = false) {
             const long n = start.size();
             const long nphys = metric.GetModel().nparams;
             auto box_var = [&](long i) {
@@ -500,6 +504,13 @@ namespace PROfit {
                                     && metric.GetSysts().spline_prior_types[si] != SplinePriorType::Uniform;
                     const float prior_var = gauss ? metric.GetSysts().spline_priors(si) * metric.GetSysts().spline_priors(si) : INFINITY;
                     S(i, i) = std::min(prior_var, box_var(i));
+                }
+            }
+            if(!local_physics) {
+                for(long i = 0; i < std::min(nphys, n); ++i) {
+                    S.row(i).setZero();
+                    S.col(i).setZero();
+                    S(i, i) = box_var(i);
                 }
             }
             Eigen::VectorXf d = Eigen::VectorXf::Ones(n);
