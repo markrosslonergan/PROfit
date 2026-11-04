@@ -1,5 +1,4 @@
 #include "PROcovariance.h"
-#include "PROtimer.h"
 #include "PROcess.h"
 #include "PROdata.h"
 #include "PROlog.h"
@@ -96,8 +95,6 @@ Eigen::VectorXf PROcovariance::singleChannelStatVariances(
 }
 
 float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &gradient, bool rungradient){
-    PROtimer::Accum t_eval(rungradient ? "metric: chi2 (covariance) eval WITH gradient"
-                                       : "metric: chi2 (covariance) eval, no gradient");
     call_count++;
     size_t nparams = nParams();
     size_t nsyst = syst->GetNSplines();

@@ -1,5 +1,4 @@
 #include "PROsyst.h"
-#include "PROtimer.h"
 #include "PROcess.h"
 #include "PROpeller.h"
 #include "PROconfig.h"
@@ -84,7 +83,6 @@ namespace PROfit {
     }
 
     void PROsyst::ProjectCovariancesOntoShape(const PROconfig &config, const Eigen::VectorXf &cv) {
-        PROtimer::Accum t_fn("PROsyst::ProjectCovariancesOntoShape");
         const Eigen::MatrixXf R = ShapeProjector(ChannelBlocks(config, other_index), cv);
         for(size_t i = 0; i < covmat.size(); ++i) {
             if(covmat[i].rows() != R.rows() || covmat[i].cols() != R.cols()) {
@@ -128,7 +126,6 @@ namespace PROfit {
     }
 
     void PROsyst::ScopeSystStructSpectra(const PROconfig &config, const SystStruct &syst, int spectra_binning) {
-        PROtimer::Accum t_fn("PROsyst::ScopeSystStructSpectra");
         if(syst.apply_to_subchannel.empty() || !syst.p_cv || syst.p_multi_spec.empty()) return;
         const int binning = spectra_binning < 0 ? config.i_prime : spectra_binning;
         const std::vector<char> mask = SubchannelScopeMask(config, binning, syst.apply_to_subchannel);
@@ -154,7 +151,6 @@ namespace PROfit {
     }
 
     void PROsyst::ApplySubchannelScopes(const PROconfig &config, const std::vector<SystStruct> &systs) {
-        PROtimer::Accum t_fn("PROsyst::ApplySubchannelScopes");
         // name -> pattern: the structs' own field first, then the XML map (covers mcstat,
         // DetVar-built systematics and anything else with no SystStruct field set).
         std::map<std::string, std::string> patterns;
@@ -255,7 +251,6 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || Shape-only mode (variable %2%, %3% channel blocks): systematics are kept physical; covariances are projected onto per-channel shape only before spline decomposition.") % __func__ % other_index % shape_blocks.at(other_index).size();
         }
         for(const auto& syst: systs) {
-            PROtimer::AccumS t_syst("PROsyst: build '" + syst.mode + "' systematics");
             log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
             // Layer 2 of apply_to_subchannel (see PROsyst.h): make the input spectra exactly
             // CV outside the scope before anything is derived from them. Idempotent on
@@ -620,7 +615,6 @@ namespace PROfit {
     }
 
     PROsyst PROsyst::allsplines2cov(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
-        PROtimer::Accum t_fn("PROsyst::allsplines2cov");
         PROsyst ret;
         for(const auto &[name, spair]: syst_map) {
 
@@ -656,7 +650,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
-        PROtimer::Accum t_fn("PROsyst::spline2cov");
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
         // Fast path: a throw changes only this spline, and the binned prediction is
@@ -694,7 +687,6 @@ namespace PROfit {
                 log<LOG_DEBUG>(L"%1% || %2%: zero/non-finite factor at the CV value, using the full path") % __func__ % spline_names[spline].c_str();
             }
         }
-        PROtimer::Accum t_path(fast ? "PROsyst::spline2cov fast path" : "PROsyst::spline2cov full path");
 
         // Distinct seed per throw: FillSplineRandomThrow now uses its seed
         // argument on every call (it used to hold a function-local static RNG
@@ -764,7 +756,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::SumMatrices() const{
-        PROtimer::Accum t_fn("PROsyst::SumMatrices");
 
         Eigen::MatrixXf sum_matrix;
 
@@ -787,7 +778,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::SumMatrices(const std::vector<std::string>& sysnames) const{
-        PROtimer::Accum t_fn("PROsyst::SumMatrices");
 
         Eigen::MatrixXf sum_matrix;
         if(covmat.size()){
@@ -814,7 +804,6 @@ namespace PROfit {
     }
 
     void PROsyst::CreateMatrix(const SystStruct& syst){
-        PROtimer::Accum t_fn("PROsyst::CreateMatrix");
 
         std::string sysname = syst.GetSysName();
 
@@ -911,7 +900,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::LoadExternalFractionalCovariance(const PROconfig &config, const SystStruct& syst){
-        PROtimer::Accum t_fn("PROsyst::LoadExternalFractionalCovariance");
         //this is matrix name
         std::string matrixname = syst.GetSysName();
         std::string filename = syst.external_filename;
@@ -1003,7 +991,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::GenerateFullCovarMatrix(const SystStruct& sys_obj, const std::vector<std::pair<size_t,size_t>> *shape_blocks){
-        PROtimer::Accum t_fn("PROsyst::GenerateFullCovarMatrix");
         int n_universe = sys_obj.GetNUniverse(); 
         std::string sys_name = sys_obj.GetSysName();
 
@@ -1039,7 +1026,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::GenerateFracCovarMatrix(const SystStruct& sys_obj, const std::vector<std::pair<size_t,size_t>> *shape_blocks){
-        PROtimer::Accum t_fn("PROsyst::GenerateFracCovarMatrix");
 
         //build full covariance matrix 
         Eigen::MatrixXf full_covar_matrix = PROsyst::GenerateFullCovarMatrix(sys_obj, shape_blocks);
@@ -1071,7 +1057,6 @@ namespace PROfit {
     }
 
     Eigen::MatrixXf PROsyst::GenerateCorrMatrix(const Eigen::MatrixXf& frac_matrix){
-        PROtimer::Accum t_fn("PROsyst::GenerateCorrMatrix");
         int nbins = frac_matrix.rows();
         Eigen::MatrixXf corr_covar_matrix = frac_matrix;
 
@@ -1132,7 +1117,6 @@ namespace PROfit {
     }
 
     bool PROsyst::isPositiveSemiDefinite_WithTolerance(const Eigen::MatrixXf& in_matrix, float tolerance ){
-        PROtimer::Accum t_fn("PROsyst::isPositiveSemiDefinite_WithTolerance");
 
         //first, check if it's symmetric 
         if(!in_matrix.isApprox(in_matrix.transpose(), Eigen::NumTraits<float>::dummy_precision())){
@@ -1253,7 +1237,6 @@ namespace PROfit {
     }
 
     void PROsyst::FillSplineCrossQuad(const SystStruct& syst, const PROconfig& config) {
-        PROtimer::Accum t_fn("PROsyst::FillSplineCrossQuad");
         // Shape-only rescales every member knob spectrum to the CV integral per channel before the
         // ratio; a per-channel normalised response is a ratio of quadratics, not a quadratic, so the
         // additive group form is not exact there and the raw CROSS universes would not match the
@@ -1418,7 +1401,6 @@ namespace PROfit {
 
     void PROsyst::SmoothSplineRatios(const PROconfig &config, int binning, const PROspec &cv,
                                      std::vector<PROspec> &ratios, float sigma_bins) {
-        PROtimer::Accum t_fn("PROsyst::SmoothSplineRatios");
         const Eigen::VectorXf &cv_content = cv.Spec();
         const Eigen::VectorXf &cv_error = cv.Error();
         const Eigen::Index num_bins = cv_content.size();
@@ -1475,7 +1457,6 @@ namespace PROfit {
     }
 
     void PROsyst::FillSpline(const PROconfig& config, const SystStruct& syst, bool unmirrored) {
-        PROtimer::Accum t_fn("PROsyst::FillSpline");
         std::vector<PROspec> ratios;
         ratios.reserve(syst.p_multi_spec.size());
 
@@ -1667,7 +1648,6 @@ namespace PROfit {
     }
 
     void PROsyst::FillBinnedUnconstrainedSplines(const PROconfig& config, const SystStruct& syst) {
-        PROtimer::Accum t_fn("PROsyst::FillBinnedUnconstrainedSplines");
         const int binning = syst.binning;
         if(binning < 0 || binning >= (int)config.m_num_variable_bins_total.size()) {
             log<LOG_ERROR>(L"%1% || binned_unconstrained systematic '%2%' has invalid binning index %3%.") % __func__ % syst.systname.c_str() % binning;
@@ -1764,7 +1744,6 @@ namespace PROfit {
     }
 
     void PROsyst::FillSplinesFromCovarianceMatrix(Eigen::MatrixXf frac_cov, const SystStruct& syst, SplinePriorType prior, float knob_lo, float knob_hi) {
-        PROtimer::Accum t_fn("PROsyst::FillSplinesFromCovarianceMatrix");
         if(shape_only && shape_blocks.count(syst.binning < 0 ? other_index : syst.binning)) {
             // Shape-only: decompose the per-channel SHAPE part of the matrix, taken about the
             // physical null prediction, so no knob is spent on (or left free along) a pure

@@ -3,7 +3,6 @@
 #include "PROspec.h"
 #include "PROsyst.h"
 #include "PROtocall.h"
-#include "PROtimer.h"
 #include "TH2D.h"
 
 #include <Eigen/Eigen>
@@ -44,7 +43,6 @@ namespace PROfit {
 
 
     PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, bool binned, size_t var_index) {
-        PROtimer::Accum t_fs("FillSpectra (cached, used by the metric)");
         // Unbinned path can't be cleanly split phys/syst (per-event Fill mixes them).
         // Fall back, invalidate cache.
         if(!binned) {
@@ -348,7 +346,6 @@ namespace PROfit {
     }
 
     PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, bool binned, size_t var_index){
-        PROtimer::Accum t_fs("FillSpectra (uncached)");
         PROspec myspectrum(inconfig.m_num_variable_bins_total[var_index]);
         Eigen::VectorXf phys   = params.segment(0, inmodel.nparams);
         Eigen::VectorXf shifts = params.segment(inmodel.nparams, params.size() - inmodel.nparams);
@@ -534,7 +531,6 @@ namespace PROfit {
     }
 
     PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index) {
-        PROtimer::Accum t_thr("FillSystRandomThrow (error-band throws)");
         int nbins = inconfig.m_num_variable_bins_total[var_index],
         nbins_collapsed = inconfig.m_num_variable_bins_total_collapsed[var_index];
         Eigen::VectorXf spec = Eigen::VectorXf::Constant(nbins, 0);
@@ -641,7 +637,6 @@ namespace PROfit {
     }
 
     PROspec FillSplineRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst,  const PROmodel &model,  const Eigen::VectorXf &cvparams, int spline, uint32_t seed, int other_index) {
-        PROtimer::Accum t_thr("FillSplineRandomThrow (spline2cov throws)");
         int nbins =  inconfig.m_num_variable_bins_total[other_index];
         Eigen::VectorXf spec = Eigen::VectorXf::Constant(nbins, 0);
 

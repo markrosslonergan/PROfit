@@ -2,7 +2,6 @@
 #include "PROlog.h"
 #include "PROmetric.h"
 #include "PROswarm.h"
-#include "PROtimer.h"
 #include <Eigen/Eigen>
 
 #include <algorithm>
@@ -154,7 +153,6 @@ float PROfitter::Fit(PROmetric &metric, const Eigen::VectorXf &seed_pt ) {
 }
 
 float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed_points, const std::vector<FixedSeed> &fixed_seeds ) {
-    PROtimer::Accum t_fit("PROfitter::Fit (one complete minimisation)");
 
     metric.setGradientMode(fitconfig.gradient_mode);
     total_lbfgs_iterations = 0;

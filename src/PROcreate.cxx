@@ -3,7 +3,6 @@
 #include "PROlog.h"
 #include "PROpeller.h"
 #include "PROtocall.h"
-#include "PROtimer.h"
 #include "TTree.h"
 #include "TFile.h"
 #include "TFriendElement.h"
@@ -228,7 +227,6 @@ namespace PROfit {
     int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller& inprop,bool noxrootd){
 
         log<LOG_DEBUG>(L"%1% || Loading Monte Carlo Files") % __func__ ;
-        PROtimer::Stage t_setup("CAFAna: open chains, set up formulas and weight branches");
 
         int num_files = inconfig.m_num_mcgen_files;
 
@@ -572,8 +570,6 @@ namespace PROfit {
             }
         }
 
-        t_setup.Stop();
-        PROtimer::Stage t_syst("CAFAna: set up systematic weight maps and specs");
         size_t total_num_systematics = map_systematic_num_universe.size();
         log<LOG_INFO>(L"%1% || Found %2% unique variations") % __func__ % total_num_systematics;
         for(auto& sys_pair : map_systematic_num_universe){
@@ -880,8 +876,6 @@ namespace PROfit {
             }
         }
 
-        t_syst.Stop();
-        PROtimer::Stage t_read("CAFAna: event loop over all MCFiles");
         time_t start_time = time(nullptr), time_stamp = time(nullptr);
         log<LOG_INFO>(L"%1% || Start reading the files..") % __func__;
         for(int fid=0; fid < num_files; ++fid) {
@@ -1027,18 +1021,6 @@ namespace PROfit {
             if(to_print>50000)to_print=50000;
             int currentTreeNumber = -1;
             bool file_name_logged = false;
-            // [TIMER] per-file breakdown of the event loop
-            const bool tmr = PROtimer::Enabled();
-            const auto t_file0 = PROtimer::clock_t_::now();
-            double t_get = 0, t_form = 0, t_fill = 0;
-            auto t_mark = t_file0;
-            auto lap = [&](double &acc) {
-                if (!tmr) return;
-                const auto now = PROtimer::clock_t_::now();
-                acc += std::chrono::duration<double>(now - t_mark).count();
-                t_mark = now;
-            };
-            const size_t prop_events_before_file = inprop.NEvent();
 
             for(long int i=0; i < nevents; ++i) {
                 if(i%to_print==0){
@@ -1052,9 +1034,7 @@ namespace PROfit {
                     }
                     time_stamp = time(nullptr);
                 }
-                if (tmr) t_mark = PROtimer::clock_t_::now();
                 chains[fid]->GetEntry(i);
-                lap(t_get);
 
                 // update the branches to the current event
                 for(int ib = 0; ib != num_branch; ++ib) {
@@ -1103,7 +1083,6 @@ namespace PROfit {
                         current_matching_vals.push_back(mf->EvalInstance());
                 }
 
-                lap(t_form);
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
                     const size_t prop_size_before = inprop.NEvent();
@@ -1115,23 +1094,8 @@ namespace PROfit {
                             inprop.matching_var_values[iv].push_back(current_matching_vals[iv]);
                     }
                 }
-                lap(t_fill);
 
             } //end of entry loop
-
-            if (tmr) {
-                const double t_tot = PROtimer::Since(t_file0);
-                const double rate = t_tot > 0 ? nevents / t_tot : 0.0;
-                auto pct = [&](double x) { return t_tot > 0 ? 100.0 * x / t_tot : 0.0; };
-                char brk[256];
-                std::snprintf(brk, sizeof(brk), "GetEntry %.0f%% | formulas %.0f%% | fill %.0f%% | %.0f entries/s | %zu events kept",
-                              pct(t_get), pct(t_form), pct(t_fill), rate, inprop.NEvent() - prop_events_before_file);
-                log<LOG_INFO>(L"%1% || [TIMER] file %2% (%3%): %4% entries, %5% branches, %6% systematics in %7%: %8%") % __func__
-                    % fid % fn.c_str() % nevents % num_branch % total_num_systematics % PROtimer::Fmt(t_tot).c_str() % brk;
-                PROtimer::Add("CAFAna event loop: TChain::GetEntry", t_get);
-                PROtimer::Add("CAFAna event loop: formulas (LoadEvent/syst weights/matching)", t_form);
-                PROtimer::Add("CAFAna event loop: process_cafana_event (fill)", t_fill);
-            }
 
         } //end of file loop
 

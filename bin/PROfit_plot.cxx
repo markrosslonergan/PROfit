@@ -3,9 +3,6 @@
 
 void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &metric, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &CVParams, const Eigen::VectorXf &fakeDataParams, const Eigen::VectorXf &fake_data_osc_param_vector, const std::vector<PROdata> &variable_data, const PROpt &options) {
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
-    // [TIMER] sequential sections: section("x") ends the previous section and starts x.
-    std::unique_ptr<PROtimer::Stage> plot_section;
-    auto section = [&](const char *name) { plot_section.reset(); plot_section.reset(new PROtimer::Stage(name)); };
     // allcovsyst (every spline converted to a covariance) is only needed for the
     // fractional-systematics PDFs, the Covar.pdf/ROOT covariance plots, and the
     // chi2/ndf labels on the error-band plots. Skip the conversion when none of
@@ -13,7 +10,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
     // stream (and hence every downstream error-band throw) is flag-independent.
     const bool need_allcov = options.with_covar || !options.no_frac_syst || options.with_subcovar;
     const uint32_t allcov_seed = dseed(PROseed::global_rng);
-    section("plot: spline->covariance conversion (allsplines2cov)");
     PROsyst allcovsyst;
     if(need_allcov) {
         log<LOG_INFO>(L"%1% || Making a PROsyst thats full covariance for future error bar creation (might be slow) ")% __func__ ;
@@ -47,7 +43,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
     if(options.area_normalized) opt |= PlotOptions::AreaNormalized;
     if(options.shapeonly) opt |= PlotOptions::ShapeOnly;
     if(options.legend_counts) opt |= PlotOptions::LegendCounts;
-    section("plot: CV spectra (FillSpectra per variable)");
     std::vector<PROspec> variable_cvs;
     std::vector<std::map<std::string, TObject *>> cv_objs;
     for(size_t io = 0; io < config.m_num_variables; ++io) {
@@ -72,7 +67,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
     // Shape-only: the fractional breakdowns and covariance plots show the per-channel shape
     // part of every systematic (MiniBooNE M_shape) about the CV, as the fit sees them. The
     // chi^2 labels (allcov_metric) are unaffected: the metric re-projects at evaluation.
-    section("plot: fractional systematic PDFs");
     if(options.shapeonly && need_allcov)
         allcovsyst.ProjectCovariancesOntoShape(config, variable_cvs[config.i_prime].Spec());
 
@@ -88,13 +82,11 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
             plotPriorFractionalSystematicChannelRatios(config, variable_cvs[config.i_prime], allcovsyst, crfilename, config.i_prime);
     }
 
-    section("plot: CV histograms");
     std::vector<std::map<std::string, std::unique_ptr<TH1D>>> other_hists;
     for(size_t io = 0; io < config.m_num_variables; ++io) {
         other_hists.push_back(getCV1DHists(variable_cvs[io], config, options.binwidth_scale, io));
     }
     
-    section("plot: DetVar plots");
     // DetVar plotting (uses combined DetVar propellers binary)
     if(config.m_has_detvar_section) {
         log<LOG_INFO>(L"%1% || Plotting detector variations...") % __func__;
@@ -588,7 +580,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
         }
     }
 
-    section("plot: fake-data oscillation plots");
     TCanvas c;
     if(options.fake_data_osc_params.size()) {
 
@@ -719,7 +710,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
 
     }
 
-    section("plot: covariance plots");
     std::map<std::string, std::unique_ptr<TH2D>> matrices;
     if(options.with_covar || options.with_subcovar) {
         matrices = covarianceTH2D(allcovsyst, config, variable_cvs[config.i_prime]);
@@ -785,7 +775,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
         log<LOG_INFO>(L"%1% || Covariance PDF done: %2% pages printed, %3% matrices filtered out") % __func__ % n_printed % n_skipped;
     }
 
-    section("plot: error bands and chi2 labels");
     //errorband
     // The chi2/ndf labels need the all-covariance metric; without allcovsyst
     // (--no-frac-syst and no --with-covar) they are skipped entirely.
@@ -874,7 +863,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
 
 
 
-    section("plot: spline plots");
     if(options.with_splines) {
 
         c.Print((options.final_output_tag+"_PROplot_Spline.pdf" + "[").c_str(), "pdf");
@@ -969,7 +957,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
 
     }
 
-    section("plot: cov2spline debug PDF");
     // Debug PDF for covariance_to_spline systematics — only emitted if at least one is present.
     log<LOG_INFO>(L"%1% || cov2spline debug info %2%") % __func__ % !variable_systs[config.i_prime].cov2spline_debug_info.empty();
     if(!variable_systs[config.i_prime].cov2spline_debug_info.empty()) {
@@ -978,7 +965,6 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
         log<LOG_INFO>(L"%1% || covariance_to_spline diagnostics written to %2%") % __func__ % cov2spline_pdf.c_str();
     }
 
-    section("plot: write ROOT file");
     //now onto root files
     TFile fout((options.final_output_tag+"_PROplot.root").c_str(), "RECREATE");
 

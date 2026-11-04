@@ -11,7 +11,6 @@ bool LOGGING_TO_FILE = false;
 int main(int argc, char* argv[])
 {
     auto start_time = std::chrono::high_resolution_clock::now();
-    PROtimer::MarkProgramStart();
 
     gStyle->SetOptStat(0);
 
@@ -39,17 +38,12 @@ int main(int argc, char* argv[])
 
     //Initilize configuration from the XML;
     // fit_variable (-1 unless --fit-variable was given) overrides the XML's fit="true" binning.
-    PROtimer::Stage t_config("setup: PROconfig (parse XML)");
     PROconfig config(options.xmlname, options.rateonly, options.fit_variable);
-    t_config.Stop();
 
     // Process input files, save in prop and systsstructs
     PROpeller prop;
     std::vector<std::vector<SystStruct>> systsstructs;
-    {
-        PROtimer::Stage t("setup: run_process (process or load binaries)");
-        run_process(prop, systsstructs, config, options);
-    }
+    run_process(prop, systsstructs, config, options);
 
     //Before building, if we fixed a nuisence parameter to a value, lets shift to that value.
     for(auto &sys: options.fixed_params){
@@ -59,24 +53,17 @@ int main(int argc, char* argv[])
 
     // Build internal objects: PROseed, PROmodel, and PROsyst
     PROseed myseed(options.nthread, options.global_seed);
-    PROtimer::Stage t_model("setup: build model");
     std::unique_ptr<PROmodel> model = get_model_from_string(config, prop);
-    t_model.Stop();
     std::vector<PROsyst> variable_systs;
-    {
-        PROtimer::Stage t_systs("setup: build PROsyst for all variables");
-        for(size_t i = 0; i < config.m_num_variables; ++i){
-            if(config.m_channel_variable_plot_bool.at(i) || i == config.i_prime){ 
-                PROtimer::Stage t("setup: PROsyst for variable " + std::to_string(i) + (i == config.i_prime ? " (fit variable)" : ""));
-                variable_systs.emplace_back(prop, config, systsstructs.at(i), options.shapeonly, i, model.get(), nullptr);
-            }else{
-                variable_systs.emplace_back();
-            }
+    for(size_t i = 0; i < config.m_num_variables; ++i){
+        if(config.m_channel_variable_plot_bool.at(i) || i == config.i_prime){ 
+            variable_systs.emplace_back(prop, config, systsstructs.at(i), options.shapeonly, i, model.get(), nullptr);
+        }else{
+            variable_systs.emplace_back();
         }
     }
 
     // Setup parameter vectors pre-exclusion/subset of PROsyst (needed to make fake data)
-    PROtimer::Stage t_data("setup: fake-data params + construct_data");
     Eigen::VectorXf fake_data_osc_param_vector = model->default_val;
     Eigen::VectorXf fakedataparams = make_fakedata_params(fake_data_osc_param_vector, config, options, *model, variable_systs[config.i_prime]);
 
@@ -84,17 +71,14 @@ int main(int argc, char* argv[])
     std::vector<PROdata> variable_data;
     bool use_real_data = (!options.data_xml.empty() || config.m_has_data_section) && !options.use_fake_data;
     PROdata data = construct_data(variable_data, use_real_data, config, prop, *model, variable_systs, fakedataparams, options);
-    t_data.Stop();
 
     // Leave this after creating fake data so we can make fake data using systs that aren't
     // included in the fit.
-    PROtimer::Stage t_excl("setup: include/exclude systs + checks");
     const std::vector<std::string> all_spline_names = variable_systs[config.i_prime].spline_names;
     include_or_exclude_systs(variable_systs, config, options);
     poisson_covariance_check(options, config, variable_systs[config.i_prime]);
     // fakedataparams (the profile's injected-truth markers) must follow the fitted layout.
     fakedataparams = remap_spline_params(fakedataparams, model->nparams, all_spline_names, variable_systs[config.i_prime].spline_names);
-    t_excl.Stop();
 
     //***********************************************************************
     //******************** PROjector pre-fit / projected fit ****************
@@ -106,16 +90,12 @@ int main(int argc, char* argv[])
     options.projector_config.force = options.force;
     options.projector_config.shape_only = options.shapeonly;
     if(options.projector_config.active()) {
-        PROtimer::Stage t("setup: PROjector");
         if(!PROjectorSetup(options.projector_config, config, variable_systs[config.i_prime],
                     variable_data, data, fakedataparams, options.fixed_params, *model, options.chi2))
             exit(1);
     }
 
-    {
-        PROtimer::Stage t("setup: empty_bin_check");
-        empty_bin_check(config, options, prop, *model, variable_systs[config.i_prime], data, use_real_data);
-    }
+    empty_bin_check(config, options, prop, *model, variable_systs[config.i_prime], data, use_real_data);
 
     //Pysics parameter input
     //Spline CV  injection studies [NEED TO GO AFTER the remove exclude systs]
@@ -180,14 +160,10 @@ int main(int argc, char* argv[])
     // MakeMetric is the single construction point shared with every
     // pseudo-experiment path, so fc/brazil/fc-adaptive metrics carry the same
     // options (incl. --shapeonly) as this data-fit metric.
-    PROtimer::Stage t_metric("setup: MakeMetric");
     PROmetric *metric = MakeMetric(options.chi2, config, prop, &(variable_systs[config.i_prime]), *model, data,
                                    options.eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,
                                    options.shapeonly).release();
     if(!metric) abort();
-    t_metric.Stop();
-    log<LOG_INFO>(L"%1% || [TIMER] fit dimension: %2% physics + %3% nuisance parameters, %4% bins (fit variable), %5% systematics in PROsyst") % __func__
-        % model->nparams % variable_systs[config.i_prime].GetNSplines() % config.m_num_variable_bins_total[config.i_prime] % systsstructs.at(config.i_prime).size();
 
     // Set color palette for covar and correlation matrices
     set_matrix_palette();
@@ -202,46 +178,36 @@ int main(int argc, char* argv[])
     float global_fit_chi2 = -1;
 
     if(*options.proplot_command){
-        PROtimer::Stage t("subcommand: plot");
         run_plot(config, prop, *metric, *model, variable_systs, CVParams, fakeDataParams, fake_data_osc_param_vector, variable_data, options);
     }
     if(*options.global_command){
-        PROtimer::Stage t("subcommand: global");
         run_global(global_fit_chi2, global_fit_result, config, prop, *metric, data, CVParams, global_lb, global_ub, global_fixed, fitConfig, options);
     }
     if(*options.profile_command){
-        PROtimer::Stage t("subcommand: profile");
         run_profile(global_fit_chi2, global_fit_result, config, prop, *metric, data, CVParams, fakedataparams, global_lb, global_ub, global_fixed, fitConfig, scanFitConfig, options, myseed);
     }
     if(*options.surface_command ){
-        PROtimer::Stage t("subcommand: surface");
         run_surface(global_fit_chi2, global_fit_result, config, prop, *metric, data, CVParams, fakeDataParams, global_lb, global_ub, global_fixed, fitConfig, scanFitConfig, options, myseed);
     }
     if(*options.profc_command) {
-        PROtimer::Stage t("subcommand: fc");
         run_fc(config, prop, *metric, data, CVParams, fakeDataParams, global_lb, global_ub, global_fixed, fitConfig, scanFitConfig, options, myseed);
     }
     if(*options.afc_command) {
-        PROtimer::Stage t("subcommand: fc-adaptive");
         run_afc(config, prop, *metric, data, fakeDataParams, fitConfig, scanFitConfig, options, myseed);
     }
     if(*options.mcmc_command) {
-        PROtimer::Stage t("subcommand: mcmc");
         run_mcmc(config, *metric, global_lb, global_ub, fitConfig, options, myseed);
     }
     if(*options.bench_command) {
-        PROtimer::Stage t("subcommand: bench");
         run_bench(config, prop, *metric, data, fakeDataParams, fitConfig, options);
     }
     if(*options.protest_command){
-        PROtimer::Stage t("subcommand: protest");
         run_test(config, prop, *metric, data, CVParams);
     }
 
     print_global_fit_results(global_fit_chi2, global_fit_result, config, options, *metric);
 
     delete metric;
-    PROtimer::PrintSummary();
     auto stop_time = std::chrono::high_resolution_clock::now();
     
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(stop_time - start_time);
