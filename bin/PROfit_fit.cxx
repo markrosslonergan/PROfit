@@ -515,8 +515,7 @@ std::map<std::string, TObject *> draw_fit_result(const PROconfig &config, const 
     }
 
     if(!fitres.mcmc_chains.empty()) {
-        // Autocorrelation is a per-chain diagnostic: chain 0 (the longest).
-        plotChainAutocorrelation(fitres.mcmc_chains.front(), prefix+"_corrmat_mcmc_autocorrelation.pdf", param_names, &drawn_objs);
+        plotChainAutocorrelation(fitres.mcmc_chains, prefix+"_corrmat_mcmc_autocorrelation.pdf", param_names, &drawn_objs);
         std::string name = prefix+"_mcmc_chain";
         drawn_objs[name] = new TTree(name.c_str(), name.c_str());
         TTree *tree = (TTree*)drawn_objs[name];

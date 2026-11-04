@@ -30,10 +30,26 @@ namespace PROfit {
     // Not sure why, that should be taken care of by include guards.
     void set_matrix_palette();
         
-    /** @brief Autocorrelation PDF of a chain: |rho(lag)| (log) and rho(lag) per parameter, then
-     *  every parameter overlaid. @p drawn_objs receives "<name>_autocorr" clones. */
-    inline void plotChainAutocorrelation(const std::vector<Eigen::VectorXf> &chain, const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000) {
-        if(chain.size() == 0) {
+    /**
+     * @brief Autocorrelation PDF of independent chains: |rho(lag)| (log) and rho(lag) per
+     * parameter, then every parameter overlaid. @p drawn_objs receives "<name>_autocorr" clones.
+     * @details Per chain, the FFT of the mean-subtracted samples zero-padded to twice the chain
+     * length gives the linear autocovariance sum_t x_t x_{t+k}. Unpadded it is circular (lag k
+     * equals lag n-k), so a short chain's curve mirrors about n/2 and returns to 1 at lag n. The
+     * sums are pooled over chains and normalised at lag 0; lags stop at the shortest chain's
+     * length. Also logs each parameter's integrated autocorrelation time tau (Geyer initial
+     * positive sequence) and effective sample size N/tau.
+     */
+    inline void plotChainAutocorrelation(const std::vector<std::vector<Eigen::VectorXf>> &chains, const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000) {
+        size_t nmin = std::numeric_limits<size_t>::max(), ntot = 0;
+        long nparam = 0;
+        for(const auto &ch : chains) {
+            if(ch.empty()) continue;
+            nmin = std::min(nmin, ch.size());
+            ntot += ch.size();
+            nparam = ch[0].size();
+        }
+        if(ntot == 0) {
             log<LOG_ERROR>(L"%1% || Error: cannot calculate autocorrelation without a saved chain."
                            L" Did you forget to run the Metropolis object, or tell the Metropolis"
                            L" object to not save the chain?")
@@ -41,7 +57,6 @@ namespace PROfit {
             log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
             return;
         }
-        long nparam = chain[0].size();
         if(param_names.size() < (size_t)nparam) {
             log<LOG_ERROR>(L"%1% || Passed in parameter names is not the same size (%2%) "
                            L"as the number of parameters in each step of the chain (%3%).")
@@ -49,7 +64,42 @@ namespace PROfit {
             log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
             return;
         }
+        max_lag = std::max<size_t>(1, std::min(max_lag, nmin));
+
+        // Autocovariance sums at lags 0..max_lag-1 of parameter i, pooled over chains.
+        auto pooled_autocov = [&](long i) {
+            std::vector<double> sum(max_lag, 0.0);
+            for(const auto &ch : chains) {
+                if(ch.empty()) continue;
+                const int n = (int)ch.size();
+                int m = 2 * n;
+                double mean = 0;
+                for(const auto &step : ch) mean += step(i);
+                mean /= n;
+                std::vector<double> x(m, 0.0);
+                for(int t = 0; t < n; ++t) x[t] = ch[t](i) - mean;
+                std::unique_ptr<TVirtualFFT> fft(TVirtualFFT::FFT(1, &m, "R2C ES K"));
+                fft->SetPoints(x.data());
+                fft->Transform();
+                std::vector<double> power(m), ims(m, 0.0);
+                for(int k = 0; k < m; ++k) {
+                    double re, im;
+                    fft->GetPointComplex(k, re, im);
+                    power[k] = re*re + im*im;
+                }
+                std::unique_ptr<TVirtualFFT> ifft(TVirtualFFT::FFT(1, &m, "C2R ES K"));
+                ifft->SetPointsComplex(power.data(), ims.data());
+                ifft->Transform();
+                // The unnormalised forward + inverse transform multiplies by m.
+                for(size_t k = 0; k < max_lag; ++k) sum[k] += ifft->GetPointReal((int)k) / m;
+            }
+            return sum;
+        };
+
         std::vector<std::pair<TH1D*,TH1D*>> hs;
+        std::vector<std::string> degenerate;
+        double worst_ess = std::numeric_limits<double>::infinity();
+        std::string worst_name;
         TH1D zero("z","",max_lag, 0, max_lag);
         for(size_t i = 1; i <= max_lag; ++i) zero.SetBinContent(i, 0);
         zero.SetLineStyle(kDashed);
@@ -58,44 +108,30 @@ namespace PROfit {
         c.Print((filename + "[").c_str());
         for(long i = 0; i < nparam; ++i) {
             hs.emplace_back(new TH1D(("hautoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;abs(autocorrelation)").c_str(), max_lag, 0, max_lag), new TH1D(("h2autoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;autocorrelation").c_str(), max_lag, 0, max_lag));
-            int n = chain.size();
-            std::vector<double> values;
-            values.reserve(n);
-            double mean = 0;
-            for(const auto &step : chain) {
-                values.push_back(step(i));
-                mean += step(i);
-            }
-            mean /= n;
-            for(double &v : values) v -= mean;
-            TVirtualFFT *fft = TVirtualFFT::FFT(1, &n, "R2C");
-            fft->SetPoints(values.data());
-            fft->Transform();
-            std::vector<double> fft_pts;
-            std::vector<double> ims(n, 0); // Dummy vector to hold imag value of 0 for each point.
-            for(int k = 0; k < n; ++k) {
-                double re, im;
-                fft->GetPointComplex(k, re, im);
-                fft_pts.push_back(re*re+im*im);
-            }
-            TVirtualFFT *ifft = TVirtualFFT::FFT(1, &n, "C2R");
-            ifft->SetPointsComplex(fft_pts.data(), ims.data());
-            ifft->Transform();
-            double lag0 = ifft->GetPointReal(0), klag = 0;
-            // A constant chain column gives lag0 == 0; klag/lag0 would put literal
-            // 'nan's into the PDF stream and corrupt the page. Plot zeros instead.
+            const std::vector<double> acov = pooled_autocov(i);
+            const double lag0 = acov[0];
+            // A constant chain column gives lag0 == 0; rho would put literal 'nan's into the
+            // PDF stream and corrupt the page. Plot zeros instead.
             if(!std::isfinite(lag0) || lag0 <= 0) {
-                log<LOG_WARNING>(L"%1% || Chain for parameter %2% is constant/degenerate (lag0 = %3%);"
-                                 L" autocorrelation undefined, plotting zeros.")
-                    % __func__ % param_names[i].c_str() % lag0;
+                degenerate.push_back(param_names[i]);
             } else {
-                for(int k = 0; k < n && k < max_lag; ++k) {
-                    klag = ifft->GetPointReal(k);
-                    hs.back().first->SetBinContent(k+1, std::abs(klag/lag0));
-                    hs.back().second->SetBinContent(k+1, klag/lag0);
+                for(size_t k = 0; k < max_lag; ++k) {
+                    const double rho = acov[k] / lag0;
+                    hs.back().first->SetBinContent(k+1, std::abs(rho));
+                    hs.back().second->SetBinContent(k+1, rho);
                 }
-                log<LOG_INFO>(L"%1% || Lag %2% autocorrelation for parameter %3% is %4%.")
-                    % __func__ % std::min(max_lag, (size_t)n) % param_names[i].c_str() % (klag/lag0);
+                // tau = 1 + 2 sum rho(k), summed in pairs while a pair stays positive.
+                double tau = 1.0;
+                bool truncated = false;
+                for(size_t k = 1; k + 1 < max_lag; k += 2) {
+                    const double pair = (acov[k] + acov[k+1]) / lag0;
+                    if(pair <= 0) { truncated = true; break; }
+                    tau += 2 * pair;
+                }
+                const double ess = ntot / tau;
+                if(ess < worst_ess) { worst_ess = ess; worst_name = param_names[i]; }
+                log<LOG_INFO>(L"%1% || Parameter %2%: integrated autocorrelation time %3%%4%, effective samples %5% of %6%.")
+                    % __func__ % param_names[i].c_str() % (truncated ? "" : ">= ") % tau % ess % ntot;
             }
             c.cd(1);
             gPad->SetLogy(1);
@@ -110,6 +146,12 @@ namespace PROfit {
                 (*drawn_objs)->insert({param_names[i]+"_autocorr", hs.back().second->Clone()});
             }
         }
+        if(std::isfinite(worst_ess))
+            log<LOG_INFO>(L"%1% || %2% chain(s), %3% samples: lowest effective sample size %4% (%5%).")
+                % __func__ % chains.size() % ntot % worst_ess % worst_name.c_str();
+        if(!degenerate.empty())
+            log<LOG_WARNING>(L"%1% || %2% of %3% parameters never moved (constant chain, e.g. %4%); their autocorrelation is undefined and plotted as zero.")
+                % __func__ % degenerate.size() % nparam % degenerate.front().c_str();
         c.Clear();
         gStyle->SetPalette(kCool);
         TLegend leg(0.3, 0.6, 0.89, 0.89);
@@ -236,7 +278,7 @@ namespace PROfit {
                 }
 
                 void plot_autocorrelation(const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000) const {
-                    plotChainAutocorrelation(chain, filename, param_names, drawn_objs, max_lag);
+                    plotChainAutocorrelation(std::vector<std::vector<Eigen::VectorXf>>{chain}, filename, param_names, drawn_objs, max_lag);
                 }
 
         };
