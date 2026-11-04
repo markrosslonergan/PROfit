@@ -68,7 +68,9 @@ using namespace PROfit;
 
 struct GlobalFitResult {
     PROfitter fitter;
-    std::optional<Metropolis<simple_target, adaptive_proposal>> mh;
+    /// Kept steps of each post-fit Correlations chain (physics free), in chain order.
+    std::vector<std::vector<Eigen::VectorXf>> mcmc_chains;
+    size_t mcmc_naccept = 0, mcmc_nsteps = 0; ///< Accepted proposals / steps (burn-in included) over those chains.
 
     std::vector<TH1D> priors, posteriors;
     Eigen::VectorXf prior_param_lo, prior_param_hi, post_param_lo, post_param_hi;

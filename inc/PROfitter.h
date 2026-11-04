@@ -104,8 +104,17 @@ namespace PROfit {
         bool localfit_warm_nuisance = false;
         size_t n_max_local_retries = 1;              ///< Maximum retries if an L-BFGS-B fit throws an exception.
 
-        size_t MCMCiter = 20'000;  ///< Number of MCMC iterations (after burn-in) for posterior sampling.
-        size_t MCMCburn = 25'000;  ///< Number of MCMC burn-in iterations discarded before sampling.
+        size_t MCMCiter = 20'000;  ///< Number of MCMC iterations (after burn-in) for posterior sampling, summed over chains.
+        /// MCMC burn-in iterations per chain, discarded before sampling; read it through burnin().
+        /// Unless MCMC-Burnin is given it depends on the chain: 5'000 for the post-fit chains, whose
+        /// proposal starts from the linearised posterior covariance (adaptive_proposal::seed_proposal),
+        /// 25'000 for unseeded chains (the mcmc subcommand).
+        size_t MCMCburn = 25'000;
+        bool MCMCburn_set = false;  ///< MCMC-Burnin was given explicitly.
+        size_t burnin(bool seeded) const { return MCMCburn_set || !seeded ? MCMCburn : 5'000; }
+        /// Independent post-fit MCMC chains run in parallel (0 = one per -n thread). Each runs the
+        /// full burn-in and its share of MCMCiter; results depend on this count, not the threads.
+        size_t MCMCchains = 0;
 
         size_t harmonic_min_num_seeds = 3;               ///< Minimum number of seed points from the harmonic frequency search.
         size_t harmonic_max_num_seeds = 5;               ///< Maximum number of seed points from the harmonic frequency search.
@@ -391,6 +400,7 @@ namespace PROfit {
                 // MCMC parameters
                 } else if(param_name == "MCMC-Burnin") {
                     MCMCburn = value;
+                    MCMCburn_set = true;
                     if(MCMCburn < 1) {
                         log<LOG_WARNING>(L"%1% || Warning: Running without any burnin for MCMC.") % __func__ ;
                     }
@@ -399,6 +409,8 @@ namespace PROfit {
                     if(MCMCiter < 1) {
                         log<LOG_ERROR>(L"%1% || Requested to run MCMC with no iterations.") % __func__ ;
                     }
+                } else if(param_name == "MCMC-Chains") {
+                    MCMCchains = value;
                     
                 // Harmonic seed search parameters
                 } else if(param_name == "harmonic_min_num_seeds") {
@@ -486,7 +498,8 @@ namespace PROfit {
             
             log<LOG_INFO>(L"%1% || ------------ MCMC Parameters -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || MCMCiter: %2%  ") % __func__ % MCMCiter;
-            log<LOG_INFO>(L"%1% || MCMCburn: %2%  ") % __func__ % MCMCburn;
+            log<LOG_INFO>(L"%1% || MCMCburn: %2% (post-fit chains), %3% (unseeded chains)  ") % __func__ % burnin(true) % burnin(false);
+            log<LOG_INFO>(L"%1% || MCMCchains: %2%  ") % __func__ % MCMCchains;
             
             log<LOG_INFO>(L"%1% || ------------ Harmonic Seed Search -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || harmonic_min_num_seeds: %2%  ") % __func__ % harmonic_min_num_seeds;
@@ -554,7 +567,8 @@ namespace PROfit {
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ MCMC Parameters ------");
             log<LOG_INFO>(L"  MCMC-Iterations                      : Number of MCMC iterations to run");
-            log<LOG_INFO>(L"  MCMC-Burnin                          : Number of burn-in iterations for MCMC");
+            log<LOG_INFO>(L"  MCMC-Burnin                          : Number of burn-in iterations per MCMC chain");
+            log<LOG_INFO>(L"  MCMC-Chains                          : Independent post-fit MCMC chains, run in parallel (0 = one per -n thread)");
             
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ Harmonic Seed Search Parameters ------");

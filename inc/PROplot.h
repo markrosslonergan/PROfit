@@ -494,16 +494,15 @@ namespace PROfit{
 
     /**
      * @brief Compute a posterior error band using Markov Chain Monte Carlo sampling.
-     * @details Runs the Metropolis algorithm for @p burnin + @p iterations steps.  At each
-     * accepted step after burn-in, the corresponding spectrum is computed and accumulated;
-     * asymmetric 1-sigma error bars are derived from the 16th and 84th percentiles of the
-     * per-bin sample distributions.  Posterior distributions for each spline parameter and
-     * the per-bin histogram covariance are also accumulated.
-     * @tparam T  Metropolis proposal distribution type.
-     * @tparam P  Metropolis target density type.
-     * @param met        Metropolis sampler object.
-     * @param burnin     Number of burn-in steps to discard.
-     * @param iterations Number of post-burn-in steps to keep.
+     * @details Runs spec.nchains() independent adaptive-Metropolis chains with target
+     * Target{metric} from @p best_fit (runMetropolisChains: burn-in + kept steps each, in
+     * parallel), the parameters in spec.fixed held. Each kept step gives a spectrum (a rejected
+     * step reuses the previous one); asymmetric 1-sigma error bars are derived from the 16th and
+     * 84th percentiles of the per-bin sample distributions. Posterior distributions for each
+     * spline parameter and the per-bin histogram covariance are also accumulated. Samples are
+     * merged in chain order, so the result does not depend on the thread count.
+     * @tparam Target    Metropolis target density type (simple_target, prior_only_target).
+     * @param spec       Chain settings: fixed parameters, proposal seed, burn-in, kept steps, seeds.
      * @param config     Analysis configuration.
      * @param prop       MC event store.
      * @param metric     The PROmetric providing access to model and systematics.
@@ -511,6 +510,7 @@ namespace PROfit{
      * @param posteriors Output vector of TH1D histograms for each spline nuisance parameter.
      * @param post_covar Output post-fit parameter covariance matrix (splines only).
      * @param var_index  Variable index (default 0).
+     * @param pbar       Optional progress bar, following chain 0 (spec.chainSteps(0) kept steps).
      * @param data_spec  Optional collapsed data spectrum. When empty (default), the band
      *                   includes prior throws of the covariance-type systematics. When given,
      *                   each MCMC sample instead receives the data-constrained posterior pull
@@ -529,8 +529,8 @@ namespace PROfit{
      *                   the covariance projected onto shape (ShapeProjectorCollapsed).
      * @return PROerrorbar with per-bin asymmetric uncertainties and the histogram covariance.
      */
-    template<class T, class P>
-        PROerrorbar getMCMCErrorBand(Metropolis<T, P> met, size_t burnin, size_t iterations, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, int var_index=0, PROgressBar *pbar = nullptr, const Eigen::VectorXf &data_spec = Eigen::VectorXf(), bool shape_norm = false) {
+    template<class Target>
+        PROerrorbar getMCMCErrorBand(const MCMCChainSpec &spec, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, int var_index=0, PROgressBar *pbar = nullptr, const Eigen::VectorXf &data_spec = Eigen::VectorXf(), bool shape_norm = false) {
             for(size_t i = 0; i < metric.GetSysts().GetNSplines(); ++i)
                 posteriors.emplace_back("", (";"+config.m_mcgen_variation_plotname_map.at(metric.GetSysts().spline_names[i])).c_str(), 60, -3, 3);
 
@@ -557,11 +557,13 @@ namespace PROfit{
             }
 
             Eigen::VectorXf cv_coll = CollapseMatrix(config, cv);
+            const Eigen::Index nbins = cv_coll.size();
             Eigen::MatrixXf L;
             if(metric.GetSysts().GetNCovar() > 0) L = metric.GetSysts().DecomposeFractionalCovariance(config, cv);
             else L = Eigen::MatrixXf::Zero(config.m_num_variable_bins_total_collapsed[var_index], config.m_num_variable_bins_total_collapsed[var_index]);
             if(shape_fit) L = Eigen::MatrixXf(ShapeProjectorCollapsed(config, cv_coll, var_index) * L);
-            auto sample_spec = [&](const Eigen::VectorXf &value) {
+            // Reads shared const state only, so every chain's thread can call it.
+            auto fill_spec = [&](const Eigen::VectorXf &value) {
                 Eigen::VectorXf s = CollapseMatrix(config, FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), value, true,var_index).Spec());
                 if(shape_fit) s = s.cwiseProduct(ChannelNormFactors(config, s, data_spec, var_index));
                 return s;
@@ -571,62 +573,61 @@ namespace PROfit{
             auto display = [&](const Eigen::VectorXf &s) {
                 return shape_norm ? Eigen::VectorXf(s.cwiseProduct(ChannelNormFactors(config, s, cv_coll, var_index))) : s;
             };
-            std::normal_distribution<float> nd;
-            Eigen::VectorXf throws = Eigen::VectorXf::Constant(config.m_num_variable_bins_total_collapsed[var_index], 0);
 
-            int nspline = metric.GetSysts().GetNSplines();
-            int nphys = metric.GetModel().nparams;
-            Eigen::VectorXf splines_bf = best_fit.segment(nphys, nspline);
-            post_covar = Eigen::MatrixXf::Constant(nspline, nspline, 0);
-            Eigen::MatrixXf post_hist_covar = Eigen::MatrixXf::Constant(cv_coll.size(), cv_coll.size(), 0);
-            Eigen::VectorXf hist_diff_sum = Eigen::VectorXf::Zero(cv_coll.size());
-            size_t nsteps = 0;
+            // One spectrum per kept step; a rejected step repeats the previous point and its spectrum.
+            const size_t nchains = std::max<size_t>(1, spec.nchains());
+            std::vector<std::vector<Eigen::VectorXf>> chain_specs(nchains);
+            for(size_t c = 0; c < nchains; ++c) chain_specs[c].reserve(spec.chainSteps(c));
+            std::vector<MCMCChainOut> chains = runMetropolisChains<Target>(metric, best_fit, spec,
+                [&](size_t c, const Eigen::VectorXf &value, bool moved) {
+                    std::vector<Eigen::VectorXf> &cs = chain_specs[c];
+                    if(moved || cs.empty()) cs.push_back(fill_spec(value));
+                    else cs.push_back(cs.back());
+                }, pbar);
+
             std::vector<Eigen::VectorXf> specs, values;
-            std::vector<std::vector<float>> param_samples(nspline);
-
-	    std::function<void(const Eigen::VectorXf&)> action;
-	    
-            if (!use_data){
-	        action = [&](const Eigen::VectorXf &value) {
-                nsteps += 1;
-		for(size_t i = 0; i < config.m_num_variable_bins_total_collapsed[var_index]; ++i)
-                        throws(i) = nd(PROseed::global_rng);
-                specs.push_back(display(sample_spec(value)+L*throws));
-                for(int i = 0; i < nspline; ++i) {
-                    posteriors[i].Fill(value(i+nphys));
-                    param_samples[i].push_back(value(i+nphys));
-                }
-                Eigen::VectorXf splines = value.segment(nphys, nspline);
-                Eigen::VectorXf diff = splines-splines_bf;
-                post_covar += diff * diff.transpose();
-		Eigen::VectorXf diff_hist = specs.back() - cv_coll;
-                hist_diff_sum += diff_hist;
-                post_hist_covar += diff_hist * diff_hist.transpose();
-                };
+            size_t naccept = 0, nsteps_total = 0;
+            for(size_t c = 0; c < nchains; ++c) {
+                for(auto &sp : chain_specs[c]) specs.push_back(std::move(sp));
+                for(auto &v : chains[c].values) values.push_back(std::move(v));
+                naccept += chains[c].naccept;
+                nsteps_total += chains[c].nsteps;
             }
-	    else{
-                action = [&](const Eigen::VectorXf &value) {
-                    nsteps += 1;
-                    specs.push_back(sample_spec(value));
-                    values.push_back(value);
-                    for(int i = 0; i < nspline; ++i) {
-                        posteriors[i].Fill(value(i+nphys));
-                        param_samples[i].push_back(value(i+nphys));
-                    }
-		    Eigen::VectorXf splines = value.segment(nphys, nspline);
-                    Eigen::VectorXf diff = splines-splines_bf;
-                    post_covar += diff * diff.transpose();
-                };
-	    }
-            met.run(burnin, iterations, action, pbar);
+            chain_specs.clear();
+            chains.clear();
+            const size_t nsteps = specs.size();
+            if(nsteps == 0) throw std::runtime_error("getMCMCErrorBand: the chains kept no samples (MCMC-Iterations = 0?)");
 
-            post_covar /= nsteps;
+            const int nspline = metric.GetSysts().GetNSplines();
+            const int nphys = metric.GetModel().nparams;
+            const Eigen::VectorXf splines_bf = best_fit.segment(nphys, nspline);
+            std::vector<std::vector<float>> param_samples(nspline, std::vector<float>(nsteps));
+            Eigen::MatrixXf spline_diff(nspline, (Eigen::Index)nsteps);
+            for(size_t ai = 0; ai < nsteps; ++ai) {
+                for(int i = 0; i < nspline; ++i) {
+                    posteriors[i].Fill(values[ai](i+nphys));
+                    param_samples[i][ai] = values[ai](i+nphys);
+                }
+                spline_diff.col((Eigen::Index)ai) = values[ai].segment(nphys, nspline) - splines_bf;
+            }
+            post_covar = Eigen::MatrixXf::Zero(nspline, nspline);
+            post_covar.selfadjointView<Eigen::Lower>().rankUpdate(spline_diff);
+            post_covar = Eigen::MatrixXf(post_covar.selfadjointView<Eigen::Lower>()) / (float)nsteps;
+
+            std::normal_distribution<float> nd;
             // MAP-consistent covariance pull: Sigma(C+Sigma)^-1 (d - cv_bf) at the
             // best fit, matching the analytic getCovarianceOnlyErrorBand (exactly 0
             // for Asimov). The sample median is NOT used for center_shift — it
             // carries the posterior-median-vs-MAP offset plus MCMC noise.
-            Eigen::VectorXf analytic_shift = Eigen::VectorXf::Zero(cv_coll.size());
-            if (use_data) {
+            Eigen::VectorXf analytic_shift = Eigen::VectorXf::Zero(nbins);
+            if (!use_data) {
+                // Prior covariance throws, drawn in sample order from the global stream.
+                Eigen::VectorXf throws(nbins);
+                for(size_t ai = 0; ai < nsteps; ++ai) {
+                    for(Eigen::Index i = 0; i < nbins; ++i) throws(i) = nd(PROseed::global_rng);
+                    specs[ai] = display(specs[ai] + L*throws);
+                }
+            } else {
                 // Constrained posterior pull for covariance-type systematics,
                // the collapsed systematic covariance is
                 // Sigma = L*L^T (L = U*sqrt(S) from DecomposeFractionalCovariance)
@@ -664,83 +665,105 @@ namespace PROfit{
                             c_inv(i) = stat(contrib[i]) > 0 ? 1.0 / stat(contrib[i]) : 0.0;
                         return c_inv;
                     };
-                    Eigen::VectorXd C_inv_red;
-                    Eigen::LLT<Eigen::MatrixXd> inner_llt;
                     auto factorise = [&](const Eigen::VectorXd &c_inv) {
-                        C_inv_red = c_inv;
                         Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k)
-                                              + L_red.transpose() * C_inv_red.asDiagonal() * L_red;
-                        inner_llt.compute(inner);
-                        if(inner_llt.info() != Eigen::Success) {
+                                              + L_red.transpose() * c_inv.asDiagonal() * L_red;
+                        Eigen::LLT<Eigen::MatrixXd> llt(inner);
+                        if(llt.info() != Eigen::Success) {
                             // inner is PD by construction. any failures here are float math noise from L. Clamp eigenvalues and retry.
                             log<LOG_WARNING>(L"%1% || LLT of posterior pull matrix failed; clamping eigenvalues.") % __func__;
                             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(inner);
                             inner = es.eigenvectors()
                                   * es.eigenvalues().cwiseMax(1e-12).asDiagonal()
                                   * es.eigenvectors().transpose();
-                            inner_llt.compute(inner);
+                            llt.compute(inner);
                         }
+                        return llt;
                     };
-                    factorise(inv_stat(stat_bf));
 
                     // Conditional pull at the best fit: L*alpha_min(d - cv) equals
                     // Sigma[:,contrib] (C+Sigma)^-1 (d - cv) by the push-through identity.
-                    Eigen::VectorXd u_bf(nb);
-                    for(size_t i = 0; i < nb; ++i)
-                        u_bf(i) = data_spec(contrib[i]) - cv_coll(contrib[i]);
-                    analytic_shift = (L_shift * inner_llt.solve(
-                        L_red.transpose() * (C_inv_red.asDiagonal() * u_bf))).cast<float>();
-
-                    Eigen::VectorXd throws_k(k), residual(nb);
-                    for(size_t ai = 0; ai < nsteps; ++ai) {
-                        for(size_t i = 0; i < k; ++i)
-                            throws_k(i) = nd(PROseed::global_rng);
-                        // Refactorise only when C moved (pearson: every new chain point).
-                        const Eigen::VectorXd c_inv = inv_stat(conditioningStatVariances(&metric, config, var_index, specs.at(ai), data_spec, values.at(ai)));
-                        if(c_inv != C_inv_red) factorise(c_inv);
+                    {
+                        const Eigen::VectorXd c_inv = inv_stat(stat_bf);
+                        const Eigen::LLT<Eigen::MatrixXd> llt = factorise(c_inv);
+                        Eigen::VectorXd u_bf(nb);
                         for(size_t i = 0; i < nb; ++i)
-                            residual(i) = data_spec(contrib[i]) - specs.at(ai)(contrib[i]);
-                        Eigen::VectorXd alpha_min =
-                            inner_llt.solve(L_red.transpose() * (C_inv_red.asDiagonal() * residual));
-                        // delta = U^-1 v with inner = U^T U has cov(delta) = inner^-1.
-                        Eigen::VectorXd alpha_hat =
-                            alpha_min + inner_llt.matrixU().solve(throws_k);
-                        specs.at(ai) += (L_shift * alpha_hat).cast<float>();
-                        specs.at(ai) = display(specs.at(ai));
+                            u_bf(i) = data_spec(contrib[i]) - cv_coll(contrib[i]);
+                        analytic_shift = (L_shift * llt.solve(
+                            L_red.transpose() * (c_inv.asDiagonal() * u_bf))).cast<float>();
+                    }
 
-                        Eigen::VectorXf diff_hist = specs.at(ai) - cv_coll;
-                        hist_diff_sum += diff_hist;
-                        post_hist_covar += diff_hist * diff_hist.transpose();
-                    }
-                } else {
-                    // Nothing to constrain , but still accumulate the band covariance
-                    // the constraint loop would otherwise have provided.
+                    // Each sample's alpha ~ N(alpha_min, inner^-1): alpha_min + U^-1 g with
+                    // inner = U^T U. All throws g first, in sample order from the global stream.
+                    Eigen::MatrixXd throws_k(k, (Eigen::Index)nsteps);
+                    for(size_t ai = 0; ai < nsteps; ++ai)
+                        for(size_t i = 0; i < k; ++i)
+                            throws_k((Eigen::Index)i, (Eigen::Index)ai) = nd(PROseed::global_rng);
+
+                    // Samples sharing C share the factorisation: consecutive runs (pearson: one
+                    // per accepted step; neyman: one run), cut into blocks solved in parallel.
+                    struct Block { size_t begin, end, run; };
+                    constexpr size_t kMaxBlock = 512;
+                    std::vector<Eigen::VectorXd> run_cinv;
+                    std::vector<Block> blocks;
                     for(size_t ai = 0; ai < nsteps; ++ai) {
-                        specs.at(ai) = display(specs.at(ai));
-                        Eigen::VectorXf diff_hist = specs.at(ai) - cv_coll;
-                        hist_diff_sum += diff_hist;
-                        post_hist_covar += diff_hist * diff_hist.transpose();
+                        Eigen::VectorXd c_inv = inv_stat(conditioningStatVariances(&metric, config, var_index, specs[ai], data_spec, values[ai]));
+                        if(run_cinv.empty() || c_inv != run_cinv.back()) {
+                            run_cinv.push_back(std::move(c_inv));
+                            blocks.push_back({ai, ai + 1, run_cinv.size() - 1});
+                        } else if(blocks.back().end - blocks.back().begin >= kMaxBlock) {
+                            blocks.push_back({ai, ai + 1, run_cinv.size() - 1});
+                        } else {
+                            blocks.back().end = ai + 1;
+                        }
                     }
+                    parallel_for(blocks.size(), spec.nthreads, [&](size_t bi) {
+                        const Block &blk = blocks[bi];
+                        const Eigen::VectorXd &c_inv = run_cinv[blk.run];
+                        const Eigen::LLT<Eigen::MatrixXd> llt = factorise(c_inv);
+                        const Eigen::Index m = (Eigen::Index)(blk.end - blk.begin);
+                        Eigen::MatrixXd weighted_residual(nb, m);
+                        for(Eigen::Index j = 0; j < m; ++j)
+                            for(size_t i = 0; i < nb; ++i)
+                                weighted_residual((Eigen::Index)i, j) = c_inv(i) * (data_spec(contrib[i]) - specs[blk.begin + j](contrib[i]));
+                        Eigen::MatrixXd alpha_hat = llt.solve(L_red.transpose() * weighted_residual);
+                        alpha_hat += llt.matrixU().solve(throws_k.middleCols((Eigen::Index)blk.begin, m));
+                        const Eigen::MatrixXf shift = (L_shift * alpha_hat).cast<float>();
+                        for(Eigen::Index j = 0; j < m; ++j)
+                            specs[blk.begin + j] = display(specs[blk.begin + j] + shift.col(j));
+                    });
+                } else {
+                    // Nothing to constrain.
+                    for(size_t ai = 0; ai < nsteps; ++ai) specs[ai] = display(specs[ai]);
                 }
             }
 
-            post_hist_covar /= nsteps;
-            // Make the covariance CENTRAL (about the sample mean, not the
-            // best-fit CV): the data-pull displacement lives in center_shift,
-            // and projected band widths built from this covariance must not
-            // absorb it. Matches the analytic getCovarianceOnlyErrorBand.
-            hist_diff_sum /= nsteps;
-            post_hist_covar -= hist_diff_sum * hist_diff_sum.transpose();
+            // Band covariance about the sample MEAN, not the best-fit CV: the data-pull
+            // displacement lives in center_shift, and projected band widths built from this
+            // covariance must not absorb it. Matches the analytic getCovarianceOnlyErrorBand.
+            Eigen::MatrixXf hist_diff(nbins, (Eigen::Index)nsteps);
+            for(size_t ai = 0; ai < nsteps; ++ai) hist_diff.col((Eigen::Index)ai) = specs[ai] - cv_coll;
+            const Eigen::VectorXf hist_diff_mean = hist_diff.rowwise().sum() / (float)nsteps;
+            Eigen::MatrixXf post_hist_covar = Eigen::MatrixXf::Zero(nbins, nbins);
+            post_hist_covar.selfadjointView<Eigen::Lower>().rankUpdate(hist_diff);
+            hist_diff.resize(0, 0);
+            post_hist_covar = Eigen::MatrixXf(post_hist_covar.selfadjointView<Eigen::Lower>()) / (float)nsteps;
+            post_hist_covar -= hist_diff_mean * hist_diff_mean.transpose();
+
+            // Order statistic at index n of v (same value as sorting v first).
+            auto order_stat = [](std::vector<float> &v, size_t n) {
+                std::nth_element(v.begin(), v.begin() + n, v.end());
+                return v[n];
+            };
             param_err_lo = Eigen::VectorXf::Zero(nspline);
             param_err_hi = Eigen::VectorXf::Zero(nspline);
             for(int i = 0; i < nspline; ++i) {
                 auto &v = param_samples[i];
-                std::sort(v.begin(), v.end());
                 float bf_val = best_fit(nphys + i);
-                param_err_lo(i) = std::abs(bf_val - v[int(0.160f * v.size())]);
-                param_err_hi(i) = std::abs(v[int(0.840f * v.size())] - bf_val);
+                param_err_lo(i) = std::abs(bf_val - order_stat(v, int(0.160f * v.size())));
+                param_err_hi(i) = std::abs(order_stat(v, int(0.840f * v.size())) - bf_val);
             }
-            log<LOG_INFO>(L"%1% || Acceptance rate %2%") % __func__ % ((float)met.naccept / iterations);
+            log<LOG_INFO>(L"%1% || Acceptance rate %2% (%3% chain(s), %4% kept samples)") % __func__ % ((float)naccept / nsteps_total) % nchains % nsteps;
 
             cv = CollapseMatrix(config, cv);
             PROerrorbar ebar(cv.size());
@@ -750,7 +773,6 @@ namespace PROfit{
                 for(size_t j = 0; j < specs.size(); ++j) {
                     binconts[j] = specs[j](i);
                 }
-                std::sort(binconts.begin(), binconts.end());
                 // Percentile widths about the sample MEDIAN, not cv: for the
                 // data-constrained band the sample cloud is pulled toward the
                 // data, and |quantile - cv| would fold a thin displaced band
@@ -758,9 +780,9 @@ namespace PROfit{
                 // reported separately in center_shift; error_point stays the
                 // best-fit spectrum (plot code uses it for unit conversion).
                 // Raw counts throughout (see getErrorBand); unit conversion is done at draw time.
-                float med = binconts[int(0.500*specs.size())];
-                float ehi = (binconts[int(0.840*specs.size())] - med);
-                float elo = (med - binconts[int(0.160*specs.size())]);
+                float med = order_stat(binconts, int(0.500*specs.size()));
+                float ehi = (order_stat(binconts, int(0.840*specs.size())) - med);
+                float elo = (med - order_stat(binconts, int(0.160*specs.size())));
                 ebar.error_up(i) =  ehi;
                 ebar.error_down(i) =  elo;
                 ebar.error_point(i) = cv(i);

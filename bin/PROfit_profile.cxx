@@ -14,7 +14,8 @@ void run_profile(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
     GlobalFitResult fitres = run_global_fit(config, prop, data, metric, ub, lb, fitConfig, CVParams, cv, fixed, opt); 
     global_fit_chi2 = fitres.chi2;
     global_fit_result = fitres.fitter.best_fit;
-    log<LOG_INFO>(L"%1% || MCMC acceptance is  %2%. ") % __func__% ((double)fitres.mh->naccept /fitConfig.MCMCiter);
+    if(fitres.mcmc_nsteps)
+        log<LOG_INFO>(L"%1% || MCMC acceptance is  %2%. ") % __func__% ((double)fitres.mcmc_naccept / fitres.mcmc_nsteps);
 
     PlotOptions popt; 
     if(options.data_mc_ratio){

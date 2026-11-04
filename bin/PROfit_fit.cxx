@@ -145,26 +145,53 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
     }
 
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
+    // Post-fit chains: independent chains in parallel, MCMCchains of them (default one per -n
+    // thread), each seeded with the linearised posterior covariance at the best fit so a short
+    // burn-in suffices. The seed changes how fast a chain adapts, not what it samples.
+    const size_t mcmc_threads = std::max<size_t>(1, PROsyst::spline2cov_nthreads);
+    const size_t mcmc_chains = fit_config.MCMCchains ? fit_config.MCMCchains : mcmc_threads;
+    const auto chainSpec = [&](const std::vector<int> &chain_fixed, Eigen::MatrixXf seed_cov) {
+        MCMCChainSpec spec;
+        spec.fixed = chain_fixed;
+        spec.seed_cov = std::move(seed_cov);
+        spec.burnin = fit_config.burnin(true);
+        spec.iterations = fit_config.MCMCiter;
+        spec.nthreads = mcmc_threads;
+        spec.seeds = drawChainSeeds(mcmc_chains, fit_config.MCMCiter, PROseed::global_rng);
+        return spec;
+    };
+    // One Jacobian at the best fit serves every chain's seed.
+    std::optional<LinearizedPosterior> lin;
+    const auto laplaceSeed = [&](const std::vector<int> &chain_fixed) {
+        if(!lin) lin = buildLinearizedPosterior(config, prop, metric, best_fit, lb, ub, data.Spec());
+        return LaplaceProposalCovariance(*lin, chain_fixed);
+    };
     if((opt & GlobalFitOptions::Correlations) != GlobalFitOptions::Default) {
-        log<LOG_INFO>(L"%1% || Starting a metropolis hastings chain to estimate the covariance matrix aroud the above best fit. Run and Burn is (%2%,%3%);") % __func__%fit_config.MCMCiter % fit_config.MCMCburn;
-
         std::vector<int> fixed;
-        for(size_t i = 0; i< global_fixed.size();i++){
+        for(size_t i = 0; i < global_fixed.size();i++){
             if(global_fixed.at(i) == 1)
                 fixed.push_back(i);
         }
-        res.mh.emplace(simple_target{metric}, adaptive_proposal(metric, dseed(PROseed::global_rng), fixed), best_fit, dseed(PROseed::global_rng));
+        const MCMCChainSpec spec = chainSpec(fixed, laplaceSeed(fixed));
+        log<LOG_INFO>(L"%1% || Starting %2% metropolis hastings chain(s) to estimate the covariance matrix around the above best fit. Kept steps %3% in total, burn-in %4% per chain.") % __func__ % spec.nchains() % spec.iterations % spec.burnin;
+
+        std::optional<PROgressBar> mh_pbar;
+        if((opt & GlobalFitOptions::Progress) != GlobalFitOptions::Default) 
+            mh_pbar.emplace(int(spec.burnin + spec.chainSteps(0)), 30, "MCMC postfit");
+        std::vector<MCMCChainOut> chains = runMetropolisChains<simple_target>(metric, best_fit, spec,
+            [](size_t, const Eigen::VectorXf &, bool) {}, mh_pbar ? &*mh_pbar : nullptr);
 
         res.covmat = Eigen::MatrixXf::Constant(N_params, N_params, 0);
         size_t count = 0;
-        const auto action = [&](const Eigen::VectorXf &value) {
-            res.covmat += (value-best_fit) * (value-best_fit).transpose();
-            count += 1;
-        };
-        std::optional<PROgressBar> mh_pbar;
-        if((opt & GlobalFitOptions::Progress) != GlobalFitOptions::Default) 
-            mh_pbar.emplace(int(fit_config.MCMCburn + fit_config.MCMCiter), 30, "MCMC postfit");
-        res.mh->run(fit_config.MCMCburn,fit_config.MCMCiter, action, mh_pbar ? &*mh_pbar : nullptr);
+        for(auto &c : chains) {
+            for(const Eigen::VectorXf &value : c.values) {
+                res.covmat += (value-best_fit) * (value-best_fit).transpose();
+                count += 1;
+            }
+            res.mcmc_naccept += c.naccept;
+            res.mcmc_nsteps += c.nsteps;
+            res.mcmc_chains.push_back(std::move(c.values));
+        }
 
         res.covmat /= count;
         Eigen::VectorXf inv_best_fit = best_fit.array().abs().max(1e-10f).inverse();
@@ -173,7 +200,7 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
         Eigen::VectorXf inv_sqrt_diag = res.fraccovmat.diagonal().array().abs().max(1e-10f).sqrt().inverse();
         res.corrmat = inv_sqrt_diag.asDiagonal() * res.fraccovmat * inv_sqrt_diag.asDiagonal();
 
-        log<LOG_INFO>(L"%1% || Finished the metropolis hastings chain ") % __func__;
+        log<LOG_INFO>(L"%1% || Finished the metropolis hastings chain(s); acceptance rate %2%") % __func__ % ((double)res.mcmc_naccept / std::max<size_t>(1, res.mcmc_nsteps));
     }
 
     bool preerr = (opt & GlobalFitOptions::PrefitErrorBand) != GlobalFitOptions::Default;
@@ -186,7 +213,7 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
     // that leaves zero free parameters the chain never moves and its band is
     // exactly Gaussian throws of the covariance around the best-fit spectrum —
     // computed analytically instead (getCovarianceOnlyErrorBand), skipping
-    // MCMCburn+MCMCiter identical spectrum evaluations.
+    // burn-in + MCMCiter identical spectrum evaluations.
     std::vector<int> errband_fixed_pars;
     for(size_t i = 0; i < N_phys_params; ++i) errband_fixed_pars.push_back(i);
     for(size_t i = N_phys_params; i< global_fixed.size();i++){
@@ -211,10 +238,10 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
             res.err_band = getCovarianceOnlyErrorBand(config, prop, metric.GetSysts(), metric.GetModel(), best_fit, config.i_prime, Eigen::VectorXf(), shape_norm);
             degenerate_mcmc_params(res.priors, res.prior_covariance, res.prior_param_lo, res.prior_param_hi);
         } else if(mcmcpre) {
-            Metropolis mh_pre(prior_only_target{metric}, adaptive_proposal(metric, dseed(PROseed::global_rng), errband_fixed_pars), best_fit, dseed(PROseed::global_rng));
+            const MCMCChainSpec spec = chainSpec(errband_fixed_pars, PriorProposalCovariance(metric, lb, ub, errband_fixed_pars));
             std::optional<PROgressBar> errband_pre_pbar;
-            if(progress_bar) errband_pre_pbar.emplace(int(fit_config.MCMCburn + fit_config.MCMCiter), 30, "MCMC prefit");
-            res.err_band = getMCMCErrorBand(mh_pre, fit_config.MCMCburn, fit_config.MCMCiter, config, prop, metric, best_fit, res.priors, res.prior_covariance, res.prior_param_lo, res.prior_param_hi, config.i_prime, errband_pre_pbar ? &*errband_pre_pbar : nullptr, Eigen::VectorXf(), shape_norm);
+            if(progress_bar) errband_pre_pbar.emplace(int(spec.burnin + spec.chainSteps(0)), 30, "MCMC prefit");
+            res.err_band = getMCMCErrorBand<prior_only_target>(spec, config, prop, metric, best_fit, res.priors, res.prior_covariance, res.prior_param_lo, res.prior_param_hi, config.i_prime, errband_pre_pbar ? &*errband_pre_pbar : nullptr, Eigen::VectorXf(), shape_norm);
         } else {
             // Keep the global RNG stream where existing seeded runs expect it:
             // this branch used to construct an unused prefit Metropolis chain,
@@ -240,13 +267,13 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
             res.post_err_band = getCovarianceOnlyErrorBand(config, prop, metric.GetSysts(), metric.GetModel(), best_fit, config.i_prime, band_data, shape_norm, metric.ShapeOnly(), &metric);
             degenerate_mcmc_params(res.posteriors, res.spline_covariance, res.post_param_lo, res.post_param_hi);
         } else {
-            Metropolis mh_post(simple_target{metric}, adaptive_proposal(metric, dseed(PROseed::global_rng), errband_fixed_pars), best_fit, dseed(PROseed::global_rng));
+            const MCMCChainSpec spec = chainSpec(errband_fixed_pars, laplaceSeed(errband_fixed_pars));
             std::optional<PROgressBar> errband_post_pbar;
-            if(progress_bar) errband_post_pbar.emplace(int(fit_config.MCMCburn + fit_config.MCMCiter), 30, "MCMC postfit band");
+            if(progress_bar) errband_post_pbar.emplace(int(spec.burnin + spec.chainSteps(0)), 30, "MCMC postfit band");
             // data.Spec() enables the data-constrained posterior pull of the
             // covariance-type systematics (post-fit band only; the pre-fit call
             // above stays unconstrained). Lost in merge 7078697, restored.
-            res.post_err_band = getMCMCErrorBand(mh_post, fit_config.MCMCburn, fit_config.MCMCiter, config, prop, metric, best_fit, res.posteriors, res.spline_covariance, res.post_param_lo, res.post_param_hi, config.i_prime, errband_post_pbar ? &*errband_post_pbar : nullptr, band_data, shape_norm);
+            res.post_err_band = getMCMCErrorBand<simple_target>(spec, config, prop, metric, best_fit, res.posteriors, res.spline_covariance, res.post_param_lo, res.post_param_hi, config.i_prime, errband_post_pbar ? &*errband_post_pbar : nullptr, band_data, shape_norm);
         }
         // Legacy plots drew the band centered on the raw best-fit spectrum: drop
         // the unconstrained branch's median-vs-cv center_shift so nothing folds
@@ -487,12 +514,15 @@ std::map<std::string, TObject *> draw_fit_result(const PROconfig &config, const 
         drawn_objs["post_fit_param_correlations"] = corrhist.Clone();
     }
 
-    if(fitres.mh) {
-        fitres.mh->plot_autocorrelation(prefix+"_corrmat_mcmc_autocorrelation.pdf", param_names, &drawn_objs);
+    if(!fitres.mcmc_chains.empty()) {
+        // Autocorrelation is a per-chain diagnostic: chain 0 (the longest).
+        plotChainAutocorrelation(fitres.mcmc_chains.front(), prefix+"_corrmat_mcmc_autocorrelation.pdf", param_names, &drawn_objs);
         std::string name = prefix+"_mcmc_chain";
         drawn_objs[name] = new TTree(name.c_str(), name.c_str());
         TTree *tree = (TTree*)drawn_objs[name];
         Eigen::VectorXf v = Eigen::VectorXf::Zero(N_params);
+        int chain_id = 0;
+        tree->Branch("chain", &chain_id);
         for(size_t i = 0; i < model.nparams; ++i) {
             tree->Branch(model.param_names[i].c_str(), &v(i));
         }
@@ -509,9 +539,12 @@ std::map<std::string, TObject *> draw_fit_result(const PROconfig &config, const 
                 tree->Branch(sname.c_str(), &v(i));
             }
         }
-        for(const auto &p : fitres.mh->chain) {
-            v = p;
-            tree->Fill();
+        for(size_t c = 0; c < fitres.mcmc_chains.size(); ++c) {
+            chain_id = (int)c;
+            for(const auto &p : fitres.mcmc_chains[c]) {
+                v = p;
+                tree->Fill();
+            }
         }
     }
 

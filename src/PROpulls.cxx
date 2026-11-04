@@ -187,6 +187,177 @@ namespace {
 
 }
 
+    LinearizedPosterior buildLinearizedPosterior(const PROconfig &config, const PROpeller &prop, const PROmetric &metric,
+            const Eigen::VectorXf &best_fit, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub,
+            const Eigen::VectorXf &data_spec) {
+        using Status = LinearizedPosterior::Status;
+        LinearizedPosterior lin;
+        const int var = (int)config.i_prime;
+        const PROsyst &syst = metric.GetSysts();
+        const PROmodel &model = metric.GetModel();
+        const bool shape_only = metric.ShapeOnly();
+        const size_t nphys = model.nparams, nspl = syst.GetNSplines(), ntot = nphys + nspl;
+        const size_t nbins = config.m_num_variable_bins_total_collapsed[var];
+        lin.nphys = nphys;
+        lin.nparams = ntot;
+        if((size_t)best_fit.size() != ntot || (size_t)lb.size() != ntot || (size_t)ub.size() != ntot || (size_t)data_spec.size() != nbins)
+            return lin;
+
+        // Prediction exactly as the metric compares it: per-channel rescaled onto the data
+        // under shape-only. Zero bins floored as in the covariance band/pull code.
+        auto predictFull = [&](const Eigen::VectorXf &p) {
+            Eigen::VectorXf full = FillSpectra(config, prop, syst, model, p, true, var).Spec();
+            if(shape_only) full = ShapeRescaleToData(config, full, data_spec, var);
+            for(Eigen::Index i = 0; i < full.size(); ++i)
+                if(full(i) <= 0.0f) full(i) = 1e-6f;
+            return full;
+        };
+        const Eigen::VectorXf full_bf = predictFull(best_fit);
+        lin.pred = CollapseMatrix(config, full_bf, var);
+        const Eigen::VectorXf &pred = lin.pred;
+        const Eigen::VectorXf stat = metric.GetStatVariances(pred, data_spec, best_fit);
+
+        std::vector<int> &bins = lin.bins;
+        for(size_t i = 0; i < nbins; ++i)
+            if(config.IsBinActive(var, i) && stat(i) > 0) bins.push_back((int)i);
+        if(bins.empty()) {
+            lin.status = Status::NoBins;
+            return lin;
+        }
+        const Eigen::Index nb = (Eigen::Index)bins.size();
+
+        lin.L = syst.DecomposeFractionalCovariance(config, full_bf);
+        if(shape_only) lin.L = Eigen::MatrixXf(ShapeProjectorCollapsed(config, pred, var) * lin.L);
+        const Eigen::MatrixXf &L = lin.L;
+        for(Eigen::Index j = 0; j < L.cols(); ++j) {
+            const double s = L.col(j).squaredNorm();
+            lin.total_var += s;
+            if(s > 0) lin.modes.push_back((int)j);
+        }
+
+        const auto fixedParam = [&](size_t i) { return std::abs(ub((Eigen::Index)i) - lb((Eigen::Index)i)) < 1e-10f; };
+        const auto isUniform = [&](size_t s) {
+            return s < syst.spline_prior_types.size() && syst.spline_prior_types[s] == SplinePriorType::Uniform;
+        };
+        for(size_t i = 0; i < nphys; ++i)
+            if(!fixedParam(i)) lin.free_phys.push_back(i);
+        for(size_t s = 0; s < nspl; ++s)
+            if(!fixedParam(nphys + s)) lin.free_spl.push_back(s);
+        const std::vector<size_t> &free_phys = lin.free_phys, &free_spl = lin.free_spl;
+
+        // System of free parameters: [physics | splines | covariance modes].
+        const Eigen::Index nf = (Eigen::Index)free_phys.size(), ns = (Eigen::Index)free_spl.size();
+        const Eigen::Index k = (Eigen::Index)lin.modes.size(), m = nf + ns + k;
+        if(m == 0) {
+            lin.status = Status::NothingFree;
+            return lin;
+        }
+
+        // Jacobian of the collapsed prediction by finite differences: central, one-sided
+        // inward at a bound (spline responses are only defined inside the knot range).
+        // An unbounded parameter (log10 mixing with lb = -inf) gets a 1e-3 step.
+        Eigen::MatrixXd &J = lin.J;
+        J.resize(nb, m);
+        auto fdColumn = [&](size_t ip) {
+            const float lo = lb((Eigen::Index)ip), hi = ub((Eigen::Index)ip), x0 = best_fit((Eigen::Index)ip);
+            const float h = std::isfinite(hi - lo) ? std::max(1e-4f, 1e-3f * (hi - lo)) : 1e-3f;
+            const bool can_up = x0 + h <= hi, can_dn = x0 - h >= lo;
+            Eigen::VectorXf pu = best_fit, pd = best_fit;
+            float span;
+            if(can_up && can_dn) { pu((Eigen::Index)ip) = x0 + h; pd((Eigen::Index)ip) = x0 - h; span = 2 * h; }
+            else if(can_up)      { pu((Eigen::Index)ip) = x0 + h; span = h; }
+            else                 { pd((Eigen::Index)ip) = x0 - h; span = h; }
+            const Eigen::VectorXf diff = CollapseMatrix(config, predictFull(pu), var) - CollapseMatrix(config, predictFull(pd), var);
+            Eigen::VectorXd col(nb);
+            for(Eigen::Index r = 0; r < nb; ++r) col(r) = (double)diff(bins[r]) / span;
+            return col;
+        };
+        for(Eigen::Index a = 0; a < nf; ++a) J.col(a) = fdColumn(free_phys[a]);
+        for(Eigen::Index a = 0; a < ns; ++a) J.col(nf + a) = fdColumn(nphys + free_spl[a]);
+        for(Eigen::Index j = 0; j < k; ++j)
+            for(Eigen::Index r = 0; r < nb; ++r) J(r, nf + ns + j) = L(bins[r], lin.modes[j]);
+
+        lin.cinv.resize(nb);
+        lin.u.resize(nb);
+        for(Eigen::Index r = 0; r < nb; ++r) {
+            lin.cinv(r) = 1.0 / stat(bins[r]);
+            lin.u(r) = (double)data_spec(bins[r]) - pred(bins[r]);
+        }
+
+        // Linearised posterior precision. Physics and uniform-prior splines have flat priors on
+        // their box; they enter with the box's own variance W^2/12, so a direction the data
+        // barely resolves cannot absorb the rest (exactly flat it would, at any tiny slope).
+        Eigen::MatrixXd &H = lin.H;
+        H = J.transpose() * lin.cinv.asDiagonal() * J;
+        for(Eigen::Index a = 0; a < nf; ++a) {
+            const double W = ub(free_phys[a]) - lb(free_phys[a]);
+            H(a, a) += 12.0 / (W * W);
+        }
+        const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
+        for(Eigen::Index a = 0; a < ns; ++a) {
+            for(Eigen::Index b = 0; b < ns; ++b) H(nf + a, nf + b) += Q(free_spl[a], free_spl[b]);
+            if(isUniform(free_spl[a])) {
+                const double W = ub(nphys + free_spl[a]) - lb(nphys + free_spl[a]);
+                H(nf + a, nf + a) += 12.0 / (W * W);
+            }
+        }
+        for(Eigen::Index j = 0; j < k; ++j) H(nf + ns + j, nf + ns + j) += 1.0;
+        lin.status = Status::Ok;
+        return lin;
+    }
+
+    Eigen::MatrixXf LaplaceProposalCovariance(const LinearizedPosterior &lin, const std::vector<int> &chain_fixed) {
+        if(lin.status != LinearizedPosterior::Status::Ok) return Eigen::MatrixXf();
+        const auto held = [&](size_t p) { return std::find(chain_fixed.begin(), chain_fixed.end(), (int)p) != chain_fixed.end(); };
+        const Eigen::Index nf = (Eigen::Index)lin.free_phys.size(), ns = (Eigen::Index)lin.free_spl.size();
+        std::vector<Eigen::Index> keep;
+        std::vector<size_t> param;
+        for(Eigen::Index a = 0; a < nf; ++a)
+            if(!held(lin.free_phys[a])) { keep.push_back(a); param.push_back(lin.free_phys[a]); }
+        for(Eigen::Index a = 0; a < ns; ++a) {
+            const size_t p = lin.nphys + lin.free_spl[a];
+            if(!held(p)) { keep.push_back(nf + a); param.push_back(p); }
+        }
+        if(param.empty()) return Eigen::MatrixXf();
+        for(size_t j = 0; j < lin.modes.size(); ++j) keep.push_back(nf + ns + (Eigen::Index)j);
+        // The parameter block of the inverse marginalises the modes.
+        const Eigen::MatrixXd S = spdInverse(Eigen::MatrixXd(lin.H(keep, keep)));
+        Eigen::MatrixXf out = Eigen::MatrixXf::Zero((Eigen::Index)lin.nparams, (Eigen::Index)lin.nparams);
+        for(size_t a = 0; a < param.size(); ++a)
+            for(size_t b = 0; b < param.size(); ++b)
+                out((Eigen::Index)param[a], (Eigen::Index)param[b]) = (float)S((Eigen::Index)a, (Eigen::Index)b);
+        return out;
+    }
+
+    Eigen::MatrixXf PriorProposalCovariance(const PROmetric &metric, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub, const std::vector<int> &chain_fixed) {
+        const PROsyst &syst = metric.GetSysts();
+        const size_t nphys = metric.GetModel().nparams, nspl = syst.GetNSplines(), ntot = nphys + nspl;
+        if((size_t)lb.size() != ntot || (size_t)ub.size() != ntot) return Eigen::MatrixXf();
+        std::vector<size_t> free;
+        for(size_t s = 0; s < nspl; ++s) {
+            const size_t p = nphys + s;
+            const bool held = std::find(chain_fixed.begin(), chain_fixed.end(), (int)p) != chain_fixed.end();
+            if(!held && std::abs(ub((Eigen::Index)p) - lb((Eigen::Index)p)) >= 1e-10f) free.push_back(s);
+        }
+        if(free.empty()) return Eigen::MatrixXf();
+        const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
+        const Eigen::Index nf = (Eigen::Index)free.size();
+        Eigen::MatrixXd P(nf, nf);
+        for(Eigen::Index a = 0; a < nf; ++a) {
+            for(Eigen::Index b = 0; b < nf; ++b) P(a, b) = Q((Eigen::Index)free[a], (Eigen::Index)free[b]);
+            if(free[a] < syst.spline_prior_types.size() && syst.spline_prior_types[free[a]] == SplinePriorType::Uniform) {
+                const double W = ub((Eigen::Index)(nphys + free[a])) - lb((Eigen::Index)(nphys + free[a]));
+                P(a, a) += 12.0 / (W * W);
+            }
+        }
+        const Eigen::MatrixXd S = spdInverse(P);
+        Eigen::MatrixXf out = Eigen::MatrixXf::Zero((Eigen::Index)ntot, (Eigen::Index)ntot);
+        for(Eigen::Index a = 0; a < nf; ++a)
+            for(Eigen::Index b = 0; b < nf; ++b)
+                out((Eigen::Index)(nphys + free[a]), (Eigen::Index)(nphys + free[b])) = (float)S(a, b);
+        return out;
+    }
+
     PullSummary computePostfitPulls(const PROconfig &config, const PROpeller &prop, const PROmetric &metric,
             const Eigen::VectorXf &best_fit, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub,
             const Eigen::VectorXf &data_spec, double min_var_reduction) {
@@ -205,37 +376,14 @@ namespace {
             return out;
         }
 
-        // Prediction exactly as the metric compares it: per-channel rescaled onto the data
-        // under shape-only. Zero bins floored as in the covariance band/pull code.
-        auto predictFull = [&](const Eigen::VectorXf &p) {
-            Eigen::VectorXf full = FillSpectra(config, prop, syst, model, p, true, var).Spec();
-            if(out.shape_only) full = ShapeRescaleToData(config, full, data_spec, var);
-            for(Eigen::Index i = 0; i < full.size(); ++i)
-                if(full(i) <= 0.0f) full(i) = 1e-6f;
-            return full;
-        };
-        const Eigen::VectorXf full_bf = predictFull(best_fit);
-        const Eigen::VectorXf pred = CollapseMatrix(config, full_bf, var);
-        const Eigen::VectorXf stat = metric.GetStatVariances(pred, data_spec, best_fit);
-
-        std::vector<int> bins;
-        for(size_t i = 0; i < nbins; ++i)
-            if(config.IsBinActive(var, i) && stat(i) > 0) bins.push_back((int)i);
-        if(bins.empty()) {
+        const LinearizedPosterior lin = buildLinearizedPosterior(config, prop, metric, best_fit, lb, ub, data_spec);
+        if(lin.status == LinearizedPosterior::Status::NoBins) {
             log<LOG_WARNING>(L"%1% || No bins enter the fit; no pull distributions.") % __func__;
             return out;
         }
-        const Eigen::Index nb = (Eigen::Index)bins.size();
-
-        Eigen::MatrixXf L = syst.DecomposeFractionalCovariance(config, full_bf);
-        if(out.shape_only) L = Eigen::MatrixXf(ShapeProjectorCollapsed(config, pred, var) * L);
-        std::vector<int> modes;
-        double total_var = 0;
-        for(Eigen::Index j = 0; j < L.cols(); ++j) {
-            const double s = L.col(j).squaredNorm();
-            total_var += s;
-            if(s > 0) modes.push_back((int)j);
-        }
+        const std::vector<int> &modes = lin.modes;
+        const Eigen::MatrixXf &L = lin.L;
+        const double total_var = lin.total_var;
 
         const auto fixedParam = [&](size_t i) { return std::abs(ub((Eigen::Index)i) - lb((Eigen::Index)i)) < 1e-10f; };
         const auto isUniform = [&](size_t s) {
@@ -246,72 +394,26 @@ namespace {
             return it != config.m_mcgen_variation_plotname_map.end() ? it->second : syst.spline_names[s];
         };
 
-        std::vector<size_t> free_phys, free_spl, gauss_free, gauss_fixed;
-        for(size_t i = 0; i < nphys; ++i)
-            if(!fixedParam(i)) free_phys.push_back(i);
+        const std::vector<size_t> &free_spl = lin.free_spl;
+        std::vector<size_t> gauss_free, gauss_fixed;
         for(size_t s = 0; s < nspl; ++s) {
             if(fixedParam(nphys + s)) {
                 out.fixed_names.push_back(plotname(s));
                 if(!isUniform(s)) gauss_fixed.push_back(s);
-            } else {
-                free_spl.push_back(s);
-                if(!isUniform(s)) gauss_free.push_back(s);
+            } else if(!isUniform(s)) {
+                gauss_free.push_back(s);
             }
         }
 
-        // System of free parameters: [physics | splines | covariance modes].
-        const Eigen::Index nf = (Eigen::Index)free_phys.size(), ns = (Eigen::Index)free_spl.size();
+        const Eigen::Index nf = (Eigen::Index)lin.free_phys.size(), ns = (Eigen::Index)free_spl.size();
         const Eigen::Index k = (Eigen::Index)modes.size(), m = nf + ns + k;
         if(ns + k == 0) {
             log<LOG_INFO>(L"%1% || No free nuisance parameters or covariance modes; no pull distributions.") % __func__;
             return out;
         }
-
-        // Jacobian of the collapsed prediction by finite differences: central, one-sided
-        // inward at a bound (spline responses are only defined inside the knot range).
-        Eigen::MatrixXd J(nb, m);
-        auto fdColumn = [&](size_t ip) {
-            const float lo = lb((Eigen::Index)ip), hi = ub((Eigen::Index)ip), x0 = best_fit((Eigen::Index)ip);
-            const float h = std::max(1e-4f, 1e-3f * (hi - lo));
-            const bool can_up = x0 + h <= hi, can_dn = x0 - h >= lo;
-            Eigen::VectorXf pu = best_fit, pd = best_fit;
-            float span;
-            if(can_up && can_dn) { pu((Eigen::Index)ip) = x0 + h; pd((Eigen::Index)ip) = x0 - h; span = 2 * h; }
-            else if(can_up)      { pu((Eigen::Index)ip) = x0 + h; span = h; }
-            else                 { pd((Eigen::Index)ip) = x0 - h; span = h; }
-            const Eigen::VectorXf diff = CollapseMatrix(config, predictFull(pu), var) - CollapseMatrix(config, predictFull(pd), var);
-            Eigen::VectorXd col(nb);
-            for(Eigen::Index r = 0; r < nb; ++r) col(r) = (double)diff(bins[r]) / span;
-            return col;
-        };
-        for(Eigen::Index a = 0; a < nf; ++a) J.col(a) = fdColumn(free_phys[a]);
-        for(Eigen::Index a = 0; a < ns; ++a) J.col(nf + a) = fdColumn(nphys + free_spl[a]);
-        for(Eigen::Index j = 0; j < k; ++j)
-            for(Eigen::Index r = 0; r < nb; ++r) J(r, nf + ns + j) = L(bins[r], modes[j]);
-
-        Eigen::VectorXd cinv(nb), u(nb);
-        for(Eigen::Index r = 0; r < nb; ++r) {
-            cinv(r) = 1.0 / stat(bins[r]);
-            u(r) = (double)data_spec(bins[r]) - pred(bins[r]);
-        }
-
-        // Linearised posterior precision. Physics and uniform-prior splines have flat priors on
-        // their box; they enter with the box's own variance W^2/12, so a direction the data
-        // barely resolves cannot absorb the rest (exactly flat it would, at any tiny slope).
-        Eigen::MatrixXd H = J.transpose() * cinv.asDiagonal() * J;
-        for(Eigen::Index a = 0; a < nf; ++a) {
-            const double W = ub(free_phys[a]) - lb(free_phys[a]);
-            H(a, a) += 12.0 / (W * W);
-        }
+        const Eigen::MatrixXd &J = lin.J, &H = lin.H;
+        const Eigen::VectorXd &cinv = lin.cinv, &u = lin.u;
         const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
-        for(Eigen::Index a = 0; a < ns; ++a) {
-            for(Eigen::Index b = 0; b < ns; ++b) H(nf + a, nf + b) += Q(free_spl[a], free_spl[b]);
-            if(isUniform(free_spl[a])) {
-                const double W = ub(nphys + free_spl[a]) - lb(nphys + free_spl[a]);
-                H(nf + a, nf + a) += 12.0 / (W * W);
-            }
-        }
-        for(Eigen::Index j = 0; j < k; ++j) H(nf + ns + j, nf + ns + j) += 1.0;
         const Eigen::MatrixXd Spost = spdInverse(H);
 
         // Prior of the free Gaussian splines given the fixed ones (only differs from the plain
