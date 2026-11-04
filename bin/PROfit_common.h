@@ -159,6 +159,7 @@ struct PROpt {
     int band_throws = 2500;
     size_t syst_throws = 500;
     std::map<std::string, float> fake_data_osc_params;
+    std::map<std::string, float> inject_data_osc_params; ///< --inject-data: reweight real data (needs a data <model>).
     std::map<std::string, float> cv_osc_params;
     std::map<std::string, float> injected_systs;
     std::map<std::string, float> cv_injected_systs;

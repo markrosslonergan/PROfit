@@ -12,10 +12,11 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--required-version", required_version, "Refuse to run unless this is exactly this PROfit version, e.g. v3.0.5 or 3.0.5-dev (leading v optional). A -dev build only matches its full -dev string. Useful in --config run cards.");
         app.add_option("-n, --nthread", nthread, "Number of threads to parallelize over.")->default_val(1);
         app.add_option("-m,--max", maxevents, "Max number of events to run over.");
-        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Default 500.")->check(CLI::PositiveNumber);
+        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Only used where the conversion has no closed form (visible-decay models, quadratic spline groups); every other spline is converted exactly. Default 500.")->check(CLI::PositiveNumber);
         app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options: neyman (default; stat cov = diag(data)), pearson (stat cov = diag(prediction)), CNP, poisson. Legacy aliases PROchi, PROCNP, Poisson accepted.")->default_str("neyman");
         app.add_option("-d, --data", data_xml, "Load from a seperate data xml/data file instead of signal injection. Only used with plot subcommand.")->default_str("");
         app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
+        app.add_option("--inject-data", inject_data_osc_params, "Physics parameters to inject into real data by reweighting it with the data config's own <model> (a <model> inside <data>, or <data inherit_model=\"true\">). Requires real data (-d/--data or an embedded <data> section) and cannot be used with fc or fc-adaptive. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
@@ -408,6 +409,13 @@ PROpt::PROpt(int argc, char **argv) {
         // here, so the decision is made in resolve_fit_presets() once it does. All this
         // records is whether the user chose a preset themselves (which is always honoured).
         preset_user_set = preset_opt->count() > 0;
+
+        // FC throws its toys around the -i/--inject truth point; data reweighted by
+        // --inject-data is not that ensemble, so the two cannot be combined.
+        if(!inject_data_osc_params.empty() && (*profc_command || *afc_command)) {
+            log<LOG_ERROR>(L"%1% || --inject-data cannot be used with the Feldman-Cousins subcommands (%2%). Terminating.") % __func__ % (*profc_command ? "fc" : "fc-adaptive");
+            exit(1);
+        }
 
         if(shapeonly) area_normalized = true;
 
