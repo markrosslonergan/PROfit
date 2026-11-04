@@ -170,6 +170,7 @@ namespace PROfit {
                 Eigen::VectorXf current;
                 std::vector<Eigen::VectorXf> chain;
                 size_t naccept;
+                bool warn_frozen = true; ///< Warn when run() accepts nothing (runMetropolisChains reports once for all chains).
 
                 Metropolis(Target_FN target, Proposal_FN proposal, const Eigen::VectorXf &initial, uint32_t seed, bool save_chain = true) 
                     : seed(seed), target(target), proposal(proposal), current(initial), save_chain(save_chain) {
@@ -228,7 +229,7 @@ namespace PROfit {
                         pbar->finish();
                         std::cerr << std::endl;
                     }
-                    if(naccept == 0)
+                    if(naccept == 0 && warn_frozen)
                         log<LOG_WARNING>(L"%1% || Metropolis chain accepted 0 of %2% proposals — the chain is frozen at its start"
                                          L" point (check bounds vs start values and proposal widths); results from this chain are meaningless.")
                             % __func__ % (burnin + steps);
@@ -242,14 +243,20 @@ namespace PROfit {
 
     /**
      * @brief The interval a Metropolis chain samples parameter @p i in.
-     * @details Physics: the model bounds, an infinite lower bound floored at -5 (stops runaway
-     * exploration of log-space parameters). Splines: the restrict= range, else [-1, 1] for 0..1
-     * splines, else the knot range.
+     * @details Physics: the model bounds. An infinite lower bound (log10 mixing) is floored to
+     * stop runaway exploration, at -5 or lower to include the model's no-oscillation default and
+     * the chain's @p start: a background-only best fit sits at the default (-10 for
+     * SBL_2flav_numudis, -8 for the 3+1 tags), and a start outside the box rejects every
+     * proposal. Splines: the restrict= range, else [-1, 1] for 0..1 splines, else the knot range.
      */
-    inline std::pair<float, float> mcmcParamBox(const PROmetric &metric, long i) {
+    inline std::pair<float, float> mcmcParamBox(const PROmetric &metric, long i, float start = NAN) {
         const long nparams = metric.GetModel().nparams;
         if(i < nparams) {
-            const float lo = std::isfinite(metric.GetModel().lb(i)) ? metric.GetModel().lb(i) : -5.0f;
+            float lo = metric.GetModel().lb(i);
+            if(!std::isfinite(lo)) {
+                lo = std::min(-5.0f, metric.GetModel().default_val(i));
+                if(std::isfinite(start)) lo = std::min(lo, start);
+            }
             return {lo, metric.GetModel().ub(i)};
         }
         const size_t si = i - nparams;
@@ -441,6 +448,7 @@ namespace PROfit {
 
         bool seeded = false;   ///< seed() set the covariance: beta stays at its adapted value.
         bool started = false;  ///< last_accepted holds a real chain point.
+        Eigen::VectorXf origin; ///< The chain's start point (mcmcParamBox keeps it inside the box).
         bool stale = true;     ///< width or scale changed since sub_L was factorised.
         size_t since_refresh = 0;
         /// While tuning, refactorise sub_L at most this often (an n^3 decomposition per step otherwise).
@@ -489,7 +497,7 @@ namespace PROfit {
             const long n = start.size();
             const long nphys = metric.GetModel().nparams;
             auto box_var = [&](long i) {
-                const auto [lo, hi] = mcmcParamBox(metric, i);
+                const auto [lo, hi] = mcmcParamBox(metric, i, start(i));
                 const float w = hi - lo;
                 return std::isfinite(w) && w > 0 ? w * w / 12.0f : 1.0f;
             };
@@ -528,6 +536,7 @@ namespace PROfit {
             width.diagonal().array() += 1e-8f;
             mean = start;
             last_accepted = start;
+            origin = start;
             started = true;
             tune_calls = n_prior ? n_prior : 20 * active.size();
             seeded = true;
@@ -552,6 +561,7 @@ namespace PROfit {
             if(!started) {
                 // Until the first acceptance tune() must see the start point, not zero.
                 last_accepted = current;
+                origin = current;
                 started = true;
             }
 
@@ -580,7 +590,7 @@ namespace PROfit {
         bool within_bound(const Eigen::VectorXf &value) {
             for(long int i = 0; i < value.size(); ++i) {
                 if(std::find(fixed.begin(), fixed.end(), i) != std::end(fixed)) continue;
-                const auto [lo, hi] = mcmcParamBox(metric, i);
+                const auto [lo, hi] = mcmcParamBox(metric, i, i < origin.size() ? origin(i) : NAN);
                 if(value(i) < lo || value(i) > hi) return false;
             }
             return true;
@@ -681,7 +691,7 @@ namespace PROfit {
             // keeps that parameter near its start, so within_bound rejects all of them.
             for(long i = 0; i < start.size(); ++i) {
                 if(std::find(spec.fixed.begin(), spec.fixed.end(), (int)i) != spec.fixed.end()) continue;
-                const auto [lo, hi] = mcmcParamBox(metric, i);
+                const auto [lo, hi] = mcmcParamBox(metric, i, start(i));
                 if(start(i) >= lo && start(i) <= hi) continue;
                 const long np = metric.GetModel().nparams;
                 const std::string name = i < np ? metric.GetModel().param_names[i] : metric.GetSysts().spline_names[i - np];
@@ -704,6 +714,7 @@ namespace PROfit {
                     adaptive_proposal proposal(m, spec.seeds[2 * c], spec.fixed);
                     if(spec.seeded) proposal.seed_proposal(spec.seed_cov, start);
                     Metropolis<Target, adaptive_proposal> met(Target{m}, proposal, start, spec.seeds[2 * c + 1], false);
+                    met.warn_frozen = false;
                     const size_t steps = spec.chainSteps(c);
                     MCMCChainOut &o = out[c];
                     o.values.reserve(steps);
@@ -721,6 +732,10 @@ namespace PROfit {
             });
             for(const auto &e : errors)
                 if(e) std::rethrow_exception(e);
+            const size_t nfrozen = std::count_if(out.begin(), out.end(), [](const MCMCChainOut &o) { return o.naccept == 0; });
+            if(nfrozen)
+                log<LOG_WARNING>(L"%1% || %2% of %3% Metropolis chain(s) accepted none of their %4% proposals: frozen at the start point (check bounds vs start values and proposal widths); results from these chains are meaningless.")
+                    % __func__ % nfrozen % K % (spec.burnin + spec.chainSteps(0));
             return out;
         }
 
