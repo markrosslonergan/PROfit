@@ -963,6 +963,7 @@ Outputs:
 * `TUT_glob1_global_fit.txt` — best-fit χ² and every parameter value in a plain-text table
 * `TUT_glob1_PROglobal_hists.pdf` — pre-fit (blue/gray) vs post-fit (red) spectra + error bands, with a data/fit ratio panel
 * `TUT_glob1_PROglobal_postfit_correlation_matrix_nuisance_only.pdf` — post-fit correlations of the spline nuisances (from the band chain, always made)
+* `TUT_glob1_PROglobal_postfit_band_mcmc_autocorrelation.pdf` — how well the band chain mixed: autocorrelation per spline, pooled over chains; the log gives each spline's autocorrelation time τ and effective sample size (20,000 kept steps / τ — a few hundred is enough for the band; much less means raise `--fit-options MCMC-Iterations`)
 * `TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit correlations of every parameter, physics included, plus `_corrmat_mcmc_autocorrelation.pdf` and the `_mcmc_chain` TTree: only with `global --mcmc-correlations`, which runs a second MCMC with physics free (about half the post-fit MCMC time, so off by default)
 * `TUT_glob1_PROglobal_postfit_posteriors.pdf` — post-fit parameter constraints
 * `TUT_glob1_PROglobal_postfit_pull_distributions.pdf` — histograms of all nuisance pulls, which should look like N(0,1) when the model describes the data (all 0 for this Asimov fit). See [Are the pulls healthy?](#are-the-pulls-healthy-pull-distributions) below.

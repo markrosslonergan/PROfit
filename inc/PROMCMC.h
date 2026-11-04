@@ -38,9 +38,10 @@ namespace PROfit {
      * equals lag n-k), so a short chain's curve mirrors about n/2 and returns to 1 at lag n. The
      * sums are pooled over chains and normalised at lag 0; lags stop at the shortest chain's
      * length. Also logs each parameter's integrated autocorrelation time tau (Geyer initial
-     * positive sequence) and effective sample size N/tau.
+     * positive sequence) and effective sample size N/tau. @p obj_suffix names the drawn objects
+     * ("<name><obj_suffix>"), so two chains' plots can share one output file.
      */
-    inline void plotChainAutocorrelation(const std::vector<std::vector<Eigen::VectorXf>> &chains, const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000) {
+    inline void plotChainAutocorrelation(const std::vector<std::vector<Eigen::VectorXf>> &chains, const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000, const std::string &obj_suffix = "_autocorr") {
         size_t nmin = std::numeric_limits<size_t>::max(), ntot = 0;
         long nparam = 0;
         for(const auto &ch : chains) {
@@ -107,7 +108,7 @@ namespace PROfit {
         c.Divide(2);
         c.Print((filename + "[").c_str());
         for(long i = 0; i < nparam; ++i) {
-            hs.emplace_back(new TH1D(("hautoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;abs(autocorrelation)").c_str(), max_lag, 0, max_lag), new TH1D(("h2autoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;autocorrelation").c_str(), max_lag, 0, max_lag));
+            hs.emplace_back(new TH1D(("hautoc"+obj_suffix+std::to_string(i)).c_str(), (param_names[i]+";lag;abs(autocorrelation)").c_str(), max_lag, 0, max_lag), new TH1D(("h2autoc"+obj_suffix+std::to_string(i)).c_str(), (param_names[i]+";lag;autocorrelation").c_str(), max_lag, 0, max_lag));
             const std::vector<double> acov = pooled_autocov(i);
             const double lag0 = acov[0];
             // A constant chain column gives lag0 == 0; rho would put literal 'nan's into the
@@ -143,7 +144,7 @@ namespace PROfit {
             drawVersionWatermark(&c, WatermarkPos::BottomRight);
             c.Print(filename.c_str());
             if(drawn_objs) {
-                (*drawn_objs)->insert({param_names[i]+"_autocorr", hs.back().second->Clone()});
+                (*drawn_objs)->insert({param_names[i]+obj_suffix, hs.back().second->Clone()});
             }
         }
         if(std::isfinite(worst_ess))

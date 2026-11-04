@@ -527,10 +527,11 @@ namespace PROfit{
      *                   when @p metric is shape-only and @p data_spec is given, the conditioning
      *                   itself follows the fit: best fit and samples rescaled onto the data and
      *                   the covariance projected onto shape (ShapeProjectorCollapsed).
+     * @param chains_out Optional: receives every chain's kept steps (full parameter vectors).
      * @return PROerrorbar with per-bin asymmetric uncertainties and the histogram covariance.
      */
     template<class Target>
-        PROerrorbar getMCMCErrorBand(const MCMCChainSpec &spec, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, int var_index=0, PROgressBar *pbar = nullptr, const Eigen::VectorXf &data_spec = Eigen::VectorXf(), bool shape_norm = false) {
+        PROerrorbar getMCMCErrorBand(const MCMCChainSpec &spec, const PROconfig &config, const PROpeller &prop, PROmetric &metric, const Eigen::VectorXf &best_fit, std::vector<TH1D> &posteriors, Eigen::MatrixXf &post_covar, Eigen::VectorXf &param_err_lo, Eigen::VectorXf &param_err_hi, int var_index=0, PROgressBar *pbar = nullptr, const Eigen::VectorXf &data_spec = Eigen::VectorXf(), bool shape_norm = false, std::vector<std::vector<Eigen::VectorXf>> *chains_out = nullptr) {
             for(size_t i = 0; i < metric.GetSysts().GetNSplines(); ++i)
                 posteriors.emplace_back("", (";"+config.m_mcgen_variation_plotname_map.at(metric.GetSysts().spline_names[i])).c_str(), 60, -3, 3);
 
@@ -605,6 +606,7 @@ namespace PROfit{
             size_t naccept = 0, nsteps_total = 0;
             for(size_t c = 0; c < nchains; ++c) {
                 for(auto &sp : chain_specs[c]) specs.push_back(std::move(sp));
+                if(chains_out) chains_out->push_back(chains[c].values);
                 for(auto &v : chains[c].values) values.push_back(std::move(v));
                 naccept += chains[c].naccept;
                 nsteps_total += chains[c].nsteps;

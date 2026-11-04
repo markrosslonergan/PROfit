@@ -273,7 +273,18 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
             // data.Spec() enables the data-constrained posterior pull of the
             // covariance-type systematics (post-fit band only; the pre-fit call
             // above stays unconstrained). Lost in merge 7078697, restored.
-            res.post_err_band = getMCMCErrorBand<simple_target>(spec, config, prop, metric, best_fit, res.posteriors, res.spline_covariance, res.post_param_lo, res.post_param_hi, config.i_prime, errband_post_pbar ? &*errband_post_pbar : nullptr, band_data, shape_norm);
+            std::vector<std::vector<Eigen::VectorXf>> band_chains;
+            res.post_err_band = getMCMCErrorBand<simple_target>(spec, config, prop, metric, best_fit, res.posteriors, res.spline_covariance, res.post_param_lo, res.post_param_hi, config.i_prime, errband_post_pbar ? &*errband_post_pbar : nullptr, band_data, shape_norm, &band_chains);
+            // Keep only what the band chains move (physics and --fix'd splines are constant there).
+            for(size_t i = 0; i < N_params; ++i)
+                if(std::find(errband_fixed_pars.begin(), errband_fixed_pars.end(), (int)i) == errband_fixed_pars.end())
+                    res.band_chain_params.push_back((int)i);
+            for(const auto &chain : band_chains) {
+                std::vector<Eigen::VectorXf> reduced;
+                reduced.reserve(chain.size());
+                for(const Eigen::VectorXf &v : chain) reduced.push_back(Eigen::VectorXf(v(res.band_chain_params)));
+                res.band_chains.push_back(std::move(reduced));
+            }
         }
         // Legacy plots drew the band centered on the raw best-fit spectrum: drop
         // the unconstrained branch's median-vs-cv center_shift so nothing folds
@@ -545,6 +556,15 @@ std::map<std::string, TObject *> draw_fit_result(const PROconfig &config, const 
                 tree->Fill();
             }
         }
+    }
+
+    // Mixing of the post-fit band chains, over the splines they move.
+    if(!fitres.band_chains.empty() && !fitres.band_chain_params.empty()) {
+        std::vector<std::string> band_names;
+        for(int i : fitres.band_chain_params)
+            band_names.push_back(i < (int)N_phys_params ? model.pretty_param_names[i]
+                                 : config.m_mcgen_variation_plotname_map.at(syst.spline_names[i-N_phys_params]));
+        plotChainAutocorrelation(fitres.band_chains, prefix+"_postfit_band_mcmc_autocorrelation.pdf", band_names, &drawn_objs, 1000, "_band_autocorr");
     }
 
     if(fitres.fitter.best_fit.size()) {
