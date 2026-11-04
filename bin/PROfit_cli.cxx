@@ -134,6 +134,12 @@ PROpt::PROpt(int argc, char **argv) {
         //PROfile, make N profile'd chi^2 for each physics and nuisence parameters
         profile_command = app.add_subcommand("profile", "Make a 1D profiled chi2 for each physics and nuisence parameter.");
         profile_command->add_flag("--mcmc-prefit", MCMC_prefit_errors, "Use MCMC to sample the systematic priors for the pre-fit error band.");
+        profile_command->add_flag("--mcmc-correlations", mcmc_correlations,
+            "Also run the post-fit MCMC over every free parameter, physics included, for the "
+            "post-fit correlation matrix (_postfit_correlation_matrix.pdf), its autocorrelation PDF "
+            "and the _mcmc_chain TTree. Off by default: it is about half the post-fit MCMC time. The "
+            "post-fit band, spline posteriors and nuisance-only correlations come from the band chain "
+            "and are always made.");
         profile_command->add_flag("--legacy-postfit-error", legacy_postfit_errors,
             "Legacy (pre-v3.0) post-fit error band: posterior MCMC throws of the spline nuisances "
             "around the best fit, but with PRIOR (unconstrained) throws of the covariance-type "
@@ -300,6 +306,12 @@ PROpt::PROpt(int argc, char **argv) {
 
         //PROglobal
         global_command = app.add_subcommand("global", "Just do a single global fit.");
+        global_command->add_flag("--mcmc-correlations", mcmc_correlations,
+            "Also run the post-fit MCMC over every free parameter, physics included, for the "
+            "post-fit correlation matrix (_postfit_correlation_matrix.pdf), its autocorrelation PDF "
+            "and the _mcmc_chain TTree. Off by default: it is about half the post-fit MCMC time. The "
+            "post-fit band, spline posteriors and nuisance-only correlations come from the band chain "
+            "and are always made.");
         global_command->add_flag("--legacy-postfit-error", legacy_postfit_errors,
             "Legacy (pre-v3.0) post-fit error band: posterior MCMC throws of the spline nuisances "
             "around the best fit, but with PRIOR (unconstrained) throws of the covariance-type "

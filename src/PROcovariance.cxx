@@ -121,6 +121,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
     // valid instead of being invalidated by an unbinned base call every
     // iteration.
     PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, strat != EventByEvent, config.i_prime);
+    if(strat != EventByEvent) rememberSpectrum(param, result.Spec());
 
     // Shape-only: rescale the PREDICTION onto the data per channel (r_c = ΣD_c/ΣP_c) and
     // compare against the untouched data. The chi² is then exactly invariant under

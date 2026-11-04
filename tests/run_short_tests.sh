@@ -141,6 +141,8 @@ run_test t00process process
 
 # --- 1. Global fits across metrics and data options --------------------------
 run_test t01global        --use-fake-data global
+# The physics-free post-fit correlation chain is opt-in; keep it exercised.
+run_test t01bglobalcorr   --use-fake-data global --mcmc-correlations
 run_test t02globalcnp     --use-fake-data -c PROCNP global
 # Poisson has no covariance term: it refuses covariance systs (incl. MCStat) unless excluded.
 run_test t03globalpoisson --use-fake-data -c Poisson --exclude-systs MCStat RPA_CCQE NormCCMEC CoulombCCQE MaCCRES MvCCRES global

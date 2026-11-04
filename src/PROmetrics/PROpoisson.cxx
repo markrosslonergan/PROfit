@@ -113,6 +113,7 @@ float PROpoisson::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &grad
     // helpers so BinnedGrad uses one consistent spectrum model and keeps the
     // fill cache valid.
     PROspec result = FillSpectra(config, peller, *syst, model, param, fs_cache, strat != EventByEvent, config.i_prime);
+    if(strat != EventByEvent) rememberSpectrum(param, result.Spec());
 
     // Shape-only: the PREDICTION is rescaled onto the data per channel; n stays the
     // observed integer counts so Baker-Cousins remains a likelihood ratio.

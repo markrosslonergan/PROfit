@@ -167,6 +167,7 @@ struct PROpt {
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool legacy_postfit_errors = false;
+    bool mcmc_correlations = false;
     bool systs_only = false;
     PROjectorRunConfig projector_config; // Two-stage pre-fit / projected fit (PROjector).
     bool use_fake_data = false;

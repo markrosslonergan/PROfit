@@ -179,7 +179,7 @@ GlobalFitResult run_global_fit(const PROconfig &config, const PROpeller &prop, c
         if((opt & GlobalFitOptions::Progress) != GlobalFitOptions::Default) 
             mh_pbar.emplace(int(spec.burnin + spec.chainSteps(0)), 30, "MCMC postfit");
         std::vector<MCMCChainOut> chains = runMetropolisChains<simple_target>(metric, best_fit, spec,
-            [](size_t, const Eigen::VectorXf &, bool) {}, mh_pbar ? &*mh_pbar : nullptr);
+            [](size_t, const Eigen::VectorXf &, bool, PROmetric &) {}, mh_pbar ? &*mh_pbar : nullptr);
 
         res.covmat = Eigen::MatrixXf::Constant(N_params, N_params, 0);
         size_t count = 0;

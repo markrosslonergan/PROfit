@@ -562,11 +562,15 @@ namespace PROfit{
             if(metric.GetSysts().GetNCovar() > 0) L = metric.GetSysts().DecomposeFractionalCovariance(config, cv);
             else L = Eigen::MatrixXf::Zero(config.m_num_variable_bins_total_collapsed[var_index], config.m_num_variable_bins_total_collapsed[var_index]);
             if(shape_fit) L = Eigen::MatrixXf(ShapeProjectorCollapsed(config, cv_coll, var_index) * L);
-            // Reads shared const state only, so every chain's thread can call it.
-            auto fill_spec = [&](const Eigen::VectorXf &value) {
-                Eigen::VectorXf s = CollapseMatrix(config, FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), value, true,var_index).Spec());
+            // Collapsed (and under a shape-only fit rescaled) sample spectrum from an uncollapsed
+            // binned prediction. Reads shared const state only, so every chain's thread can call it.
+            auto sample_from_full = [&](const Eigen::VectorXf &full) {
+                Eigen::VectorXf s = CollapseMatrix(config, full);
                 if(shape_fit) s = s.cwiseProduct(ChannelNormFactors(config, s, data_spec, var_index));
                 return s;
+            };
+            auto fill_spec = [&](const Eigen::VectorXf &value) {
+                return sample_from_full(FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), value, true,var_index).Spec());
             };
             // Area-normalised display: every finished sample is renormalised per channel
             // onto the band centre's totals, so the band carries shape uncertainty only.
@@ -578,12 +582,24 @@ namespace PROfit{
             const size_t nchains = std::max<size_t>(1, spec.nchains());
             std::vector<std::vector<Eigen::VectorXf>> chain_specs(nchains);
             for(size_t c = 0; c < nchains; ++c) chain_specs[c].reserve(spec.chainSteps(c));
-            std::vector<MCMCChainOut> chains = runMetropolisChains<Target>(metric, best_fit, spec,
-                [&](size_t c, const Eigen::VectorXf &value, bool moved) {
+            // An accepted step was just evaluated by the chain's metric: reuse that prediction
+            // (fitting variable only; the metric predicts nothing else).
+            MCMCChainSpec run_spec = spec;
+            run_spec.remember_spectrum = var_index == (int)config.i_prime;
+            std::vector<size_t> n_reused(nchains, 0), n_filled(nchains, 0);
+            std::vector<MCMCChainOut> chains = runMetropolisChains<Target>(metric, best_fit, run_spec,
+                [&](size_t c, const Eigen::VectorXf &value, bool moved, PROmetric &chain_metric) {
                     std::vector<Eigen::VectorXf> &cs = chain_specs[c];
-                    if(moved || cs.empty()) cs.push_back(fill_spec(value));
-                    else cs.push_back(cs.back());
+                    if(!moved && !cs.empty()) {
+                        cs.push_back(cs.back());
+                        return;
+                    }
+                    const Eigen::VectorXf *full = run_spec.remember_spectrum ? chain_metric.LastSpectrum(value) : nullptr;
+                    cs.push_back(full ? sample_from_full(*full) : fill_spec(value));
+                    ++(full ? n_reused : n_filled)[c];
                 }, pbar);
+            log<LOG_INFO>(L"%1% || Moved steps: %2% spectra reused from the metric, %3% recomputed.") % __func__
+                % std::accumulate(n_reused.begin(), n_reused.end(), (size_t)0) % std::accumulate(n_filled.begin(), n_filled.end(), (size_t)0);
 
             std::vector<Eigen::VectorXf> specs, values;
             size_t naccept = 0, nsteps_total = 0;

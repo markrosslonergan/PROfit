@@ -385,6 +385,32 @@ namespace PROfit {
                 }
             }
 
+            /**
+             * @brief Keep the prediction of each evaluation, for callers that evaluate the metric
+             * and then need its spectrum at the same point (the MCMC band chain). Off by default,
+             * so fits pay no copy. Turning it off forgets the stored spectrum.
+             */
+            void setRememberSpectrum(bool on) {
+                remember_spectrum = on;
+                if(!on) {
+                    last_spectrum.resize(0);
+                    last_spectrum_param.resize(0);
+                }
+            }
+
+            /**
+             * @brief The uncollapsed binned prediction of the last evaluation, before any
+             * shape-only rescale, when that evaluation was at exactly @p param; else nullptr.
+             * Same values as FillSpectra(..., binned = true, i_prime) up to float rounding (the
+             * metric's FillSpectraCache may update the spline factors incrementally).
+             * Event-by-event metrics never store one.
+             */
+            const Eigen::VectorXf *LastSpectrum(const Eigen::VectorXf &param) const {
+                if(last_spectrum.size() == 0 || last_spectrum_param.size() != param.size() || last_spectrum_param != param)
+                    return nullptr;
+                return &last_spectrum;
+            }
+
             /** @brief Clear the is_fixed mask so that all parameters are free to be optimised. */
             void freeParams() {
                 is_fixed.clear();
@@ -491,6 +517,17 @@ namespace PROfit {
             Eigen::MatrixXf prior_covariance_inv; ///< Cached inverse prior covariance.
 
             FillSpectraCache fs_cache; ///< Per-metric cache for FillSpectra.
+
+            bool remember_spectrum = false;    ///< Keep the last binned prediction (setRememberSpectrum).
+            Eigen::VectorXf last_spectrum;      ///< Uncollapsed binned prediction of the last evaluation.
+            Eigen::VectorXf last_spectrum_param; ///< The parameters it was made at (empty = none).
+
+            /** @brief Concrete metrics call this with the prediction of every binned evaluation. */
+            void rememberSpectrum(const Eigen::VectorXf &param, const Eigen::VectorXf &spec) {
+                if(!remember_spectrum) return;
+                last_spectrum_param = param;
+                last_spectrum = spec;
+            }
 
             mutable std::atomic<size_t> call_count{0}; ///< Thread-safe counter of operator() invocations.
             GradientMode gradient_mode = GradientAnalytic; ///< Default: exact analytic gradient (falls back to GradientFallback where not implemented). Use --grad-mode central-lin/central-full for the finite-difference modes.

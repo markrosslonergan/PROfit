@@ -962,7 +962,8 @@ Outputs:
 
 * `TUT_glob1_global_fit.txt` — best-fit χ² and every parameter value in a plain-text table
 * `TUT_glob1_PROglobal_hists.pdf` — pre-fit (blue/gray) vs post-fit (red) spectra + error bands, with a data/fit ratio panel
-* `TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` (+ `_nuisance_only` version) — post-fit parameter correlations
+* `TUT_glob1_PROglobal_postfit_correlation_matrix_nuisance_only.pdf` — post-fit correlations of the spline nuisances (from the band chain, always made)
+* `TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit correlations of every parameter, physics included, plus `_corrmat_mcmc_autocorrelation.pdf` and the `_mcmc_chain` TTree: only with `global --mcmc-correlations`, which runs a second MCMC with physics free (about half the post-fit MCMC time, so off by default)
 * `TUT_glob1_PROglobal_postfit_posteriors.pdf` — post-fit parameter constraints
 * `TUT_glob1_PROglobal_postfit_pull_distributions.pdf` — histograms of all nuisance pulls, which should look like N(0,1) when the model describes the data (all 0 for this Asimov fit). See [Are the pulls healthy?](#are-the-pulls-healthy-pull-distributions) below.
 * `TUT_glob1_PROglobal.root` — all of the above as ROOT objects
@@ -978,7 +979,7 @@ prints the breakdown. See Appendix D for what each term counts.
 
 <img src="figures/TUT_glob1_PROglobal_postfit_correlation_matrix.png" width="600"/>
 
-*`TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit parameter correlations.*
+*`TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit parameter correlations (`--mcmc-correlations`).*
 
 <img src="figures/TUT_glob1_PROglobal_postfit_posteriors.png" width="700"/>
 
@@ -1006,9 +1007,11 @@ The minimization itself is usually the *fast* part of `global`. The **pre-fit
 error band** is built by throwing a few thousand spectra from the priors and
 covariances (random — fix `--seed`, and bump the sample count for
 publication-quality plots, since sparsely-filled bins jitter). The **post-fit
-error band, correlation matrix, and posteriors** come from MCMC chains sampled
-around the best fit (20,000 kept samples, split over one chain per `-n`
-thread, so `-n` speeds them up and changes their random stream): post-fit
+error band and posteriors** come from MCMC chains sampled around the best fit
+with physics held there (20,000 kept samples, split over one chain per `-n`
+thread, so `-n` speeds them up and changes their random stream); the full
+correlation matrix with physics floating is a second, opt-in MCMC
+(`--mcmc-correlations`). Post-fit
 pulls can be strongly correlated, so marginal errors must be sampled
 simultaneously rather than read off one parameter at a time. This MCMC
 covariance is also the *trusted* post-fit covariance — the L-BFGS internal
@@ -1275,7 +1278,7 @@ Outputs:
 * `TUT_prof1_PROfile.pdf` — the Δχ² curve for every parameter (physics first, then all nuisances with the prior in dashed red)
 * `TUT_prof1_PROfile_1sigma.pdf` (+ `_1sigma_detailed.pdf`) — post-fit ±1σ summary for all nuisance parameters at a glance (red star = injected truth, blue = global best fit, black = the per-profile minima on the scan grid)
 * `TUT_prof1_PROfile_hists.pdf` — pre-fit vs post-fit spectra (same as global's)
-* `TUT_prof1_PROfile_postfit_correlation_matrix.pdf`, `_postfit_posteriors.pdf`, `_postfit_pull_distributions.pdf` (as for `global`; redrawn at the new minimum if the scan finds a lower one)
+* `TUT_prof1_PROfile_postfit_correlation_matrix_nuisance_only.pdf`, `_postfit_posteriors.pdf`, `_postfit_pull_distributions.pdf` (as for `global`, incl. `_postfit_correlation_matrix.pdf` with `profile --mcmc-correlations`; redrawn at the new minimum if the scan finds a lower one)
 * `TUT_prof1_PROfile.root` — every profile as a TGraph, plus the 1σ summary
 * `TUT_prof1_global_fit.txt` — the global best fit table
 

@@ -9,7 +9,7 @@ void run_profile(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
     opt |= options.MCMC_prefit_errors ? GlobalFitOptions::MCMCPrefitErrorBand : GlobalFitOptions::PrefitErrorBand;
     opt |= GlobalFitOptions::PostFitErrorBand;
     if(options.legacy_postfit_errors) opt |= GlobalFitOptions::LegacyPostFitErrorBand;
-    opt |= GlobalFitOptions::Correlations;
+    if(options.mcmc_correlations) opt |= GlobalFitOptions::Correlations;
     PROspec cv = FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), CVParams , true ,config.i_prime);
     GlobalFitResult fitres = run_global_fit(config, prop, data, metric, ub, lb, fitConfig, CVParams, cv, fixed, opt); 
     global_fit_chi2 = fitres.chi2;

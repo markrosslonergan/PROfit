@@ -697,6 +697,8 @@ namespace PROfit {
         size_t iterations = 0;      ///< Kept steps over all chains.
         size_t nthreads = 1;
         std::vector<uint32_t> seeds; ///< Two per chain (proposal, sampler); sets the chain count.
+        /// Each chain's metric keeps its last prediction (PROmetric::LastSpectrum) while it runs.
+        bool remember_spectrum = false;
 
         size_t nchains() const { return seeds.size() / 2; }
         /// Kept steps of chain @p c: an even split, the first iterations % K chains take one more.
@@ -719,9 +721,10 @@ namespace PROfit {
      * @brief Run independent adaptive-Metropolis chains from @p start in parallel.
      * @details Chain c samples Target{metric_c}: chain 0 uses @p metric, the others a Clone()
      * with the same bounds. Each has its own seeds, the full burn-in and spec.chainSteps(c) kept
-     * steps. on_step(c, value, moved) runs on chain c's thread for every kept step (moved = false
-     * when the proposal was rejected, so value repeats the previous step) and may touch only
-     * chain c's own state. The output is per chain, so it does not depend on the thread count.
+     * steps. on_step(c, value, moved, metric_c) runs on chain c's thread for every kept step
+     * (moved = false when the proposal was rejected, so value repeats the previous step;
+     * metric_c is the chain's own metric, whose LastSpectrum(value) is set on a moved step when
+     * spec.remember_spectrum) and may touch only chain c's own state. The output is per chain, so it does not depend on the thread count.
      * @p pbar follows chain 0, which has the most kept steps.
      */
     template<class Target, class OnStep>
@@ -763,8 +766,14 @@ namespace PROfit {
                     std::function<void(const Eigen::VectorXf&)> action = [&](const Eigen::VectorXf &v) {
                         const bool moved = o.values.empty() || v != o.values.back();
                         o.values.push_back(v);
-                        on_step(c, v, moved);
+                        on_step(c, v, moved, m);
                     };
+                    // Switched off again on exit, also when a chain throws.
+                    struct RememberGuard {
+                        PROmetric &m; bool on;
+                        RememberGuard(PROmetric &m_, bool on_) : m(m_), on(on_) { if(on) m.setRememberSpectrum(true); }
+                        ~RememberGuard() { if(on) m.setRememberSpectrum(false); }
+                    } remember(m, spec.remember_spectrum);
                     met.run(spec.burnin, steps, action, c == 0 ? pbar : nullptr);
                     o.naccept = met.naccept;
                     o.nsteps = spec.burnin + steps;
