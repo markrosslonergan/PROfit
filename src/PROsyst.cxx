@@ -13,7 +13,6 @@
 #include <thread>
 #include <algorithm>
 #include <random>
-#include <cstdlib>
 #include <set>
 #include <limits>
 
@@ -653,20 +652,16 @@ namespace PROfit {
     Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
-        // Fast path: a throw changes only this spline, and the binned prediction is
-        // cv(k) * prod_i f_i(k), so throw(k) = cv(k) * f_s(k; x) / f_s(k; x0).
-        // Only for numudis, no decay migration, and splines outside quadratic groups;
-        // PROFIT_SPLINE2COV_FAST=0 forces the full path.
-        const char *fast_env = std::getenv("PROFIT_SPLINE2COV_FAST");
+        // Fast path (numudis): throw(k) = cv(k) * f_s(k; x) / f_s(k; x0); quadratic-group splines use the full path.
         const bool numudis = config.m_model_tag == "numudis" || config.m_model_tag == "SBL_2flav_numudis";
         const bool in_group = spline < (int)quadratic_group_of.size() && quadratic_group_of[spline] >= 0;
-        bool fast = numudis && !model.uses_get_counts() && !in_group && !(fast_env && std::string(fast_env) == "0");
+        bool fast = numudis && !model.uses_get_counts() && !in_group;
 
         const size_t nb = config.m_num_variable_bins_total[other_index];
         const size_t sb = (size_t)spline_binnings[spline];
         Eigen::VectorXf unweighted;
         if(fast && sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
-        // This spline's factor per bin of other_index at knob value t, exactly as FillSpectra builds it.
+        // This spline's per-bin factor at knob value t, built as in FillSpectra.
         auto factor = [&](float t) {
             Eigen::VectorXf f = Eigen::VectorXf::Ones(nb);
             if(sb == (size_t)other_index) {
@@ -708,8 +703,7 @@ namespace PROfit {
         });
 
         int nbins = config.m_num_variable_bins_total[other_index];
-        // [speed] one matrix product D D^T over all throws (BLAS-3) instead of an
-        // nbins x nbins scalar loop per throw. Same sum, accumulated in the same precision.
+        // Covariance over throws as one rank-k update D D^T.
         Eigen::MatrixXf D(nbins, (Eigen::Index)specs.size());
         for(size_t k = 0; k < specs.size(); ++k) D.col(k) = cv.col(0) - specs[k];
         Eigen::MatrixXf mat = Eigen::MatrixXf::Zero(nbins, nbins);
@@ -717,9 +711,7 @@ namespace PROfit {
         { Eigen::MatrixXf sym = mat.selfadjointView<Eigen::Lower>(); mat.swap(sym); }
         mat /= specs.size();
 
-        // [speed] diag(1/cv) * mat * diag(1/cv) as an O(N^2) diagonal scaling; the old code
-        // stored the diagonal in a dense matrix and did two O(N^3) products. Non-finite
-        // entries (cv == 0) end up exactly where they did before and are zeroed below.
+        // Diagonal scaling (O(N^2)); non-finite entries from cv == 0 are zeroed below.
         const Eigen::VectorXf cv_inv = cv.col(0).cwiseInverse();
         Eigen::MatrixXf frac_covar_matrix = cv_inv.asDiagonal() * mat * cv_inv.asDiagonal();
         PROsyst::toFiniteMatrix(frac_covar_matrix);
@@ -991,9 +983,7 @@ namespace PROfit {
         int nbins = cv_spec.GetNbins();
 
         //build full covariance matrix 
-        // [speed] Collect all universe differences in one nbins x n_universe matrix and form
-        // D D^T / n_universe with a single symmetric rank-k update (BLAS-3), instead of
-        // n_universe separate outer products each touching the full nbins x nbins matrix.
+        // Covariance over universes as one rank-k update D D^T / n_universe.
         Eigen::MatrixXf D(nbins, n_universe);
         for(int i = 0; i != n_universe; ++i){
             if(shape_blocks){
@@ -1027,7 +1017,7 @@ namespace PROfit {
         //first, get the matrix with diagonal being reciprocal of CV spectrum prdiction
         const PROspec& cv_spec = sys_obj.CV();
         int nbins = cv_spec.GetNbins();
-        // [speed] keep the diagonal as a vector: O(N^2) scaling instead of two dense O(N^3) products
+        // Diagonal scaling (O(N^2)) instead of dense diagonal products.
         Eigen::VectorXf cv_inv(nbins);
         for(int i =0; i != nbins; ++i)
             cv_inv(i) = 1.0/cv_spec.GetBinContent(i);
@@ -1053,7 +1043,7 @@ namespace PROfit {
         int nbins = frac_matrix.rows();
         Eigen::MatrixXf corr_covar_matrix = frac_matrix;
 
-        // [speed] diagonal kept as a vector: O(N^2) scaling instead of two dense O(N^3) products
+        // Diagonal scaling (O(N^2)) instead of dense diagonal products.
         Eigen::VectorXf error_reciprocal(nbins);
         for(int i = 0; i != nbins; ++i){
             if(frac_matrix(i,i) != 0){
@@ -1119,10 +1109,7 @@ namespace PROfit {
 
 
         //second, check if it's positive semi-definite;
-        // [speed] Fast path: all eigenvalues > -tolerance  <=>  in_matrix + tolerance*I is
-        // positive definite, which one Cholesky factorisation decides (~N^3/3 flops, in double
-        // for safety) -- the full eigendecomposition below costs ~25x more. Only if Cholesky
-        // fails do we fall back to the eigensolver, which then decides and reports as before.
+        // Fast path: Cholesky of M + tol*I succeeds iff all eigenvalues > -tol; eigensolver only on failure.
         {
             Eigen::MatrixXd shifted = in_matrix.cast<double>();
             shifted.diagonal().array() += (double)tolerance;
