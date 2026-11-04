@@ -12,7 +12,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--required-version", required_version, "Refuse to run unless this is exactly this PROfit version, e.g. v3.0.5 or 3.0.5-dev (leading v optional). A -dev build only matches its full -dev string. Useful in --config run cards.");
         app.add_option("-n, --nthread", nthread, "Number of threads to parallelize over.")->default_val(1);
         app.add_option("-m,--max", maxevents, "Max number of events to run over.");
-        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Default 500.")->check(CLI::PositiveNumber);
+        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Only used where the conversion has no closed form (visible-decay models, quadratic spline groups); every other spline is converted exactly. Default 500.")->check(CLI::PositiveNumber);
         app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options: neyman (default; stat cov = diag(data)), pearson (stat cov = diag(prediction)), CNP, poisson. Legacy aliases PROchi, PROCNP, Poisson accepted.")->default_str("neyman");
         app.add_option("-d, --data", data_xml, "Load from a seperate data xml/data file instead of signal injection. Only used with plot subcommand.")->default_str("");
         app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
