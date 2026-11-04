@@ -1,4 +1,5 @@
 #include "PROsyst.h"
+#include "PROparallel.h"
 #include "PROcess.h"
 #include "PROpeller.h"
 #include "PROconfig.h"
@@ -694,25 +695,17 @@ namespace PROfit {
         // Throw i always uses seed+i and lands in specs[i], and the sum below runs
         // in index order, so the result does not depend on the thread count.
         std::vector<Eigen::VectorXf> specs(spline2cov_throws);
-        std::atomic<size_t> next{0};
-        auto worker = [&]() {
-            for(size_t i = next++; i < specs.size(); i = next++) {
-                if(fast) {
-                    // Same draw as FillSplineRandomThrow: mt19937(seed+i), N(center, prior).
-                    std::mt19937 rng{seed + (uint32_t)i};
-                    std::normal_distribution<float> d(spline_centers(spline), spline_priors(spline));
-                    const float x = d(rng);
-                    specs[i] = cv.col(0).cwiseProduct(factor(x)).cwiseQuotient(f0);
-                } else {
-                    specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
-                }
+        parallel_for(specs.size(), spline2cov_nthreads, [&](size_t i) {
+            if(fast) {
+                // Same draw as FillSplineRandomThrow: mt19937(seed+i), N(center, prior).
+                std::mt19937 rng{seed + (uint32_t)i};
+                std::normal_distribution<float> d(spline_centers(spline), spline_priors(spline));
+                const float x = d(rng);
+                specs[i] = cv.col(0).cwiseProduct(factor(x)).cwiseQuotient(f0);
+            } else {
+                specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
             }
-        };
-        const size_t nthreads = std::max<size_t>(1, std::min(spline2cov_nthreads, specs.size()));
-        std::vector<std::thread> pool;
-        for(size_t t = 1; t < nthreads; ++t) pool.emplace_back(worker);
-        worker();
-        for(auto &th: pool) th.join();
+        });
 
         int nbins = config.m_num_variable_bins_total[other_index];
         // [speed] one matrix product D D^T over all throws (BLAS-3) instead of an

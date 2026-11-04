@@ -1,4 +1,5 @@
 #include "PROplot.h"
+#include "PROparallel.h"
 #include "PROwatermark.h"
 #include "TStyle.h"
 #include "TArrow.h"
@@ -13,8 +14,6 @@
 #include "TText.h"
 #include <cmath>
 #include <numeric>
-#include <atomic>
-#include <thread>
 #include <Eigen/SVD>
 
 namespace PROfit{
@@ -310,17 +309,6 @@ namespace PROfit{
 
             return spline_graphs;
         }
-    // Run job(i) for i in [0, n) on the -n threads (as spline2cov does).
-    template <class F> static void parallel_for(size_t n, F &&job) {
-        std::atomic<size_t> next{0};
-        auto worker = [&]() { for(size_t i = next++; i < n; i = next++) job(i); };
-        const size_t nthreads = std::max<size_t>(1, std::min(PROsyst::spline2cov_nthreads, n));
-        std::vector<std::thread> pool;
-        for(size_t t = 1; t < nthreads; ++t) pool.emplace_back(worker);
-        worker();
-        for(auto &th : pool) th.join();
-    }
-
     PROerrorbar getErrorBand(const PROconfig &config, const PROpeller &prop, const PROsyst &syst, const PROmodel &model, const PROspec &cv_spec, const Eigen::VectorXf &cvparams, int other_index, size_t nthrows, bool shape_norm) {
 
         Eigen::VectorXf cv = CollapseMatrix(config, cv_spec.Spec(), other_index);
@@ -355,7 +343,7 @@ namespace PROfit{
         for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
         std::vector<Eigen::VectorXf> specs(nerrorsample);
         //Fills already collapsed
-        parallel_for(nerrorsample, [&](size_t i) {
+        parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
             Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, seeds[i], other_index).Spec();
             if(shape_norm) var = var.cwiseProduct(ChannelNormFactors(config, var, cv, other_index));
             specs[i] = var;
@@ -475,7 +463,7 @@ namespace PROfit{
         std::vector<uint32_t> seeds(nerrorsample);
         for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
         std::vector<Eigen::VectorXf> sig_specs(nerrorsample), bkg_specs(nerrorsample);
-        parallel_for(nerrorsample, [&](size_t i) {
+        parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
             // Subtract each throw's OWN background so bkg systematic variations
             // cancel: the band that comes out is signal-only.
             auto [sig, bkg] = FillSystRandomThrowSplit(config, prop, syst, model, cv_spec, cvparams, seeds[i], other_index, mask);
