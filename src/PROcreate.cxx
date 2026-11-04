@@ -228,42 +228,44 @@ namespace PROfit {
 
 
     namespace {
-        /// One MCFile's share of everything PROcess_CAFAna accumulates.
+        /// A later MCFile's events and systematic spectra, read on its own thread. Its MC-stat
+        /// and hist-storage sums are not kept: they are re-added from its events at the merge.
         struct FileAccumulator {
             PROpeller prop;
             std::vector<std::vector<SystStruct>> syst;
         };
 
-        /// Empty accumulators shaped like inprop's / syst_vector's, with their own zeroed spectra.
         std::unique_ptr<FileAccumulator> EmptyFileAccumulator(const PROconfig &inconfig, const std::vector<std::vector<SystStruct>> &syst_vector) {
             auto acc = std::make_unique<FileAccumulator>();
-            PROpeller &p = acc->prop;
-            p.variable_hist_storage.init(inconfig.m_num_variables);
             for(size_t i = 0; i < inconfig.m_num_variables; ++i) {
-                p.variable_mc_stat_err.push_back(Eigen::VectorXf::Zero(inconfig.m_num_variable_bins_total[i]));
-                for(size_t j = i; j < inconfig.m_num_variables; ++j)
-                    p.variable_hist_storage.set(i,j) = Eigen::MatrixXf::Zero(inconfig.m_num_variable_bins_total[i], inconfig.m_num_variable_bins_total[j]);
-                p.variable_values.emplace_back();
-                p.variable_bin_indices.emplace_back();
+                acc->prop.variable_values.emplace_back();
+                acc->prop.variable_bin_indices.emplace_back();
             }
-            acc->syst = syst_vector;   // copies share the spectra: give each its own
+            acc->syst = syst_vector;   // copies share the spectra: give each its own, zeroed
             for(auto &sv : acc->syst)
-                for(auto &s : sv) {
-                    if(s.p_cv) s.p_cv = std::make_shared<PROspec>(s.p_cv->GetNbins());
-                    for(auto &u : s.p_multi_spec) if(u) u = std::make_shared<PROspec>(u->GetNbins());
+                for(auto &st : sv) {
+                    if(st.p_cv) st.p_cv = std::make_shared<PROspec>(st.p_cv->GetNbins());
+                    for(auto &u : st.p_multi_spec) if(u) u = std::make_shared<PROspec>(u->GetNbins());
                 }
             return acc;
         }
 
+        /// Contents add; errors add in quadrature, taken as they are where the other side is 0.
         void AddSpectrum(PROspec &dst, const PROspec &src) {
             dst.Spec() += src.Spec();
-            dst.Error() = (dst.Error().array().square() + src.Error().array().square()).sqrt().matrix();
+            Eigen::VectorXf &e = dst.Error();
+            const Eigen::VectorXf &f = src.Error();
+            for(Eigen::Index b = 0; b < e.size(); ++b) {
+                if(f(b) == 0.0f) continue;
+                e(b) = e(b) == 0.0f ? f(b) : std::sqrt(e(b) * e(b) + f(b) * f(b));
+            }
         }
 
-        /// Append a file's events and add its sums. The first file is moved in as is, so a
-        /// single-file config is identical to filling inprop directly; later files are added.
-        void MergeFileAccumulator(PROpeller &dst, std::vector<std::vector<SystStruct>> &dst_syst, FileAccumulator &src, bool first) {
+        /// Append a later file's events to dst and add its spectra (called in file order). The
+        /// MC-stat and hist-storage sums are re-added event by event, exactly as a serial read.
+        void MergeFileAccumulator(const PROconfig &inconfig, PROpeller &dst, std::vector<std::vector<SystStruct>> &dst_syst, FileAccumulator &src) {
             PROpeller &sp = src.prop;
+            const size_t first_event = dst.NEvent();
             auto append = [](auto &to, const auto &from) { to.insert(to.end(), from.begin(), from.end()); };
             append(dst.added_weights, sp.added_weights);
             append(dst.model_rule, sp.model_rule);
@@ -276,23 +278,26 @@ namespace PROfit {
                 dst.has_matching_vars = true;
                 for(size_t iv = 0; iv < sp.matching_var_values.size(); ++iv) append(dst.matching_var_values[iv], sp.matching_var_values[iv]);
             }
-            const size_t nv = dst.variable_mc_stat_err.size();
-            for(size_t i = 0; i < nv; ++i) {
-                if(first) dst.variable_mc_stat_err[i] = std::move(sp.variable_mc_stat_err[i]);
-                else      dst.variable_mc_stat_err[i] += sp.variable_mc_stat_err[i];
-                for(size_t j = i; j < nv; ++j) {
-                    if(first) dst.variable_hist_storage.set(i,j) = std::move(sp.variable_hist_storage.set(i,j));
-                    else      dst.variable_hist_storage.set(i,j) += sp.variable_hist_storage.set(i,j);
+            for(size_t ev = first_event; ev < dst.NEvent(); ++ev) {
+                const float mc_weight = dst.added_weights[ev];
+                for(size_t io = 0; io < inconfig.m_num_variables; ++io) {
+                    const int bi = dst.variable_bin_indices[io][ev];
+                    if(bi < 0) continue;
+                    dst.variable_mc_stat_err[io](bi) += mc_weight * mc_weight;
+                    for(size_t jo = io; jo < inconfig.m_num_variables; ++jo) {
+                        const int bj = dst.variable_bin_indices[jo][ev];
+                        if(bj < 0) continue;
+                        dst.variable_hist_storage.set(io,jo)(bi, bj) += mc_weight;
+                    }
                 }
             }
             for(size_t iv = 0; iv < dst_syst.size(); ++iv)
                 for(size_t is = 0; is < dst_syst[iv].size(); ++is) {
                     SystStruct &d = dst_syst[iv][is];
-                    SystStruct &s = src.syst[iv][is];
-                    if(first) { d.p_cv = s.p_cv; d.p_multi_spec = s.p_multi_spec; continue; }
-                    if(d.p_cv && s.p_cv) AddSpectrum(*d.p_cv, *s.p_cv);
-                    for(size_t u = 0; u < d.p_multi_spec.size() && u < s.p_multi_spec.size(); ++u)
-                        if(d.p_multi_spec[u] && s.p_multi_spec[u]) AddSpectrum(*d.p_multi_spec[u], *s.p_multi_spec[u]);
+                    const SystStruct &f = src.syst[iv][is];
+                    if(d.p_cv && f.p_cv) AddSpectrum(*d.p_cv, *f.p_cv);
+                    for(size_t u = 0; u < d.p_multi_spec.size() && u < f.p_multi_spec.size(); ++u)
+                        if(d.p_multi_spec[u] && f.p_multi_spec[u]) AddSpectrum(*d.p_multi_spec[u], *f.p_multi_spec[u]);
                 }
         }
     }
@@ -952,19 +957,20 @@ namespace PROfit {
         time_t start_time = time(nullptr);
         log<LOG_INFO>(L"%1% || Start reading the files..") % __func__;
 
-        // Each MCFile is read into its own accumulators (events, MC-stat, hist storage, systematic
-        // spectra), on up to nthreads threads, and merged in file order as soon as the files
-        // before it are done: the result does not depend on the thread count, and a single-file
-        // config is identical to reading straight into inprop.
+        // MC files are read on up to nthreads threads. File 0 fills inprop and syst_vector
+        // directly; each later file fills its own accumulator, merged in file order once every
+        // file before it is done. The result does not depend on the thread count, and a
+        // single-file config is exactly a serial read.
         std::vector<std::unique_ptr<FileAccumulator>> finished(num_files);
+        std::vector<char> file_done(num_files, 0);
         std::mutex merge_mutex;
         int next_merge = 0;
         auto read_file = [&](size_t file_index) {
             const int fid = (int)file_index;
             time_t time_stamp = time(nullptr);
-            std::unique_ptr<FileAccumulator> acc = EmptyFileAccumulator(inconfig, syst_vector);
-            PROpeller &fprop = acc->prop;
-            std::vector<std::vector<SystStruct>> &fsyst = acc->syst;
+            std::unique_ptr<FileAccumulator> acc = fid == 0 ? nullptr : EmptyFileAccumulator(inconfig, syst_vector);
+            PROpeller &fprop = acc ? acc->prop : inprop;
+            std::vector<std::vector<SystStruct>> &fsyst = acc ? acc->syst : syst_vector;
             const auto& fn = inconfig.m_mcgen_file_name.at(fid);
             long int nevents = std::min(inconfig.m_mcgen_maxevents[fid], (long int)(nentries[fid] * inconfig.m_mcgen_partial_load_frac[fid]));
             log<LOG_DEBUG>(L"%1% || Start @files: %2% which has %3% total events, loading fraction %4% (%5% events)") % __func__ % fn.c_str() % nentries[fid] % inconfig.m_mcgen_partial_load_frac[fid] % nevents;
@@ -1188,8 +1194,10 @@ namespace PROfit {
 
             std::lock_guard<std::mutex> lock(merge_mutex);
             finished[fid] = std::move(acc);
-            for(; next_merge < num_files && finished[next_merge]; ++next_merge) {
-                MergeFileAccumulator(inprop, syst_vector, *finished[next_merge], next_merge == 0);
+            file_done[fid] = 1;
+            for(; next_merge < num_files && file_done[next_merge]; ++next_merge) {
+                if(!finished[next_merge]) continue;   // file 0 went straight into inprop
+                MergeFileAccumulator(inconfig, inprop, syst_vector, *finished[next_merge]);
                 finished[next_merge].reset();
             }
         };
@@ -1535,7 +1543,9 @@ namespace PROfit {
             inprop.variable_values[i_var].push_back(vars[i_var].first());
         }
 
-        for(size_t io = 0; io < inconfig.m_num_variables; ++io) {
+        // A later file's accumulator keeps no sums (empty MC-stat): MergeFileAccumulator re-adds
+        // them from the stored events in file order.
+        for(size_t io = 0; io < inconfig.m_num_variables && !inprop.variable_mc_stat_err.empty(); ++io) {
             if(var_bin_indices[io] >= 0) {
                 inprop.variable_mc_stat_err[io](var_bin_indices[io]) += mc_weight * mc_weight;
                 for(size_t jo = io; jo < inconfig.m_num_variables; ++jo) {

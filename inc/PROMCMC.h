@@ -677,6 +677,17 @@ namespace PROfit {
             const size_t K = std::max<size_t>(1, spec.nchains());
             if(spec.seeds.size() < 2 * K)
                 throw std::invalid_argument("runMetropolisChains: need two seeds per chain");
+            // A start outside a free parameter's sampling box freezes every chain: each proposal
+            // keeps that parameter near its start, so within_bound rejects all of them.
+            for(long i = 0; i < start.size(); ++i) {
+                if(std::find(spec.fixed.begin(), spec.fixed.end(), (int)i) != spec.fixed.end()) continue;
+                const auto [lo, hi] = mcmcParamBox(metric, i);
+                if(start(i) >= lo && start(i) <= hi) continue;
+                const long np = metric.GetModel().nparams;
+                const std::string name = i < np ? metric.GetModel().param_names[i] : metric.GetSysts().spline_names[i - np];
+                log<LOG_WARNING>(L"%1% || Start value %2% of parameter %3% lies outside its MCMC sampling box [%4%, %5%]; the chains will reject every proposal.")
+                    % __func__ % start(i) % name.c_str() % lo % hi;
+            }
             // Clones are built up front, on this thread.
             std::vector<std::unique_ptr<PROmetric>> clones;
             std::vector<PROmetric*> metrics(K, &metric);
