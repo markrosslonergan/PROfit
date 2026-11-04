@@ -342,6 +342,9 @@ namespace PROfit{
         std::vector<uint32_t> seeds(nerrorsample);
         for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
         std::vector<Eigen::VectorXf> specs(nerrorsample);
+        // Warm the decomposition cache here: otherwise every worker misses it at once and
+        // each recomputes the same eigendecomposition.
+        if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovariance(config, cv_spec.Spec());
         //Fills already collapsed
         parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
             Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, seeds[i], other_index).Spec();
@@ -463,6 +466,8 @@ namespace PROfit{
         std::vector<uint32_t> seeds(nerrorsample);
         for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
         std::vector<Eigen::VectorXf> sig_specs(nerrorsample), bkg_specs(nerrorsample);
+        // Warm the (uncollapsed) decomposition cache once, as in getErrorBand.
+        if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovarianceFull(config, cv_spec.Spec());
         parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
             // Subtract each throw's OWN background so bkg systematic variations
             // cancel: the band that comes out is signal-only.

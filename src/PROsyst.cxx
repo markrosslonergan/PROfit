@@ -652,10 +652,12 @@ namespace PROfit {
     Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
-        // Fast path (numudis): throw(k) = cv(k) * f_s(k; x) / f_s(k; x0); quadratic-group splines use the full path.
-        const bool numudis = config.m_model_tag == "numudis" || config.m_model_tag == "SBL_2flav_numudis";
+        // Fast path: binned FillSpectra is (H_combined * probs) times a per-bin product of spline
+        // factors, so throwing this spline alone gives throw(k) = cv(k) * f_s(k; x) / f_s(k; x0) exactly.
+        // Not for get_counts models (flux splines act before the decay migration) or quadratic-group
+        // members (a member's throw changes the group's shared factor).
         const bool in_group = spline < (int)quadratic_group_of.size() && quadratic_group_of[spline] >= 0;
-        bool fast = numudis && !model.uses_get_counts() && !in_group;
+        bool fast = !model.uses_get_counts() && !in_group;
 
         const size_t nb = config.m_num_variable_bins_total[other_index];
         const size_t sb = (size_t)spline_binnings[spline];
