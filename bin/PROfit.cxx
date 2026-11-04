@@ -1,4 +1,5 @@
 #include "PROfit_common.h"
+#include "TROOT.h"
 
 log_level_t GLOBAL_LEVEL = LOG_INFO;
 log_level_t FILE_LEVEL = LOG_INFO;
@@ -22,6 +23,8 @@ int main(int argc, char* argv[])
     // canonical spelling (neyman/pearson/CNP/poisson); legacy aliases
     // (PROchi/PROCNP/Poisson) warn once and map.
     options.chi2 = PROmetric::canonicalizeMetricName(options.chi2);
+    // Several stages open files and build TTreeFormulas from worker threads (DetVar processing).
+    ROOT::EnableThreadSafety();
     PROsyst::spline2cov_throws = options.syst_throws;
     PROsyst::spline2cov_nthreads = options.nthread;
 

@@ -21,6 +21,8 @@
 #include <fstream>
 #include <memory>
 #include <map>
+#include <set>
+#include <array>
 #include <ctime>
 #include <cmath>
 
@@ -288,6 +290,31 @@ namespace PROfit{
 
 
     /**
+     * @brief What process_cafana_event needs about one systematic for every event of one MCFile.
+     * @details Resolved once per file by BuildSystFillPlan (mode, the file's bound weight
+     * vector, the per-variable structs, knob slots, norm bin masks, HistVar/explicit lookups),
+     * so the event loop does no string comparisons, map lookups or allocations per systematic.
+     */
+    struct SystFillPlan {
+        enum class Mode : unsigned char { None, Spline, Covariance, CovToSpline, Norm, Hist1d, Hist2d, Explicit };
+        Mode mode = Mode::None;
+        bool needs_weights = false;                              ///< reads its universe weights from the file
+        std::vector<eweight_type>* const* weights = nullptr;    ///< this file's bound weight vector; nullptr if absent
+        std::vector<SystStruct*> per_var;                        ///< the systematic's struct for each variable
+        std::vector<size_t> slot;                                ///< universe -> its position in the sorted knob values
+        std::vector<std::vector<char>> norm_bin;                 ///< Norm: per variable, 1 for bins in that struct's norm_bins
+        const std::vector<double> *explicit_weights = nullptr;
+        const std::array<int, 2> *hist_axes = nullptr;
+        const std::vector<TH1*> *hist1d = nullptr;
+        const std::vector<TH2*> *hist2d = nullptr;
+        const std::set<std::string> *hist_subchannels = nullptr; ///< HistVar <subchannel> restriction (empty = all)
+    };
+
+    /// One SystFillPlan per systematic of syst_vector, for an MCFile whose weight branches are
+    /// bound into eventweight_map.
+    std::vector<SystFillPlan> BuildSystFillPlan(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, const std::map<std::string, std::vector<eweight_type>*> &eventweight_map);
+
+    /**
      * @brief Create a vector of PROdata objects (one per channel) from the embedded data section.
      * @param configin  Analysis configuration containing the embedded <data> section.
      * @return Vector of collapsed PROdata objects, one per channel defined in the XML.
@@ -300,7 +327,7 @@ namespace PROfit{
      *
      * Arguments: 
      * 		branch: pointer to branch variable, each corresponding to one subchannel 
-     * 		eventweight_map: a map between systematic string to list of variation weights
+     * 		plan: per-systematic fill data for the current MCFile (BuildSystFillPlan)
      * 		subchannel_index: index associated with current branch/subchannel
      *		syst_vector: list of SystStruct TO BE UPDATED, each stores all variation spectra of one systematic
      *		syst_additional_weight: additional weight applied to systematic variation
@@ -310,7 +337,7 @@ namespace PROfit{
     /// branch (pass an all-zero syst_applies with it). Used when the branch's subchannel is
     /// also filled by a systematics-carrying branch: its events must enter every SystStruct
     /// CV and universe at the CV weight so the fractional response is correctly diluted.
-    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::map<std::string, std::vector<eweight_type>*>& eventweight_map, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill = false);
+    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::vector<SystFillPlan>& plan, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill = false);
 
     /**
      * @brief Convert a local or EOS file path to an XRootD URL.

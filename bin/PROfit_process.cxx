@@ -1,4 +1,6 @@
 #include "PROfit_common.h"
+#include "PROparallel.h"
+#include <mutex>
 #include <iomanip>
 #include <sstream>
 #include <cmath>
@@ -186,20 +188,29 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
 
         if(need_detvar_process) {
             log<LOG_INFO>(L"%1% || Processing all DetVar files into combined binary: %2%") % __func__ % dvAllPropsBin.c_str();
-            for(size_t idv = 0; idv < config.GetNumDetVarFiles(); ++idv) {
+            // Every DetVar file is an independent pass, so they run on the -n threads. Each pass
+            // in flight holds a full PROpeller (dense hist storage included) until it is cleared.
+            const size_t n_dv = config.GetNumDetVarFiles();
+            const size_t dv_threads = std::max<size_t>(1, std::min(options.nthread, n_dv));
+            log<LOG_INFO>(L"%1% || Processing %2% DetVar files on %3% thread(s)") % __func__ % n_dv % dv_threads;
+            std::vector<PROpeller> dv_results(n_dv);
+            std::mutex build_config_mutex;   // BuildDetVarConfig writes/parses a temp XML and reads HistVar files
+            parallel_for(n_dv, dv_threads, [&](size_t idv) {
                 const std::string& name = config.m_detvar_files[idv].name;
-                const std::string key = DetVarKey(config, idv);
                 log<LOG_INFO>(L"%1% || Processing DetVar file '%2%'") % __func__ % name.c_str();
-                PROconfig dvconfig = config.BuildDetVarConfig(idv);
-                PROpeller dvprop;
+                std::unique_ptr<PROconfig> dvconfig;
+                {
+                    std::lock_guard<std::mutex> lock(build_config_mutex);
+                    dvconfig = std::make_unique<PROconfig>(config.BuildDetVarConfig(idv));
+                }
                 std::vector<std::vector<SystStruct>> dvsystsstructs;
-                PROcess_CAFAna(dvconfig, dvsystsstructs, dvprop, options.noxrootd);
+                PROcess_CAFAna(*dvconfig, dvsystsstructs, dv_results[idv], options.noxrootd);
                 // DetVar spectra come from per-event weights (NullModel, no splines); the
                 // dense hist matrices are never read and were nearly all of this binary.
-                dvprop.ClearHistStorage();
-                dvprops[key] = std::move(dvprop);
+                dv_results[idv].ClearHistStorage();
                 log<LOG_INFO>(L"%1% || Done processing DetVar file '%2%'") % __func__ % name.c_str();
-            }
+            });
+            for(size_t idv = 0; idv < n_dv; ++idv) dvprops[DetVarKey(config, idv)] = std::move(dv_results[idv]);
             saveDetVarProps(dvprops, config.detvar_hash, dvAllPropsBin);
         } else {
             log<LOG_INFO>(L"%1% || Loading DetVar props from combined binary: %2%") % __func__ % dvAllPropsBin.c_str();

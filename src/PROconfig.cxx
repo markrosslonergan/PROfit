@@ -10,6 +10,7 @@
 #include <sstream>
 #include <fstream>
 #include <filesystem>
+#include <atomic>
 #include "TFile.h"
 #include "TH1.h"
 #include "TTree.h"
@@ -3479,6 +3480,16 @@ BranchVariable::Value ROOTFormula::EvalInstance() {
     return ret;
 }
 
+float ROOTFormula::EvalFirst() {
+    if (fs.empty()) return EvalInstance().first();
+    return fs[0]->EvalInstance();
+}
+
+void ROOTFormula::EvalInto(BranchVariable::Value &out) {
+    out.v.resize(fs.size());
+    for (size_t i = 0; i < fs.size(); ++i) out.v[i] = fs[i]->EvalInstance();
+}
+
 void ROOTFormula::LoadEvent(unsigned eventno) {
     if (fs.size() == 0) return;
 
@@ -3653,12 +3664,12 @@ int PROconfig::Binning::Bin(const std::vector<float> &v) const {
         size_t local_bin = pos_iter - thisbin.begin() - 1;
 
         if(pos_iter == thisbin.end() || pos_iter == thisbin.begin()){
-            static int underflow_overflow_count = 0;
-            underflow_overflow_count++;
-            if(underflow_overflow_count <= 10) {
+            static std::atomic<int> underflow_overflow_count{0};   // events may be binned from several threads
+            const int n_seen = ++underflow_overflow_count;
+            if(n_seen <= 10) {
                 log<LOG_DEBUG>(L"%1% || Value: %2% in Dim: %3% is in underflow or overflow bins, return bin of -1") % __func__ % v[i_vec] % i_vec;
                 log<LOG_DEBUG>(L"%1% || Binning has bin lower edge: %2% and bin upper edge: %3%") % __func__ % thisbin.front() % thisbin.back();
-                if(underflow_overflow_count == 10)
+                if(n_seen == 10)
                     log<LOG_DEBUG>(L"%1% || (suppressing further underflow/overflow messages)") % __func__;
             }
             return -1;
