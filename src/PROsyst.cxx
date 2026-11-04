@@ -1,4 +1,5 @@
 #include "PROsyst.h"
+#include "PROparallel.h"
 #include "PROcess.h"
 #include "PROpeller.h"
 #include "PROconfig.h"
@@ -14,6 +15,7 @@
 #include <random>
 #include <set>
 #include <limits>
+#include <array>
 
 namespace PROfit {
 
@@ -44,6 +46,23 @@ namespace PROfit {
             }
             log<LOG_DEBUG>(L"%1% | Kept %2% of %3% modes") % caller % kept % evals.size();
             return L;
+        }
+
+        // J[m] = integral over [zl, zh] of z^m phi(z) dz, m = 0..6, for the standard normal phi
+        // (zl, zh may be infinite): J0 = Phi(zh) - Phi(zl), J1 = phi(zl) - phi(zh),
+        // J_m = (m-1) J_{m-2} + zl^{m-1} phi(zl) - zh^{m-1} phi(zh).
+        std::array<double, 7> GaussianMoments(double zl, double zh) {
+            const double inv_sqrt_2pi = 0.39894228040143267794;
+            auto phi = [&](double z) { return std::isinf(z) ? 0.0 : inv_sqrt_2pi * std::exp(-0.5 * z * z); };
+            auto edge = [&](double z, int n) { return std::isinf(z) ? 0.0 : std::pow(z, n) * phi(z); };
+            std::array<double, 7> J{};
+            // erfc of the tail on the same side of 0 keeps J0 accurate far from the centre.
+            if(zl >= 0)      J[0] = 0.5 * (std::erfc(zl / M_SQRT2) - std::erfc(zh / M_SQRT2));
+            else if(zh <= 0) J[0] = 0.5 * (std::erfc(-zh / M_SQRT2) - std::erfc(-zl / M_SQRT2));
+            else             J[0] = 1.0 - 0.5 * std::erfc(zh / M_SQRT2) - 0.5 * std::erfc(-zl / M_SQRT2);
+            J[1] = phi(zl) - phi(zh);
+            for(int m = 2; m <= 6; ++m) J[m] = (m - 1) * J[m - 2] + edge(zl, m - 1) - edge(zh, m - 1);
+            return J;
         }
     }
 
@@ -249,13 +268,80 @@ namespace PROfit {
             }
             log<LOG_INFO>(L"%1% || Shape-only mode (variable %2%, %3% channel blocks): systematics are kept physical; covariances are projected onto per-channel shape only before spline decomposition.") % __func__ % other_index % shape_blocks.at(other_index).size();
         }
-        for(const auto& syst: systs) {
-            log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
+        // Pass 1 (serial): the steps that touch shared state. ScopeSystStructSpectra writes the
+        // structs' spectra (shared_ptr) and the external matrices are read with ROOT.
+        std::vector<Eigen::MatrixXf> external(systs.size());
+        for(size_t k = 0; k < systs.size(); ++k) {
+            const SystStruct &syst = systs[k];
             // Layer 2 of apply_to_subchannel (see PROsyst.h): make the input spectra exactly
             // CV outside the scope before anything is derived from them. Idempotent on
             // structs PROcreate already CV-filled; the only real work is for DetVar/HistVar
             // structs and any other producer that does not know about the pattern.
             ScopeSystStructSpectra(config, syst, syst.mode == "covariance" ? other_index : syst.binning);
+            if((syst.mode == "external_covariance" && other_index == syst.binning) || syst.mode == "external_covariance_to_spline")
+                external[k] = LoadExternalFractionalCovariance(config, syst);
+        }
+
+        // Pass 2 (parallel, -n threads): each systematic's matrix work into its own slot, computed
+        // whole by one thread, so the result does not depend on the thread count. Registration
+        // (indices, names, logs, the config writes of PropagateDerivedNames) stays serial below.
+        struct UniformParent {
+            std::string parent, pattern;
+            SystStruct local;
+            std::pair<float, float> box;
+            std::vector<std::string> source_names;
+            Eigen::Index nrows = 0;
+            CovSplineDecomp decomp;
+        };
+        std::vector<UniformParent> uniform_parents;
+        for(const auto &[parent, pattern] : config.m_mcgen_variation_sources) {
+            UniformParent up{parent, pattern, SystStruct(parent, 0), config.m_mcgen_variation_restrict.at(parent), {}, 0, {}};
+            up.local.binning = other_index;
+            up.local.num_decomp_knobs = config.m_mcgen_variation_num_decomp_knobs.at(parent);
+            auto rc = config.m_mcgen_variation_include_resid_cov.find(parent);
+            if(rc != config.m_mcgen_variation_include_resid_cov.end()) up.local.include_resid_cov = rc->second;
+            uniform_parents.push_back(std::move(up));
+        }
+        std::vector<std::pair<Eigen::MatrixXf, Eigen::MatrixXf>> covs(systs.size());
+        std::vector<CovSplineDecomp> decomps(systs.size());
+        std::vector<size_t> heavy;   // uniform parents (indices past systs) first: they take longest
+        for(size_t p = 0; p < uniform_parents.size(); ++p) heavy.push_back(systs.size() + p);
+        for(size_t k = 0; k < systs.size(); ++k) {
+            const std::string &m = systs[k].mode;
+            if((m == "covariance" && !config.m_mcgen_variation_source_parent.count(systs[k].systname))
+               || m == "covariance_to_spline" || m == "external_covariance_to_spline") heavy.push_back(k);
+        }
+        parallel_for(heavy.size(), spline2cov_nthreads, [&](size_t t) {
+            const size_t k = heavy[t];
+            if(k >= systs.size()) {
+                // covariance_to_spline_uniform: sum the fractional covariances of the source entries
+                // (the same matrices CreateMatrix would have built, inflate included) and decompose
+                // the sum in THIS PROsyst's bin space (other_index), so the free modes are the ones
+                // the chi2 sees.
+                UniformParent &up = uniform_parents[k - systs.size()];
+                Eigen::MatrixXf summed;
+                for(const auto &s_src : systs) {
+                    if(s_src.mode != "covariance") continue;
+                    auto it = config.m_mcgen_variation_source_parent.find(s_src.systname);
+                    if(it == config.m_mcgen_variation_source_parent.end() || it->second != up.parent) continue;
+                    Eigen::MatrixXf m = PROsyst::GenerateFracCovarMatrix(s_src) * (s_src.inflate * s_src.inflate);
+                    if(up.source_names.empty()) summed = m; else summed += m;
+                    up.source_names.push_back(s_src.systname);
+                }
+                up.nrows = summed.rows();
+                if(!up.source_names.empty()) up.decomp = DecomposeCovarianceForSplines(std::move(summed), up.local);
+                return;
+            }
+            const SystStruct &syst = systs[k];
+            if(syst.mode == "covariance") covs[k] = PROsyst::GenerateCovarMatrices(syst);
+            else if(syst.mode == "covariance_to_spline") decomps[k] = DecomposeCovarianceForSplines(PROsyst::GenerateFracCovarMatrix(syst), syst);
+            else decomps[k] = DecomposeCovarianceForSplines(std::move(external[k]), syst);
+        });
+
+        // Pass 3 (serial, original order): register everything.
+        for(size_t k = 0; k < systs.size(); ++k) {
+            const SystStruct &syst = systs[k];
+            log<LOG_DEBUG>(L"%1% || syst mode: %2%") % __func__ % syst.mode.c_str();
             if(syst.mode == "spline" || syst.mode == "norm" || syst.mode == "hist1d" || syst.mode == "hist2d" || syst.mode == "explicit_spline") {
                 bool unmirrored = config.m_mcgen_variation_unmirrored.find(syst.systname) != config.m_mcgen_variation_unmirrored.end();
                 FillSpline(config, syst, unmirrored);
@@ -347,13 +433,13 @@ namespace PROfit {
                     log<LOG_DEBUG>(L"%1% || covariance '%2%' is a source of '%3%'; not built separately") % __func__ % syst.systname.c_str() % config.m_mcgen_variation_source_parent.at(syst.systname).c_str();
                     continue;
                 }
-                this->CreateMatrix(syst);
+                RegisterMatrix(syst, std::move(covs[k]));
                 covar_names.push_back(syst.systname);
                 ++n_covar;
             } else if(syst.mode == "covariance_to_spline") {
                 size_t n_before = splines.size();
                 size_t n_covar_before = covar_names.size();
-                FillSplinesFromCovariance(syst);
+                RegisterCovarianceSplines(std::move(decomps[k]), syst, SplinePriorType::Gaussian, -3.0f, 3.0f);
                 size_t n_after = splines.size();
 
                 // Each synthesized decomposition knob inherits the parent systematic's
@@ -375,7 +461,7 @@ namespace PROfit {
             }else if(syst.mode == "external_covariance"){
                 if(other_index == syst.binning){
                     //external covariances are only created for specific binning
-                    this->LoadExternalCovarianceMatrix(config,syst);
+                    RegisterExternalCovariance(syst, std::move(external[k]));
                     covar_names.push_back(syst.systname);
                     ++n_covar;
                 }
@@ -383,10 +469,9 @@ namespace PROfit {
                 // Like covariance_to_spline, but the fractional covariance is read from an
                 // external TMatrixD instead of being built from MC universes. Splines are added
                 // unconditionally (keyed to syst.binning), matching covariance_to_spline.
-                Eigen::MatrixXf frac_cov = LoadExternalFractionalCovariance(config, syst);
                 size_t n_before = splines.size();
                 size_t n_covar_before = covar_names.size();
-                FillSplinesFromCovarianceMatrix(frac_cov, syst);
+                RegisterCovarianceSplines(std::move(decomps[k]), syst, SplinePriorType::Gaussian, -3.0f, 3.0f);
                 size_t n_after = splines.size();
 
                 // Synthesized knobs inherit the parent's pre/post-migration classification,
@@ -399,42 +484,22 @@ namespace PROfit {
             }
         }
 
-        // covariance_to_spline_uniform: sum the fractional covariances of the source entries (the
-        // same matrices CreateMatrix would have built, inflate included) and decompose the sum in
-        // THIS PROsyst's bin space (other_index), so the free modes are the ones the chi2 sees.
-        for(const auto &[parent, pattern] : config.m_mcgen_variation_sources) {
-            Eigen::MatrixXf summed;
-            std::vector<std::string> source_names;
-            for(const auto &s_src : systs) {
-                if(s_src.mode != "covariance") continue;
-                auto it = config.m_mcgen_variation_source_parent.find(s_src.systname);
-                if(it == config.m_mcgen_variation_source_parent.end() || it->second != parent) continue;
-                Eigen::MatrixXf m = PROsyst::GenerateFracCovarMatrix(s_src) * (s_src.inflate * s_src.inflate);
-                if(source_names.empty()) summed = m; else summed += m;
-                source_names.push_back(s_src.systname);
-            }
-            if(source_names.empty()) {
+        for(auto &up : uniform_parents) {
+            if(up.source_names.empty()) {
                 log<LOG_ERROR>(L"%1% || covariance_to_spline_uniform systematic '%2%': none of its sources ('%3%') are present in this PROsyst (variable %4%).")
-                    % __func__ % parent.c_str() % pattern.c_str() % other_index;
+                    % __func__ % up.parent.c_str() % up.pattern.c_str() % other_index;
                 log<LOG_ERROR>(L"Terminating.");
                 exit(EXIT_FAILURE);
             }
             log<LOG_INFO>(L"%1% || covariance_to_spline_uniform systematic '%2%': decomposing the sum of %3% covariance entries %4% (%5%x%5%, variable %6%)")
-                % __func__ % parent.c_str() % source_names.size() % source_names % summed.rows() % other_index;
-
-            SystStruct local(parent, 0);
-            local.binning = other_index;
-            local.num_decomp_knobs = config.m_mcgen_variation_num_decomp_knobs.at(parent);
-            auto rc = config.m_mcgen_variation_include_resid_cov.find(parent);
-            if(rc != config.m_mcgen_variation_include_resid_cov.end()) local.include_resid_cov = rc->second;
-            const auto &box = config.m_mcgen_variation_restrict.at(parent);
+                % __func__ % up.parent.c_str() % up.source_names.size() % up.source_names % up.nrows % other_index;
             const size_t n_before = splines.size();
             const size_t n_covar_before = covar_names.size();
-            FillSplinesFromCovarianceMatrix(summed, local, SplinePriorType::Uniform, box.first, box.second);
-            const bool is_flux = config.has_flux_tag(parent);
+            RegisterCovarianceSplines(std::move(up.decomp), up.local, SplinePriorType::Uniform, up.box.first, up.box.second);
+            const bool is_flux = config.has_flux_tag(up.parent);
             for(size_t si = n_before; si < splines.size(); ++si)
                 spline_is_pre_migration.push_back(is_flux);
-            PropagateDerivedNames(config, parent, n_before, n_covar_before);
+            PropagateDerivedNames(config, up.parent, n_before, n_covar_before);
         }
 
         quadratic_group_of.assign(splines.size(), -1);
@@ -651,37 +716,137 @@ namespace PROfit {
     Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
         Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
 
+        // Closed form: binned FillSpectra is (H_combined * probs) times a per-bin product of spline
+        // factors, so throwing this spline alone to x gives throw(k) = cv(k) f_k(x) / f_k(x0), and
+        // the fractional covariance is exactly F = E[u u^T], u_k = 1 - f_k(x)/f_k(x0), x ~ N(centre,
+        // prior). f_k is a cubic in x between consecutive knots (the end segments extrapolate), so
+        // each interval adds E_i M_i E_i^T: E_i = every bin's cubic in z = (x - centre)/prior, M_i the
+        // 4x4 matrix of Gaussian moments of z^0..z^6 over the interval. No throws, no noise.
+        // Not for get_counts models (flux splines act before the decay migration) or quadratic-group
+        // members (a member's throw changes the group's shared factor): those keep the throws below.
+        const bool in_group = spline < (int)quadratic_group_of.size() && quadratic_group_of[spline] >= 0;
+        bool exact = !model.uses_get_counts() && !in_group;
+
+        const size_t nb = config.m_num_variable_bins_total[other_index];
+        const size_t sb = (size_t)spline_binnings[spline];
+        Eigen::VectorXf unweighted;
+        if(exact && sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
+        // This spline's per-bin factor at knob value t, built as in FillSpectra.
+        auto factor = [&](float t) {
+            Eigen::VectorXf f = Eigen::VectorXf::Ones(nb);
+            if(sb == (size_t)other_index) {
+                for(size_t k = 0; k < nb; ++k) f(k) = GetSplineShift(spline, t, k);
+            } else {
+                const size_t ns = config.m_num_variable_bins_total[sb];
+                Eigen::VectorXf sh(ns);
+                for(size_t j = 0; j < ns; ++j) sh(j) = GetSplineShift(spline, t, j);
+                const Eigen::VectorXf w = prop.variable_hist_storage.WeightedColSum(sb, other_index, sh);
+                for(size_t k = 0; k < nb; ++k) if(unweighted(k) > 0) f(k) = w(k) / unweighted(k);
+            }
+            return f;
+        };
+        Eigen::VectorXf f0;
+        if(exact) {
+            f0 = factor(params(model.nparams + spline));
+            if(!f0.allFinite() || (f0.array() == 0.0f).any()) {
+                exact = false;   // cannot divide this spline out of cv
+                log<LOG_DEBUG>(L"%1% || %2%: zero/non-finite factor at the CV value, using throws") % __func__ % spline_names[spline].c_str();
+            }
+        }
+
+        if(exact) {
+            const Spline &sp = splines[spline];
+            const double mu = spline_centers(spline);
+            const double sigma = std::abs((double)spline_priors(spline));
+            const Eigen::VectorXd f0d = f0.cast<double>();
+            Eigen::MatrixXd F;
+            if(sigma == 0.0) {   // no spread: every throw sits at the centre
+                const Eigen::VectorXd u = Eigen::VectorXd::Ones(nb) - factor((float)mu).cast<double>().cwiseQuotient(f0d);
+                F = u * u.transpose();
+            } else {
+                Eigen::MatrixXd H;   // (bins of sb) x (bins of other_index), as WeightedColSum uses it
+                Eigen::VectorXd Hsum;
+                if(sb != (size_t)other_index) {
+                    H = Eigen::MatrixXf(prop.variable_hist_storage(sb, other_index)).cast<double>();
+                    Hsum = H.colwise().sum().transpose();
+                }
+                std::vector<float> knots;
+                for(const auto &seg : sp.segments) knots.push_back(seg.knot);
+                std::sort(knots.begin(), knots.end());
+                knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
+                const double inf = std::numeric_limits<double>::infinity();
+                const double binom[4][4] = {{1, 0, 0, 0}, {1, 1, 0, 0}, {1, 2, 1, 0}, {1, 3, 3, 1}};
+                F = Eigen::MatrixXd::Zero(nb, nb);
+                Eigen::MatrixXd P(sp.bins, 4), G(nb, 4);
+                for(size_t i = 0; i <= knots.size(); ++i) {
+                    // Interval i is (-inf, k_0), [k_{i-1}, k_i), ..., [k_last, inf); GetSplineShift picks
+                    // the same segment everywhere inside it, so find that segment from one point.
+                    const double xl = i == 0 ? -inf : knots[i - 1];
+                    const double xh = i == knots.size() ? inf : knots[i];
+                    const float probe = i == 0 ? knots[0] - 1.0f : (i == knots.size() ? knots.back() + 1.0f : 0.5f * (knots[i - 1] + knots[i]));
+                    for(int j = 0; j < sp.bins; ++j) {
+                        const SplineSegment *segs = &sp.segments[(size_t)j * sp.segments_per_bin];
+                        const SplineSegment *end = segs + sp.segments_per_bin;
+                        const SplineSegment *seg = std::upper_bound(segs, end, probe, [](float x, const SplineSegment &q) { return x < q.knot; });
+                        if(seg != segs) --seg;
+                        const float hi = seg + 1 < end ? seg[1].knot : sp.knot_hi;
+                        const double w = (float)(hi - seg->knot);
+                        const double a = (mu - seg->knot) / w, b = sigma / w;   // segment variable t = a + b z
+                        P.row(j).setZero();
+                        for(int pw = 0; pw < 4; ++pw)
+                            for(int q = 0; q <= pw; ++q)
+                                P(j, q) += seg->coeffs[pw] * binom[pw][q] * std::pow(a, pw - q) * std::pow(b, q);
+                    }
+                    if(sb == (size_t)other_index) {
+                        G = P;
+                    } else {
+                        G = H.transpose() * P;
+                        for(size_t k = 0; k < nb; ++k) {
+                            if(unweighted(k) > 0) G.row(k) /= Hsum(k);
+                            else G.row(k) << 1.0, 0.0, 0.0, 0.0;
+                        }
+                    }
+                    Eigen::MatrixXd E = -(f0d.cwiseInverse().asDiagonal() * G);   // u_k = 1 - g_k / g_k(x0)
+                    E.col(0).array() += 1.0;
+                    const std::array<double, 7> J = GaussianMoments((xl - mu) / sigma, (xh - mu) / sigma);
+                    Eigen::Matrix4d M;
+                    for(int q = 0; q < 4; ++q) for(int r = 0; r < 4; ++r) M(q, r) = J[q + r];
+                    F.noalias() += (E * M) * E.transpose();
+                }
+            }
+            Eigen::MatrixXf frac_covar_matrix = F.cast<float>();
+            // Bins with no CV prediction are zero, like the throw estimate's 0/0 there.
+            for(size_t k = 0; k < nb; ++k) {
+                if(cv(k, 0) != 0.0f) continue;
+                frac_covar_matrix.row(k).setZero();
+                frac_covar_matrix.col(k).setZero();
+            }
+            PROsyst::toFiniteMatrix(frac_covar_matrix);
+            return frac_covar_matrix;
+        }
+
         // Distinct seed per throw: FillSplineRandomThrow now uses its seed
         // argument on every call (it used to hold a function-local static RNG
         // that ignored the seed after the first-ever call).
         // Throw i always uses seed+i and lands in specs[i], and the sum below runs
         // in index order, so the result does not depend on the thread count.
         std::vector<Eigen::VectorXf> specs(spline2cov_throws);
-        std::atomic<size_t> next{0};
-        auto worker = [&]() {
-            for(size_t i = next++; i < specs.size(); i = next++)
-                specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
-        };
-        const size_t nthreads = std::max<size_t>(1, std::min(spline2cov_nthreads, specs.size()));
-        std::vector<std::thread> pool;
-        for(size_t t = 1; t < nthreads; ++t) pool.emplace_back(worker);
-        worker();
-        for(auto &th: pool) th.join();
+        parallel_for(specs.size(), spline2cov_nthreads, [&](size_t i) {
+            specs[i] = FillSplineRandomThrow(config, prop, *this, model, params, spline, seed + (uint32_t)i, other_index).Spec();
+        });
 
         int nbins = config.m_num_variable_bins_total[other_index];
-        Eigen::MatrixXf mat(nbins, nbins);
-        mat.setZero();
-        for(const auto &spec: specs){
-            for(int i = 0; i < cv.size(); ++i){
-                for(int j = 0; j < cv.size(); ++j){
-                    mat(i, j) += (cv(i)-spec(i))*(cv(j)-spec(j));
-                }
-            }
-        }
+        // Covariance over throws as one rank-k update D D^T.
+        Eigen::MatrixXf D(nbins, (Eigen::Index)specs.size());
+        for(size_t k = 0; k < specs.size(); ++k) D.col(k) = cv.col(0) - specs[k];
+        Eigen::MatrixXf mat = Eigen::MatrixXf::Zero(nbins, nbins);
+        mat.selfadjointView<Eigen::Lower>().rankUpdate(D);
+        { Eigen::MatrixXf sym = mat.selfadjointView<Eigen::Lower>(); mat.swap(sym); }
         mat /= specs.size();
 
-        Eigen::MatrixXf cv_inverse = cv.asDiagonal().inverse();
-        Eigen::MatrixXf frac_covar_matrix = cv_inverse * mat * cv_inverse;
+        // Diagonal scaling (O(N^2)); non-finite entries from cv == 0 are zeroed below.
+        const Eigen::VectorXf cv_inv = cv.col(0).cwiseInverse();
+        Eigen::MatrixXf frac_covar_matrix = cv_inv.asDiagonal() * mat * cv_inv.asDiagonal();
         PROsyst::toFiniteMatrix(frac_covar_matrix);
 
         return frac_covar_matrix;
@@ -757,27 +922,25 @@ namespace PROfit {
     }
 
     void PROsyst::CreateMatrix(const SystStruct& syst){
-
-        std::string sysname = syst.GetSysName();
-
         //generate matrix only if it's not already in the map
-        if(syst_map.find(sysname) == syst_map.end()){
-            std::pair<Eigen::MatrixXf, Eigen::MatrixXf> matrices = PROsyst::GenerateCovarMatrices(syst);
+        if(syst_map.find(syst.GetSysName()) == syst_map.end())
+            RegisterMatrix(syst, PROsyst::GenerateCovarMatrices(syst));
+    }
 
-            // If inflate is set, scale the covariance by inflate^2 (uncertainty scales by inflate).
-            // The correlation matrix is unchanged by a constant scaling.
-            if(syst.inflate != 1.0f) {
-                log<LOG_INFO>(L"%1% || Applying inflate=%2% (covariance x %3%) for systematic %4%") % __func__ % syst.inflate % (syst.inflate * syst.inflate) % sysname.c_str();
-                matrices.first *= syst.inflate * syst.inflate;
-            }
+    void PROsyst::RegisterMatrix(const SystStruct& syst, std::pair<Eigen::MatrixXf, Eigen::MatrixXf> &&matrices){
+        std::string sysname = syst.GetSysName();
+        if(syst_map.find(sysname) != syst_map.end()) return;
 
-            syst_map[sysname] = {covmat.size(), SystType::Covariance};
-            covmat.push_back(matrices.first);
-            corrmat.push_back(matrices.second);
-
+        // If inflate is set, scale the covariance by inflate^2 (uncertainty scales by inflate).
+        // The correlation matrix is unchanged by a constant scaling.
+        if(syst.inflate != 1.0f) {
+            log<LOG_INFO>(L"%1% || Applying inflate=%2% (covariance x %3%) for systematic %4%") % __func__ % syst.inflate % (syst.inflate * syst.inflate) % sysname.c_str();
+            matrices.first *= syst.inflate * syst.inflate;
         }
 
-        return;
+        syst_map[sysname] = {covmat.size(), SystType::Covariance};
+        covmat.push_back(std::move(matrices.first));
+        corrmat.push_back(std::move(matrices.second));
     }
 
     void PROsyst::CreateFlatMatrix(const PROconfig &config, const SystStruct& syst){
@@ -914,8 +1077,11 @@ namespace PROfit {
     }
 
     void PROsyst::LoadExternalCovarianceMatrix(const PROconfig &config, const SystStruct& syst){
+        RegisterExternalCovariance(syst, LoadExternalFractionalCovariance(config, syst));
+    }
+
+    void PROsyst::RegisterExternalCovariance(const SystStruct& syst, Eigen::MatrixXf fracM){
         std::string matrixname = syst.GetSysName();
-        Eigen::MatrixXf fracM = LoadExternalFractionalCovariance(config, syst);
 
         // If inflate is set, scale the covariance by inflate^2 (uncertainty scales by inflate).
         if(syst.inflate != 1.0f) {
@@ -951,9 +1117,9 @@ namespace PROfit {
         int nbins = cv_spec.GetNbins();
 
         //build full covariance matrix 
-        Eigen::MatrixXf full_covar_matrix = Eigen::MatrixXf::Zero(nbins, nbins);
+        // Covariance over universes as one rank-k update D D^T / n_universe.
+        Eigen::MatrixXf D(nbins, n_universe);
         for(int i = 0; i != n_universe; ++i){
-
             if(shape_blocks){
                 // Shape-only: rescale the universe to the CV integral PER CHANNEL, the same
                 // domain the metric's per-channel prediction/data rescale uses. (A global
@@ -961,12 +1127,16 @@ namespace PROfit {
                 // that the residual can never see.)
                 Eigen::VectorXf var = sys_obj.Variation(i).Spec();
                 ShapeRescaleUniverse(*shape_blocks, cv_spec.Spec(), var);
-                const Eigen::VectorXf spec_diff = cv_spec.Spec() - var;
-                full_covar_matrix += (spec_diff * spec_diff.transpose()) / static_cast<float>(n_universe);
+                D.col(i) = cv_spec.Spec() - var;
             }else{
-                PROspec spec_diff = cv_spec - sys_obj.Variation(i);
-                full_covar_matrix += (spec_diff.Spec() * spec_diff.Spec().transpose() ) / static_cast<float>(n_universe);
+                D.col(i) = (cv_spec - sys_obj.Variation(i)).Spec();
             }
+        }
+        Eigen::MatrixXf full_covar_matrix = Eigen::MatrixXf::Zero(nbins, nbins);
+        if(n_universe > 0) {
+            full_covar_matrix.selfadjointView<Eigen::Lower>().rankUpdate(D, 1.0f / static_cast<float>(n_universe));
+            Eigen::MatrixXf sym = full_covar_matrix.selfadjointView<Eigen::Lower>();
+            full_covar_matrix.swap(sym);
         }
 
         return full_covar_matrix;
@@ -981,12 +1151,13 @@ namespace PROfit {
         //first, get the matrix with diagonal being reciprocal of CV spectrum prdiction
         const PROspec& cv_spec = sys_obj.CV();
         int nbins = cv_spec.GetNbins();
-        Eigen::MatrixXf cv_spec_matrix =  Eigen::MatrixXf::Identity(nbins, nbins);
+        // Diagonal scaling (O(N^2)) instead of dense diagonal products.
+        Eigen::VectorXf cv_inv(nbins);
         for(int i =0; i != nbins; ++i)
-            cv_spec_matrix(i, i) = 1.0/cv_spec.GetBinContent(i);
+            cv_inv(i) = 1.0/cv_spec.GetBinContent(i);
 
         //second, get fractioal covar
-        Eigen::MatrixXf frac_covar_matrix = cv_spec_matrix * full_covar_matrix * cv_spec_matrix;
+        Eigen::MatrixXf frac_covar_matrix = cv_inv.asDiagonal() * full_covar_matrix * cv_inv.asDiagonal();
 
         //zero out nans 
         PROsyst::toFiniteMatrix(frac_covar_matrix);
@@ -1006,18 +1177,19 @@ namespace PROfit {
         int nbins = frac_matrix.rows();
         Eigen::MatrixXf corr_covar_matrix = frac_matrix;
 
-        Eigen::MatrixXf error_reciprocal_matrix = Eigen::MatrixXf::Zero(nbins, nbins);
+        // Diagonal scaling (O(N^2)) instead of dense diagonal products.
+        Eigen::VectorXf error_reciprocal(nbins);
         for(int i = 0; i != nbins; ++i){
             if(frac_matrix(i,i) != 0){
                 float temp = sqrt(frac_matrix(i,i));
-                error_reciprocal_matrix(i,i) = 1.0/temp;
+                error_reciprocal(i) = 1.0/temp;
             }
             else
-                error_reciprocal_matrix(i,i) = 1.0;
+                error_reciprocal(i) = 1.0;
         }
 
 
-        corr_covar_matrix = error_reciprocal_matrix * corr_covar_matrix * error_reciprocal_matrix;
+        corr_covar_matrix = error_reciprocal.asDiagonal() * corr_covar_matrix * error_reciprocal.asDiagonal();
 
         //zero out nans 
         PROsyst::toFiniteMatrix(corr_covar_matrix);
@@ -1071,6 +1243,14 @@ namespace PROfit {
 
 
         //second, check if it's positive semi-definite;
+        // Fast path: Cholesky of M + tol*I succeeds iff all eigenvalues > -tol; eigensolver only on failure.
+        {
+            Eigen::MatrixXd shifted = in_matrix.cast<double>();
+            shifted.diagonal().array() += (double)tolerance;
+            Eigen::LLT<Eigen::MatrixXd> llt(shifted);
+            if(llt.info() == Eigen::Success) return true;
+            log<LOG_DEBUG>(L"%1% || Cholesky fast path failed; checking eigenvalues explicitly") % __func__;
+        }
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> eigensolver(in_matrix);
         if(eigensolver.info() != Eigen::Success){
             log<LOG_ERROR>(L"%1% || Failing to get eigenvalues..") % __func__ ;
@@ -1510,15 +1690,26 @@ namespace PROfit {
 
 
             if (ratios.size() < 3) {
+                // Two knots, one of them 0: {0, k} or {-k, 0}. The line through them covers the side
+                // with a universe; the other side of 0 is its mirror image, or its straight
+                // continuation if unmirrored.
                 const float y1 = ratios[0].GetBinContent(i);
                 const float y2 = ratios[1].GetBinContent(i);
-                const float slope = (y2 - y1) / (knobvals[1] - knobvals[0]);
                 // GetSplineShift evaluates each segment on x in [0,1], so the linear term is the rise across it
-                if(unmirrored)
-                    bin_segments.push_back(SplineSegment{(float)(-knobvals[1]), {slope * (-knobvals[1]) + y1, y2 - y1, 0, 0}});
-                else
-                    bin_segments.push_back(SplineSegment{(float)(-knobvals[1]), {y2, y1 - y2, 0, 0}});
-                bin_segments.push_back(SplineSegment{(float)knobvals[0], {slope * (float)knobvals[0] + y1, y2 - y1, 0, 0}});
+                if (knobvals[1] > 0) {
+                    const float slope = (y2 - y1) / (knobvals[1] - knobvals[0]);
+                    if(unmirrored)
+                        bin_segments.push_back(SplineSegment{(float)(-knobvals[1]), {slope * (-knobvals[1]) + y1, y2 - y1, 0, 0}});
+                    else
+                        bin_segments.push_back(SplineSegment{(float)(-knobvals[1]), {y2, y1 - y2, 0, 0}});
+                    bin_segments.push_back(SplineSegment{(float)knobvals[0], {slope * (float)knobvals[0] + y1, y2 - y1, 0, 0}});
+                } else {
+                    bin_segments.push_back(SplineSegment{(float)knobvals[0], {y1, y2 - y1, 0, 0}});
+                    if(unmirrored)
+                        bin_segments.push_back(SplineSegment{0.0f, {y2, y2 - y1, 0, 0}});
+                    else
+                        bin_segments.push_back(SplineSegment{0.0f, {y2, y1 - y2, 0, 0}});
+                }
             } else {
                 {
                     const float y1 = ratios[0].GetBinContent(i);
@@ -1566,7 +1757,8 @@ namespace PROfit {
         // If all bins have the same number of segments, keep as knobvals.size(); else update
         spline.segments_per_bin = all_segments.size() / nbins;
         spline.segments = std::move(all_segments);
-        spline.knot_hi = knobvals.back();
+        // {-k, 0}: the last segment is the mirror side [0, k].
+        spline.knot_hi = (knobvals.size() == 2 && knobvals[1] <= 0) ? -knobvals[0] : knobvals.back();
 
         syst_map[syst.systname] = {splines.size(), SystType::Spline};
         splines.push_back(std::move(spline));
@@ -1678,6 +1870,11 @@ namespace PROfit {
     }
 
     void PROsyst::FillSplinesFromCovarianceMatrix(Eigen::MatrixXf frac_cov, const SystStruct& syst, SplinePriorType prior, float knob_lo, float knob_hi) {
+        RegisterCovarianceSplines(DecomposeCovarianceForSplines(std::move(frac_cov), syst), syst, prior, knob_lo, knob_hi);
+    }
+
+    PROsyst::CovSplineDecomp PROsyst::DecomposeCovarianceForSplines(Eigen::MatrixXf frac_cov, const SystStruct& syst) const {
+        CovSplineDecomp d;
         if(shape_only && shape_blocks.count(syst.binning < 0 ? other_index : syst.binning)) {
             // Shape-only: decompose the per-channel SHAPE part of the matrix, taken about the
             // physical null prediction, so no knob is spent on (or left free along) a pure
@@ -1686,7 +1883,7 @@ namespace PROfit {
             frac_cov = R * frac_cov * R.transpose();
         }
         // Capture pre-symmetrization asymmetry as a sanity number for debug plots.
-        const float pre_symm_asymmetry = (frac_cov - frac_cov.transpose()).norm();
+        d.pre_symm_asymmetry = (frac_cov - frac_cov.transpose()).norm();
         // symmetrize to kill any float-asymmetry before eigendecomposition
         frac_cov = 0.5f * (frac_cov + frac_cov.transpose());
 
@@ -1695,30 +1892,57 @@ namespace PROfit {
             log<LOG_ERROR>(L"%1% || Eigendecomposition failed for covariance_to_spline systematic %2%") % __func__ % syst.systname.c_str();
             exit(EXIT_FAILURE);
         }
-
-        const Eigen::VectorXf eigvals = solver.eigenvalues();  // ascending
-        const Eigen::MatrixXf eigvecs = solver.eigenvectors(); // columns
+        d.eigvals = solver.eigenvalues();  // ascending
+        d.eigvecs = solver.eigenvectors(); // columns
 
         const int nbins = frac_cov.rows();
         // List strictly-positive eigenvalues in descending order (near-zero/negative are noise).
         const float tol = 10.0f * Eigen::NumTraits<float>::dummy_precision();
         std::vector<int> positive_indices; // indices into eigvals, descending eigenvalue
         for(int i = nbins - 1; i >= 0; --i) {
-            if(eigvals(i) > tol) positive_indices.push_back(i);
+            if(d.eigvals(i) > tol) positive_indices.push_back(i);
         }
         const int n_pos = static_cast<int>(positive_indices.size());
         int K = n_pos;
         if(syst.num_decomp_knobs > 0 && syst.num_decomp_knobs < n_pos) {
             K = syst.num_decomp_knobs;
         }
+        // Top-K positive eigenpairs become spline knobs; the remaining positive eigenpairs
+        // (if any, and if requested) are folded into a residual covariance.
+        d.kept.assign(positive_indices.begin(), positive_indices.begin() + K);
+        d.residual.assign(positive_indices.begin() + K, positive_indices.end());
+
+        // Fold the un-kept (smaller) positive eigenpairs into a residual covariance so the
+        // rank-K truncation does not throw away variance. Default on; disabled with
+        // include_resid_cov="false" in the XML.
+        // Only register the matrix when this PROsyst's binning matches the systematic's binning,
+        // mirroring external_covariance: covmat entries are summed assuming a common dimension,
+        // while the splines stay binning-tagged and are safe across variables.
+        if(syst.include_resid_cov && !d.residual.empty() && other_index == syst.binning) {
+            d.residual_cov = Eigen::MatrixXf::Zero(nbins, nbins);
+            for(int idx : d.residual) {
+                const float lambda = d.eigvals(idx);
+                const Eigen::VectorXf vec = d.eigvecs.col(idx);
+                d.residual_cov.noalias() += lambda * (vec * vec.transpose());
+            }
+            toFiniteMatrix(d.residual_cov);
+            d.residual_corr = GenerateCorrMatrix(d.residual_cov);
+        }
+        d.frac_cov = std::move(frac_cov);
+        return d;
+    }
+
+    void PROsyst::RegisterCovarianceSplines(CovSplineDecomp &&d, const SystStruct& syst, SplinePriorType prior, float knob_lo, float knob_hi) {
+        const int nbins = d.frac_cov.rows();
+        const int K = static_cast<int>(d.kept.size());
         if(K == 0) {
             log<LOG_WARNING>(L"%1% || covariance_to_spline systematic %2% has no positive-eigenvalue modes; skipping.") % __func__ % syst.systname.c_str();
             return;
         }
-        // Top-K positive eigenpairs become spline knobs; the remaining positive eigenpairs
-        // (if any, and if requested) are folded into a residual covariance.
-        std::vector<int> kept_indices(positive_indices.begin(), positive_indices.begin() + K);
-        std::vector<int> residual_indices(positive_indices.begin() + K, positive_indices.end());
+        const Eigen::VectorXf &eigvals = d.eigvals;
+        const Eigen::MatrixXf &eigvecs = d.eigvecs;
+        const std::vector<int> &kept_indices = d.kept;
+        const std::vector<int> &residual_indices = d.residual;
 
         log<LOG_INFO>(L"%1% || covariance_to_spline %2%: keeping %3% of %4% eigenvectors as splines (largest eigenvalue=%5%, smallest kept=%6%), %7% residual mode(s)")
             % __func__ % syst.systname.c_str() % K % nbins % eigvals(nbins - 1) % eigvals(kept_indices[K - 1]) % static_cast<int>(residual_indices.size());
@@ -1749,10 +1973,7 @@ namespace PROfit {
         auto seg_width = [&](int s) { return (s + 1 < n_segments ? knots[s + 1] : hi) - knots[s]; };
 
         Cov2SplineDebugInfo dbg;
-        dbg.original_frac_cov = frac_cov;
-        dbg.pre_symm_asymmetry = pre_symm_asymmetry;
-        dbg.eigenvalues = eigvals;
-        dbg.eigenvectors = eigvecs;
+        dbg.pre_symm_asymmetry = d.pre_symm_asymmetry;
         dbg.kept_indices = kept_indices;
         dbg.binning = syst.binning;
         dbg.knob_names.reserve(K);
@@ -1800,31 +2021,17 @@ namespace PROfit {
             ++n_splines;
         }
 
-        // Fold the un-kept (smaller) positive eigenpairs into a residual covariance so the
-        // rank-K truncation does not throw away variance. Default on; disabled with
-        // include_resid_cov="false" in the XML.
-        // Only register the matrix when this PROsyst's binning matches the systematic's binning,
-        // mirroring external_covariance: covmat entries are summed assuming a common dimension,
-        // while the splines above stay binning-tagged and are safe across variables.
         if(syst.include_resid_cov && !residual_indices.empty() && other_index == syst.binning) {
-            Eigen::MatrixXf residual_cov = Eigen::MatrixXf::Zero(nbins, nbins);
-            for(int idx : residual_indices) {
-                const float lambda = eigvals(idx);
-                const Eigen::VectorXf vec = eigvecs.col(idx);
-                residual_cov.noalias() += lambda * (vec * vec.transpose());
-            }
-            toFiniteMatrix(residual_cov);
-
             const std::string resid_name = syst.systname + "_resid_cov";
             syst_map[resid_name] = {covmat.size(), SystType::Covariance};
-            covmat.push_back(residual_cov);
-            corrmat.push_back(GenerateCorrMatrix(residual_cov));
+            covmat.push_back(d.residual_cov);
+            corrmat.push_back(std::move(d.residual_corr));
             covar_names.push_back(resid_name);
             ++n_covar;
 
             dbg.has_residual = true;
             dbg.n_residual_modes = static_cast<int>(residual_indices.size());
-            dbg.residual_cov = std::move(residual_cov);
+            dbg.residual_cov = std::move(d.residual_cov);
             dbg.residual_cov_name = resid_name;
 
             log<LOG_INFO>(L"%1% || covariance_to_spline %2%: retained %3% residual mode(s) as covariance %4%")
@@ -1839,6 +2046,9 @@ namespace PROfit {
             }
         }
 
+        dbg.original_frac_cov = std::move(d.frac_cov);
+        dbg.eigenvalues = std::move(d.eigvals);
+        dbg.eigenvectors = std::move(d.eigvecs);
         cov2spline_debug_info[syst.systname] = std::move(dbg);
     }
 

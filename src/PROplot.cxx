@@ -1,4 +1,5 @@
 #include "PROplot.h"
+#include "PROparallel.h"
 #include "PROwatermark.h"
 #include "TStyle.h"
 #include "TArrow.h"
@@ -170,8 +171,8 @@ namespace PROfit{
     std::map<std::string, std::unique_ptr<TH2D>> covarianceTH2D(const PROsyst &syst, const PROconfig &config, const PROspec &cv) {
         std::map<std::string, std::unique_ptr<TH2D>> ret;
         Eigen::MatrixXf fractional_cov = syst.fractional_covariance;
-        Eigen::MatrixXf diag = cv.Spec().array().matrix().asDiagonal(); 
-        Eigen::MatrixXf full_covariance =  diag*fractional_cov*diag;
+        const Eigen::VectorXf cv_vec = cv.Spec();
+        Eigen::MatrixXf full_covariance =  cv_vec.asDiagonal()*fractional_cov*cv_vec.asDiagonal();
         Eigen::MatrixXf collapsed_full_covariance =  CollapseMatrix(config,full_covariance);  
         Eigen::VectorXf collapsed_cv = CollapseMatrix(config, cv.Spec());
         Eigen::MatrixXf collapsed_cv_inv_diag = collapsed_cv.asDiagonal().inverse();
@@ -240,7 +241,7 @@ namespace PROfit{
 
             // Collapsed version, built the same way as collapsed_total_frac_cov:
             // fractional -> absolute (full binning) -> collapse -> fractional (collapsed binning)
-            Eigen::MatrixXf syst_full_covariance = diag * covar * diag;
+            Eigen::MatrixXf syst_full_covariance = cv_vec.asDiagonal() * covar * cv_vec.asDiagonal();
             Eigen::MatrixXf syst_collapsed_full = CollapseMatrix(config, syst_full_covariance);
             Eigen::MatrixXf syst_collapsed_frac = collapsed_cv_inv_diag * syst_collapsed_full * collapsed_cv_inv_diag;
 
@@ -336,17 +337,25 @@ namespace PROfit{
         const size_t qhi = std::min((size_t)(0.84*nerrorsample), nerrorsample - 1);
         const size_t qlo = (size_t)(0.16*nerrorsample);
 
-        std::vector<Eigen::VectorXf> specs;
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
+        // Seeds drawn up front in the original order; throws run in parallel; sums in index order.
+        std::vector<uint32_t> seeds(nerrorsample);
+        for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
+        std::vector<Eigen::VectorXf> specs(nerrorsample);
+        // Warm the decomposition cache here: otherwise every worker misses it at once and
+        // each recomputes the same eigendecomposition.
+        if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovariance(config, cv_spec.Spec());
+        //Fills already collapsed
+        parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
+            Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, seeds[i], other_index).Spec();
+            if(shape_norm) var = var.cwiseProduct(ChannelNormFactors(config, var, cv, other_index));
+            specs[i] = var;
+        });
 
 	Eigen::MatrixXf cov = Eigen::MatrixXf::Zero(cv.size(), cv.size());
         Eigen::VectorXf delta;
-        //Fills already collapsed
         for(size_t i = 0; i < nerrorsample; ++i){
-            Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, dseed(PROseed::global_rng), other_index).Spec();
-            if(shape_norm) var = var.cwiseProduct(ChannelNormFactors(config, var, cv, other_index));
-            specs.push_back(var);
-            delta = cv - var;
+            delta = cv - specs[i];
             cov += delta  * delta.transpose();
         }
 
@@ -452,20 +461,28 @@ namespace PROfit{
         const size_t qhi = std::min((size_t)(0.84*nerrorsample), nerrorsample - 1);
         const size_t qlo = (size_t)(0.16*nerrorsample);
 
-        std::vector<Eigen::VectorXf> sig_specs;
         std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
+        // Seeds drawn up front in the original order; throws run in parallel; sums in index order.
+        std::vector<uint32_t> seeds(nerrorsample);
+        for(auto &sd : seeds) sd = dseed(PROseed::global_rng);
+        std::vector<Eigen::VectorXf> sig_specs(nerrorsample), bkg_specs(nerrorsample);
+        // Warm the (uncollapsed) decomposition cache once, as in getErrorBand.
+        if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovarianceFull(config, cv_spec.Spec());
+        parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
+            // Subtract each throw's OWN background so bkg systematic variations
+            // cancel: the band that comes out is signal-only.
+            auto [sig, bkg] = FillSystRandomThrowSplit(config, prop, syst, model, cv_spec, cvparams, seeds[i], other_index, mask);
+            sig_specs[i] = sig.Spec();
+            bkg_specs[i] = bkg.Spec();
+        });
 
         Eigen::MatrixXf cov = Eigen::MatrixXf::Zero(cv_sig.size(), cv_sig.size());
         Eigen::VectorXf bkg_var = Eigen::VectorXf::Zero(cv_sig.size());
         Eigen::VectorXf delta;
         for(size_t i = 0; i < nerrorsample; ++i){
-            // Subtract each throw's OWN background so bkg systematic variations
-            // cancel: the band that comes out is signal-only.
-            auto [sig, bkg] = FillSystRandomThrowSplit(config, prop, syst, model, cv_spec, cvparams, dseed(PROseed::global_rng), other_index, mask);
-            sig_specs.push_back(sig.Spec());
-            delta = cv_sig - sig.Spec();
+            delta = cv_sig - sig_specs[i];
             cov += delta * delta.transpose();
-            bkg_var += (bkg.Spec() - bkg_cv_coll).array().square().matrix();
+            bkg_var += (bkg_specs[i] - bkg_cv_coll).array().square().matrix();
         }
 
         PROsubtractedErrorBand result(cv_sig.size());
@@ -2445,6 +2462,18 @@ namespace PROfit{
 
         Eigen::MatrixXf diag = spec.Spec().array().matrix().asDiagonal();
         Eigen::MatrixXf collapsed_diag = CollapseMatrix(config, diag);
+        // Collapsed covariance per systematic, computed once (diagonal scaling, not dense products)
+        const Eigen::VectorXf diag_vec = spec.Spec();
+        std::map<std::string, Eigen::MatrixXf> collapsed_full_cache;
+        auto collapsed_full_of = [&](const std::string &systname) -> const Eigen::MatrixXf & {
+            auto it = collapsed_full_cache.find(systname);
+            if(it == collapsed_full_cache.end()) {
+                const Eigen::MatrixXf full = diag_vec.asDiagonal() * allsplinesyst.GrabMatrix(systname) * diag_vec.asDiagonal();
+                it = collapsed_full_cache.emplace(systname, CollapseMatrix(config, full)).first;
+            }
+            return it->second;
+        };
+
         const Eigen::VectorXf collapsed_cv = collapsed_diag.diagonal();
 
         // Diagnostic: Check collapsed_diag for issues
@@ -2563,10 +2592,7 @@ namespace PROfit{
 
                         for(const auto & systname:vec){
 
-                            Eigen::MatrixXf frac_covariance = allsplinesyst.GrabMatrix(systname);
-                            Eigen::MatrixXf full_covariance = diag*(frac_covariance)*diag;
-                            Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance);
-                            Eigen::MatrixXf collapsed_frac_covariance = collapsed_diag_inv*collapsed_full_covariance*collapsed_diag_inv;
+                            const Eigen::MatrixXf &collapsed_full_covariance = collapsed_full_of(systname);
 
                             Eigen::MatrixXf channel_cov = collapsed_full_covariance(channel_bins, channel_bins);
 
@@ -2886,6 +2912,18 @@ namespace PROfit{
 
         Eigen::MatrixXf diag = spec.Spec().array().matrix().asDiagonal();
         Eigen::MatrixXf collapsed_diag = CollapseMatrix(config, diag);
+        // Collapsed covariance per systematic, computed once (diagonal scaling, not dense products)
+        const Eigen::VectorXf diag_vec = spec.Spec();
+        std::map<std::string, Eigen::MatrixXf> collapsed_full_cache;
+        auto collapsed_full_of = [&](const std::string &systname) -> const Eigen::MatrixXf & {
+            auto it = collapsed_full_cache.find(systname);
+            if(it == collapsed_full_cache.end()) {
+                const Eigen::MatrixXf full = diag_vec.asDiagonal() * allsplinesyst.GrabMatrix(systname) * diag_vec.asDiagonal();
+                it = collapsed_full_cache.emplace(systname, CollapseMatrix(config, full)).first;
+            }
+            return it->second;
+        };
+
 
         // Diagnostic: Check collapsed_diag for issues
         bool has_nan = collapsed_diag.array().isNaN().any();
@@ -2926,6 +2964,7 @@ namespace PROfit{
 
         // Compute inverse and check it
         Eigen::MatrixXf collapsed_diag_inv = collapsed_diag.inverse();
+        std::map<std::string, Eigen::MatrixXf> collapsed_frac_cache;
         bool inv_has_nan = collapsed_diag_inv.array().isNaN().any();
         bool inv_has_inf = collapsed_diag_inv.array().isInf().any();
         float inv_max = collapsed_diag_inv.array().abs().maxCoeff();
@@ -3004,10 +3043,11 @@ namespace PROfit{
 
                             for(const auto & systname:vec){
 
-                                Eigen::MatrixXf frac_covariance = allsplinesyst.GrabMatrix(systname);
-                                Eigen::MatrixXf full_covariance = diag*(frac_covariance)*diag;
-                                Eigen::MatrixXf collapsed_full_covariance = CollapseMatrix(config, full_covariance);
-                                Eigen::MatrixXf collapsed_frac_covariance = collapsed_diag_inv*collapsed_full_covariance*collapsed_diag_inv;
+                                const Eigen::MatrixXf &collapsed_full_covariance = collapsed_full_of(systname);
+                                auto cf_it = collapsed_frac_cache.find(systname);
+                                if(cf_it == collapsed_frac_cache.end())
+                                    cf_it = collapsed_frac_cache.emplace(systname, Eigen::MatrixXf(collapsed_diag_inv*collapsed_full_covariance*collapsed_diag_inv)).first;
+                                const Eigen::MatrixXf &collapsed_frac_covariance = cf_it->second;
 
                                 Eigen::MatrixXf channel_cov = collapsed_full_covariance(channel_bins, channel_bins);
                                 Eigen::MatrixXf rat_frac_cov = collapsed_frac_covariance(channel_bins, channel_bins) + collapsed_frac_covariance(channel_bins2, channel_bins2) - collapsed_frac_covariance(channel_bins, channel_bins2) - collapsed_frac_covariance(channel_bins2, channel_bins);
@@ -3204,6 +3244,18 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
         c.Divide(gridCols, gridRows);
 
         Eigen::MatrixXf diag = spec.Spec().array().matrix().asDiagonal();
+
+        // Collapsed covariance per systematic, computed once (diagonal scaling, not dense products)
+        const Eigen::VectorXf diag_vec = spec.Spec();
+        std::map<std::string, Eigen::MatrixXf> collapsed_full_cache;
+        auto collapsed_full_of = [&](const std::string &systname) -> const Eigen::MatrixXf & {
+            auto it = collapsed_full_cache.find(systname);
+            if(it == collapsed_full_cache.end()) {
+                const Eigen::MatrixXf full = diag_vec.asDiagonal() * allsplinesyst.GrabMatrix(systname) * diag_vec.asDiagonal();
+                it = collapsed_full_cache.emplace(systname, CollapseMatrix(config, full)).first;
+            }
+            return it->second;
+        };
         // NOTE: the matrix CollapseMatrix overload takes no variable index, so this
         // (like plotPriorFractionalSystematicRatios) is only valid for i_prime.
         Eigen::VectorXf collapsed_cv = CollapseMatrix(config, spec.Spec(), other_index);
@@ -3282,9 +3334,7 @@ int plotPriorFractionalSystematicChannelRatios(const PROconfig &config, const PR
 
                 for(const auto &systname : vec){
 
-                    Eigen::MatrixXf frac_covariance = allsplinesyst.GrabMatrix(systname);
-                    Eigen::MatrixXf full_covariance = diag*frac_covariance*diag;
-                    Eigen::MatrixXf C = CollapseMatrix(config, full_covariance);
+                    const Eigen::MatrixXf &C = collapsed_full_of(systname);
 
                     int color_idx = i % colors.size();
                     int style_idx = (i / 4) % line_styles.size();
