@@ -350,6 +350,18 @@ namespace PROfit{
     }
 
     /**
+     * @brief Off-diagonal-aware statistical covariance among @p contrib, or empty when diagonal.
+     * @details Shared events of overlapping analyses (PROoverlap.h) correlate the
+     * statistical term; the metric returns the exact matrix its chi2 uses (PROmetric::
+     * GetStatCovariance). Empty for no overlap, a non-fit variable or no metric: callers keep
+     * their diagonal algebra (conditioningStatVariances).
+     */
+    inline Eigen::MatrixXd conditioningStatCovariance(const PROmetric *metric, const PROconfig &config, int var_index, const Eigen::VectorXf &data_spec, const std::vector<int> &contrib) {
+        if(!metric || var_index != (int)config.i_prime) return Eigen::MatrixXd();
+        return metric->GetStatCovariance(data_spec, contrib).cast<double>();
+    }
+
+    /**
      * @brief Compute an error band analytically from the covariance-type systematics alone.
      * @details Exact replacement for getMCMCErrorBand when the sampling chain has zero
      * free parameters (no spline nuisances, or all of them --fix'd): the chain never
@@ -370,7 +382,8 @@ namespace PROfit{
      *  covariance systematics (Putnam SBN note Eqs. 7-8): center shifted by
      *  Sigma(C+Sigma)^-1 u and covariance Sigma - Sigma(C+Sigma)^-1 Sigma, restricted to
      *  active bins with C > 0, C = diag of @p metric's statistical variance
-     *  (conditioningStatVariances; the data when @p metric is null). Exact when the
+     *  (conditioningStatVariances; the data when @p metric is null), or the fit's full
+     *  matrix for overlapping analyses (conditioningStatCovariance). Exact when the
      *  covariance systs are the only free parameters (the post-fit degenerate-chain path).
      *  @p shape_fit (shape-only fit, with data) conditions as the metric does: prediction
      *  rescaled onto the data, Sigma at that scale and projected onto shape before the
@@ -475,7 +488,8 @@ namespace PROfit{
      * sigma, with the posterior/pre-fit width ratio as the bar height (bins outside the fit
      * — inactive, or zero statistical variance, i.e. zero data under neyman — are hatched).
      * Everything is evaluated analytically at the best fit, matching PROerrorbar::center_shift.
-     * C is the fit metric's statistical variance (conditioningStatVariances).
+     * C is the fit metric's statistical variance (conditioningStatVariances), or its full
+     * matrix for overlapping analyses (conditioningStatCovariance).
      * @param config     Analysis configuration.
      * @param prop       MC event store.
      * @param syst       Systematics (must have covariance-type entries to plot anything).
@@ -518,7 +532,8 @@ namespace PROfit{
      *                   for Systematic Uncertainties Embedded in a Covariance Matrix", SBN
      *                   note, May 2026), shrinking the post-fit band. C is @p metric's own
      *                   statistical variance (conditioningStatVariances), re-evaluated per
-     *                   sample so pearson's prediction-valued C follows the chain. center_shift
+     *                   sample so pearson's prediction-valued C follows the chain (the full
+     *                   matrix for overlapping analyses, conditioningStatCovariance). center_shift
      *                   then reports the ANALYTIC pull Sigma(C+Sigma)^-1 (d - cv) at the best
      *                   fit (exactly 0 for Asimov), not the sample median. Pass this only
      *                   for post-fit bands; the pre-fit/prior band must stay unconstrained.
@@ -664,12 +679,19 @@ namespace PROfit{
                             c_inv(i) = stat(contrib[i]) > 0 ? 1.0 / stat(contrib[i]) : 0.0;
                         return c_inv;
                     };
+                    // Statistical overlap: a full C (neyman only, so constant along the chain).
+                    const Eigen::MatrixXd C_full = conditioningStatCovariance(&metric, config, var_index, data_spec, contrib);
+                    const Eigen::MatrixXd W = C_full.size() ? OverlapStatPrecision(C_full) : Eigen::MatrixXd();
                     Eigen::VectorXd C_inv_red;
+                    auto apply_cinv = [&](const Eigen::VectorXd &r) -> Eigen::VectorXd {
+                        return W.size() ? Eigen::VectorXd(W * r) : Eigen::VectorXd(C_inv_red.asDiagonal() * r);
+                    };
                     Eigen::LLT<Eigen::MatrixXd> inner_llt;
                     auto factorise = [&](const Eigen::VectorXd &c_inv) {
                         C_inv_red = c_inv;
-                        Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k)
-                                              + L_red.transpose() * C_inv_red.asDiagonal() * L_red;
+                        Eigen::MatrixXd inner = W.size()
+                            ? Eigen::MatrixXd(Eigen::MatrixXd::Identity(k, k) + L_red.transpose() * W * L_red)
+                            : Eigen::MatrixXd(Eigen::MatrixXd::Identity(k, k) + L_red.transpose() * C_inv_red.asDiagonal() * L_red);
                         inner_llt.compute(inner);
                         if(inner_llt.info() != Eigen::Success) {
                             // inner is PD by construction. any failures here are float math noise from L. Clamp eigenvalues and retry.
@@ -688,8 +710,9 @@ namespace PROfit{
                     Eigen::VectorXd u_bf(nb);
                     for(size_t i = 0; i < nb; ++i)
                         u_bf(i) = data_spec(contrib[i]) - cv_coll(contrib[i]);
+                    const Eigen::VectorXd cinv_u_bf = apply_cinv(u_bf);
                     analytic_shift = (L_shift * inner_llt.solve(
-                        L_red.transpose() * (C_inv_red.asDiagonal() * u_bf))).cast<float>();
+                        L_red.transpose() * cinv_u_bf)).cast<float>();
 
                     Eigen::VectorXd throws_k(k), residual(nb);
                     for(size_t ai = 0; ai < nsteps; ++ai) {
@@ -701,7 +724,7 @@ namespace PROfit{
                         for(size_t i = 0; i < nb; ++i)
                             residual(i) = data_spec(contrib[i]) - specs.at(ai)(contrib[i]);
                         Eigen::VectorXd alpha_min =
-                            inner_llt.solve(L_red.transpose() * (C_inv_red.asDiagonal() * residual));
+                            inner_llt.solve(L_red.transpose() * apply_cinv(residual));
                         // delta = U^-1 v with inner = U^T U has cov(delta) = inner^-1.
                         Eigen::VectorXd alpha_hat =
                             alpha_min + inner_llt.matrixU().solve(throws_k);

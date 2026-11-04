@@ -5,6 +5,7 @@
 #include "PROtocall.h"
 #include "PROsyst.h"
 #include <Eigen/Eigen>
+#include <atomic>
 #include <cmath>
 using namespace PROfit;
 
@@ -67,7 +68,7 @@ PROcovariance::PROcovariance(const std::string tag, const PROconfig &conin, cons
 
 }
 
-void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances) {
+void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances, const OverlapCells *overlap) {
     nec_indices.clear();
     nec_reduced_stat_cov.resize(0, 0);
     nec_valid = false;
@@ -78,7 +79,17 @@ void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances) {
     if(nec_indices.empty()) return;
     const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
         idx(nec_indices.data(), (Eigen::Index)nec_indices.size());
-    nec_reduced_stat_cov = Eigen::MatrixXf(variances(idx).asDiagonal());
+    if(overlap) {
+        int floored = 0;
+        nec_reduced_stat_cov = OverlapStatCovariance(variances, *overlap, nec_indices, &floored);
+        if(floored) {
+            static std::atomic<bool> warned{false};
+            if(!warned.exchange(true))
+                log<LOG_WARNING>(L"%1% || Statistical overlap: %2% bins hold only shared events (singular Neyman block); their exclusive variance is floored at half an event. Logged once.") % __func__ % floored;
+        }
+    } else {
+        nec_reduced_stat_cov = Eigen::MatrixXf(variances(idx).asDiagonal());
+    }
     nec_valid = true;
 }
 

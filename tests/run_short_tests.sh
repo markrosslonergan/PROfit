@@ -579,6 +579,50 @@ run_test_tag t57p3afcpbrazil t57p3afcp --use-fake-data "${AFC3P[@]}" --mode braz
 expect_fail_tag t58p3afcpfp t57p3afcp --use-fake-data -i dmsq 1 sinsq2thmue 0.01 "${AFC3P[@]}" --mode asimov
 COMMON=("${SAVED_COMMON[@]}")
 
+# --- 14. Statistical overlap between analyses (overlap_matching_vars) ----------
+# nueB is the (oscillating) nue channel again at half weight, from the same MC
+# entries, so it carries no information nue lacks: with the overlap declared, the
+# stat-only Asimov surface must equal the plain config's exactly. The key adds
+# category so an offbeam entry never matches a beam entry with the same Run/Subrun/Evt.
+awk '
+    /<channel name="nue"/ { inb=1; blk="" }
+    inb { blk = blk $0 "\n"; if ($0 ~ /<\/channel>/) { printf "%s", blk; b=blk; gsub(/name="nue"/, "name=\"nueB\"", b); printf "%s", b; inb=0 }; next }
+    /<MCFile / { sub(/>$/, " overlap_matching_vars=\"Run,Subrun,Evt,category\">") }
+    /<branch/ { inbr=1; br="" }
+    inbr { br = br $0 "\n"; if ($0 ~ /<\/branch>/) { printf "%s", br; if (br ~ /_nue_/) { c=br; gsub(/_nue_/, "_nueB_", c); sub(/additional_weight *= *"/, "&0.5*(", c); sub(/0\.5\*\([^"]*/, "&)", c); printf "%s", c }; inbr=0 }; next }
+    { print }' local_test.xml > local_overlap.xml
+sed 's| overlap_matching_vars="Run,Subrun,Evt,category"||' local_overlap.xml > local_overlap_none.xml
+SAVED_COMMON=("${COMMON[@]}")
+COMMON=(-x local_overlap.xml -t "${TAG}ov" -n 1 -v 2 --seed 405 --preset fast)
+run_test t60ovprocess process
+run_test t61ovglobal  --use-fake-data global
+run_test t62ovpe      --use-fake-data --pseudo-experiment global
+run_test t63ovfc      --use-fake-data -i dmsq 1 sinsq2thme 0.01 fc -u 2
+expect_fail t64ovcnp  --use-fake-data -c CNP global
+run_test t65ovsurf    --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+AFCOV=(fc-adaptive --throws 2 --prepass-amr-initial 3 3 --prepass-amr-levels 1
+       --p-thresh 0.33 --baseline-level 1 "${AXES[@]}")
+run_test_tag t66ovafcmesh   t66ovafc --use-fake-data "${AFCOV[@]}" --mode build-mesh
+run_test_tag t66ovafcbank   t66ovafc --use-fake-data "${AFCOV[@]}" --mode init-bank --n-pe-min 1 --n-pe-max 1
+run_test_tag t66ovafcbrazil t66ovafc --use-fake-data "${AFCOV[@]}" --mode brazil --n-brazil-throws 2
+COMMON=(-x local_overlap_none.xml -t "${TAG}ovn" -n 1 -v 2 --seed 405 --preset fast)
+run_test t67ovnsurf   --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+COMMON=("${SAVED_COMMON[@]}")
+run_test t68asurf     --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+# A+B with the overlap matches A alone (float noise); without it, it does not.
+surf_match() {
+    awk 'FNR==1{f++} FNR>10{k=$1"_"$2; v[f,k]=$3; keys[k]=1}
+         END{bad=0; for(k in keys){d=v[1,k]-v[2,k]; if(d<0)d=-d; if(d > 1e-4 + 1e-3*v[1,k]) bad++} exit bad>0}' "$1" "$2"
+}
+if surf_match "${TAG}_t68asurf_statonly_surface.txt" "${TAG}ov_t65ovsurf_statonly_surface.txt" \
+   && ! surf_match "${TAG}_t68asurf_statonly_surface.txt" "${TAG}ovn_t67ovnsurf_statonly_surface.txt"; then
+    note "PASS  t69ovclosure  (overlap A+B surface equals A alone; ignoring the overlap does not)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t69ovclosure  (A+B with overlap differs from A alone, or ignoring it does not)"
+    FAIL=$((FAIL+1))
+fi
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"

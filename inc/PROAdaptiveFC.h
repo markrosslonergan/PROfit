@@ -270,12 +270,15 @@ namespace PROfit {
         std::string model_tag;
         std::string chi2;
         uint8_t  shape_only = 0;
+        uint64_t overlap_fp = 0;      ///< OverlapFingerprint of the MC statistical overlap the toys were thrown with (0 = none).
 
         bool profiled() const { return truth_source != (uint8_t)TruthSource::LegacyPin; }
+        /// Written as a tail: profile banks, and any bank thrown with statistical overlap.
+        bool has_tail() const { return profiled() || overlap_fp != 0; }
         bool operator==(const ProfileManifest &o) const {
             return truth_source == o.truth_source && profile_idx == o.profile_idx && data_fp == o.data_fp
                 && config_hash == o.config_hash && model_tag == o.model_tag && chi2 == o.chi2
-                && shape_only == o.shape_only;
+                && shape_only == o.shape_only && overlap_fp == o.overlap_fp;
         }
         bool operator!=(const ProfileManifest &o) const { return !(*this == o); }
     };
@@ -302,11 +305,14 @@ namespace PROfit {
     struct PEBank {
         static constexpr uint32_t MAGIC = 0x41464342;  ///< 'AFCB' (Adaptive FC Bank).
         static constexpr uint16_t VERSION = 3;
+        static constexpr uint16_t VERSION_OVERLAP = 4;
         ///< v2: added cell footprint arrays (i_bl, j_bl, step, level) so the
         ///<     bank is self-describing without needing the MetaMesh sidecar.
         ///< v3: profile banks (manifest, per-cell truths, per-PE phys_hat) as a
         ///<     tail after the unchanged v2 payload. LegacyPin banks are still
         ///<     written as v2, byte for byte.
+        ///< v4: v3 plus the manifest's overlap_fp, for banks thrown with
+        ///<     statistical overlap (either truth source).
 
         // Mesh footprint the bank was generated against. Used as a provenance
         // check at load time so we can refuse a (bank, mesh) mismatch.
@@ -377,6 +383,7 @@ namespace PROfit {
     struct BrazilArchive {
         static constexpr uint32_t MAGIC = 0x41464252;  ///< 'AFBR'
         static constexpr uint16_t VERSION = 2;
+        static constexpr uint16_t VERSION_OVERLAP = 3; ///< v2 plus the manifest's overlap_fp.
         // Footprint sanity check vs. the current bank at load time.
         int finest_nx = 0;
         int finest_ny = 0;
