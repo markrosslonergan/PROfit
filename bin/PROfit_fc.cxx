@@ -154,7 +154,7 @@ struct FCMeta {
     std::vector<std::pair<std::string, std::string>> strs;
 };
 
-static FCMeta makeFCMeta(const PROconfig &config, const PROmodel &model, const Eigen::VectorXf &test_point, const Eigen::VectorXf &phys_lb, const Eigen::VectorXf &phys_ub, const PROfitterConfig &scanFitConfig, const PROpt &options, const char *throw_mode) {
+static FCMeta makeFCMeta(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &test_point, const Eigen::VectorXf &phys_lb, const Eigen::VectorXf &phys_ub, const PROfitterConfig &scanFitConfig, const PROpt &options, const char *throw_mode) {
     FCMeta m;
     m.nums.push_back({"meta_version", 1});
     for(size_t i = 0; i < model.nparams; ++i) {
@@ -175,6 +175,8 @@ static FCMeta makeFCMeta(const PROconfig &config, const PROmodel &model, const E
     m.strs.push_back({"preset", options.fit_preset.back()});
     m.strs.push_back({"grad_mode", PROmetric::gradientModeName(scanFitConfig.gradient_mode)});
     m.strs.push_back({"version", PROJECT_VERSION_STR});
+    // Toys thrown with the MC statistical overlap (PROoverlap.h) are a different distribution.
+    if(prop.overlap) m.strs.push_back({"stat_overlap", std::to_string(OverlapFingerprint(*prop.overlap))});
     // ln det M / a frozen M change the statistic of every toy and of the data.
     const PROconfig::CovarianceOptions &co = config.m_covariance_options;
     if(co.lndet) m.nums.push_back({"cov_lndet", 1.0f});
@@ -249,7 +251,7 @@ static bool checkFCMeta(const std::string &filename, const FCMeta &now) {
         return k == "shape_only";
     };
     auto checked_str = [](const std::string &k) {
-        return k == "config_hash" || k == "metric" || k == "model" || k == "profile_truth";
+        return k == "config_hash" || k == "metric" || k == "model" || k == "profile_truth" || k == "stat_overlap";
     };
     std::map<std::string, float> stored_num, now_num;
     std::map<std::string, std::string> stored_str, now_str;
@@ -436,7 +438,7 @@ void run_fc(const PROconfig &config, const PROpeller &prop, PROmetric &metric, c
     size_t nuniv = options.nuniv;
     const std::string FC_file = options.final_output_tag + "_FC.root";
     bool gen_null_dist = true;
-    FCMeta meta = makeFCMeta(config, model, test_point, phys_lb, phys_ub, scanFitConfig, options, throw_mode);
+    FCMeta meta = makeFCMeta(config, prop, model, test_point, phys_lb, phys_ub, scanFitConfig, options, throw_mode);
     if(profiled) {
         auto lin = [&](size_t i, float v) { return model.is_log10[i] ? std::pow(10.0f, v) : v; };
         for(size_t i = 0; i < nphys; ++i) meta.nums.push_back({"profiled_" + model.param_names[i], (float)free_mask[i]});

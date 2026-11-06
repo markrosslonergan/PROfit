@@ -482,6 +482,23 @@ chi2_equal() {  # <check name> <test A> <test B> <what is compared>
         FAIL=$((FAIL+1))
     fi
 }
+# grad_norm_check <check name> <log>: the analytic gradient against central-full by the
+# scale-free per-point error |g - g_ref| / |g_ref|, averaged over points (scale-test
+# gradcheck's mean_norm_rel). The per-component mean_rel blows up wherever one reference
+# component is near zero (e.g. a spline whose gradient vanishes at some draws), while
+# this one only grows when the gradient is off: the linearised modes, which drop a real
+# term, sit at ~0.15-0.2; the analytic gradient at ~0.005-0.015.
+grad_norm_check() {
+    local name="$1" log="$2" r
+    r=$(sed -n 's/.*\[GRADCHECK\] mode=analytic .*mean_norm_rel=\([-+0-9.eE]*\).*/\1/p' "$log" | tail -n 1)
+    if [ -n "$r" ] && awk -v r="$r" 'BEGIN { exit !(r < 0.05) }' && ! grep -q "falling back" "$log"; then
+        note "PASS  $name  (analytic vs central-full mean_norm_rel $r)"
+        PASS=$((PASS+1))
+    else
+        note "FAIL  $name  (analytic vs central-full mean_norm_rel '$r', want < 0.05 and no fallback)"
+        FAIL=$((FAIL+1))
+    fi
+}
 SEPNAMES=(nu_ND_nue_fullosc nu_FD_nue_fullosc)
 SPLINES=(CrossSection1 CrossSection2 CrossSection3 CrossSection4 DetSys1 DetSys2 DetSys3
          Flux1 Flux2 Flux3 FiducialVol_FD FluxNorm_FD FiducialVol_ND FluxNorm_ND)
@@ -512,14 +529,7 @@ fi
 # chi2 where the float central-FD reference itself is noise.
 COMMON=(-x local_tmpl_grad.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
 run_test t33itmplgrad     -l logs/t33itmplgrad.full.log -w 3 --use-fake-data scale-test --tests gradcheck -N 200
-grad_rel=$(sed -n 's/.*\[GRADCHECK\] mode=analytic .*mean_rel=\([-+0-9.eE]*\).*/\1/p' logs/t33itmplgrad.full.log | tail -n 1)
-if [ -n "$grad_rel" ] && awk -v r="$grad_rel" 'BEGIN { exit !(r < 0.2) }'; then
-    note "PASS  t33itmplgradrel  (analytic vs central-full mean_rel $grad_rel)"
-    PASS=$((PASS+1))
-else
-    note "FAIL  t33itmplgradrel  (analytic vs central-full mean_rel '$grad_rel', want < 0.2)"
-    FAIL=$((FAIL+1))
-fi
+grad_norm_check t33itmplgradrel logs/t33itmplgrad.full.log
 # Refused: zero-match pattern, a subchannel claimed twice, default= outside [min,max],
 # and subchannels= on a non-template model.
 COMMON=(-x local_tmpl_none.xml    -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
@@ -579,8 +589,51 @@ run_test_tag t57p3afcpbrazil t57p3afcp --use-fake-data "${AFC3P[@]}" --mode braz
 expect_fail_tag t58p3afcpfp t57p3afcp --use-fake-data -i dmsq 1 sinsq2thmue 0.01 "${AFC3P[@]}" --mode asimov
 COMMON=("${SAVED_COMMON[@]}")
 
+# --- 14. Statistical overlap between analyses (overlap_matching_vars) ----------
+# nueB is the (oscillating) nue channel again at half weight, from the same MC
+# entries, so it carries no information nue lacks: with the overlap declared, the
+# stat-only Asimov surface must equal the plain config's exactly. The key adds
+# category so an offbeam entry never matches a beam entry with the same Run/Subrun/Evt.
+awk '
+    /<channel name="nue"/ { inb=1; blk="" }
+    inb { blk = blk $0 "\n"; if ($0 ~ /<\/channel>/) { printf "%s", blk; b=blk; gsub(/name="nue"/, "name=\"nueB\"", b); printf "%s", b; inb=0 }; next }
+    /<MCFile / { sub(/>$/, " overlap_matching_vars=\"Run,Subrun,Evt,category\">") }
+    /<branch/ { inbr=1; br="" }
+    inbr { br = br $0 "\n"; if ($0 ~ /<\/branch>/) { printf "%s", br; if (br ~ /_nue_/) { c=br; gsub(/_nue_/, "_nueB_", c); sub(/additional_weight *= *"/, "&0.5*(", c); sub(/0\.5\*\([^"]*/, "&)", c); printf "%s", c }; inbr=0 }; next }
+    { print }' local_test.xml > local_overlap.xml
+sed 's| overlap_matching_vars="Run,Subrun,Evt,category"||' local_overlap.xml > local_overlap_none.xml
+SAVED_COMMON=("${COMMON[@]}")
+COMMON=(-x local_overlap.xml -t "${TAG}ov" -n 1 -v 2 --seed 405 --preset fast)
+run_test t60ovprocess process
+run_test t61ovglobal  --use-fake-data global
+run_test t62ovpe      --use-fake-data --pseudo-experiment global
+run_test t63ovfc      --use-fake-data -i dmsq 1 sinsq2thme 0.01 fc -u 2
+expect_fail t64ovcnp  --use-fake-data -c CNP global
+run_test t65ovsurf    --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+AFCOV=(fc-adaptive --throws 2 --prepass-amr-initial 3 3 --prepass-amr-levels 1
+       --p-thresh 0.33 --baseline-level 1 "${AXES[@]}")
+run_test_tag t66ovafcmesh   t66ovafc --use-fake-data "${AFCOV[@]}" --mode build-mesh
+run_test_tag t66ovafcbank   t66ovafc --use-fake-data "${AFCOV[@]}" --mode init-bank --n-pe-min 1 --n-pe-max 1
+run_test_tag t66ovafcbrazil t66ovafc --use-fake-data "${AFCOV[@]}" --mode brazil --n-brazil-throws 2
+COMMON=(-x local_overlap_none.xml -t "${TAG}ovn" -n 1 -v 2 --seed 405 --preset fast)
+run_test t67ovnsurf   --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+COMMON=("${SAVED_COMMON[@]}")
+run_test t68asurf     --use-fake-data --statonly surface -g 4 "${AXES[@]}"
+# A+B with the overlap matches A alone (float noise); without it, it does not.
+surf_match() {
+    awk 'FNR==1{f++} FNR>10{k=$1"_"$2; v[f,k]=$3; keys[k]=1}
+         END{bad=0; for(k in keys){d=v[1,k]-v[2,k]; if(d<0)d=-d; if(d > 1e-4 + 1e-3*v[1,k]) bad++} exit bad>0}' "$1" "$2"
+}
+if surf_match "${TAG}_t68asurf_statonly_surface.txt" "${TAG}ov_t65ovsurf_statonly_surface.txt" \
+   && ! surf_match "${TAG}_t68asurf_statonly_surface.txt" "${TAG}ovn_t67ovnsurf_statonly_surface.txt"; then
+    note "PASS  t69ovclosure  (overlap A+B surface equals A alone; ignoring the overlap does not)"
+    PASS=$((PASS+1))
+else
+    note "FAIL  t69ovclosure  (A+B with overlap differs from A alone, or ignoring it does not)"
+    FAIL=$((FAIL+1))
+fi
 
-# --- 14. LBL 3+1 vacuum model --------------------------------------------------
+# --- 15. LBL 3+1 vacuum model --------------------------------------------------
 # LBL_3+1-vacuum_angles with the fake sample routed through its active-flavour
 # columns (fullosc -> Pmue 4, numu signal -> Pmumu 5, nue intrinsic -> Pee 1).
 # model_rule is hashed, so this config has its own process step; the E-only and
@@ -644,7 +697,7 @@ chi2_equal t74cl3p1equal t74al3nupin t74bl3p1pin "3nu vacuum vs 3+1 at zero ster
 COMMON=("${SAVED_COMMON[@]}")
 
 
-# --- 15. Physics priors, carried-only variables --------------------------------
+# --- 16. Physics priors, carried-only variables --------------------------------
 # <model><prior>: a Gaussian on a physics parameter's physical value (|value|
 # with abs="true"). The <model> block is not hashed, so the variants reuse the
 # t70 (LBL) and t00 (SBL) caches. With the data equal to the pinned prediction
@@ -701,7 +754,7 @@ COMMON=(-x local_plot_le.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
 expect_fail t77plotcarried --use-fake-data global
 COMMON=("${SAVED_COMMON[@]}")
 
-# --- 16. Pearson analytic gradient ---------------------------------------------
+# --- 17. Pearson analytic gradient ---------------------------------------------
 # Pearson's prediction-valued stat variance is differentiated in closed form: the
 # analytic mode must track central-full (the lin modes, which drop that term, are
 # off by ~1e3) and must not have fallen back to finite differences.
@@ -721,9 +774,9 @@ run_test t78apearsongrad -l logs/t78apearsongrad.full.log -w 3 --use-fake-data -
 grad_rel_check t78bpearsongradrel logs/t78apearsongrad.full.log
 run_test t78cpearsonshgrad -l logs/t78cpearsonshgrad.full.log -w 3 --use-fake-data -c pearson --shapeonly \
     scale-test --tests gradcheck -N 200
-grad_rel_check t78dpearsonshgradrel logs/t78cpearsonshgrad.full.log
+grad_norm_check t78dpearsonshgradrel logs/t78cpearsonshgrad.full.log
 
-# --- 17. Preconditioned L-BFGS-B descents (fit option precondition) -----------
+# --- 18. Preconditioned L-BFGS-B descents (fit option precondition) -----------
 # LBL raw-unit parameters (dmsq_31 in eV^2, linear sin^2) have chi2 curvatures
 # ~10 orders of magnitude apart: unscaled descents stop partway down the valley.
 # Same pseudo-experiment, preconditioning off vs auto (on for LBL): auto must
@@ -747,7 +800,7 @@ expect_fail t79dprecondbad --pseudo-experiment --fit-options precondition 2 glob
 COMMON=("${SAVED_COMMON[@]}")
 run_test t79eprecondsbn --use-fake-data -i dmsq 1 sinsq2thme 0.02 --shapeonly --fit-options precondition 1 global
 
-# --- 18. ln det M (--lndet) and the frozen covariance (--frozen-cov) -----------
+# --- 19. ln det M (--lndet) and the frozen covariance (--frozen-cov) -----------
 # Exact: pearson with no covariance systematics and one template scale k on every
 # subchannel, pinned at k = 2 (default=2, --fix) against Asimov data at k = 1, with
 # the reference at k = 1. Then M = diag(k mu), so
@@ -789,10 +842,10 @@ COMMON=("${SAVED_COMMON[@]}")
 # frozen and pearson checks pin the splines.
 run_test t81aldgrad -l logs/t81aldgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --lndet \
     scale-test --tests gradcheck -N 200
-grad_rel_check t81bldgradrel logs/t81aldgrad.full.log
+grad_norm_check t81bldgradrel logs/t81aldgrad.full.log
 run_test t81cldshgrad -l logs/t81cldshgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --lndet --shapeonly \
     scale-test --tests gradcheck -N 200
-grad_rel_check t81dldshgradrel logs/t81cldshgrad.full.log
+grad_norm_check t81dldshgradrel logs/t81cldshgrad.full.log
 run_test t81eldpeagrad -l logs/t81eldpeagrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --fix "${SPLINES[@]}" \
     -c pearson --lndet scale-test --tests gradcheck -N 200
 grad_rel_check t81fldpeagradrel logs/t81eldpeagrad.full.log
@@ -808,7 +861,7 @@ expect_fail t82cldpoisson --use-fake-data -c poisson --exclude-systs MCStat RPA_
 expect_fail t82dldbadref --use-fake-data --frozen-cov --cov-reference NotAParam 1 global
 [ -f "$CONSTRAINT" ] && expect_fail t82eldprojector --use-fake-data --projector "$CONSTRAINT" --lndet global
 
-# --- 19. Ordering x octant seeding (--ordering-octant-seeds, LBL models only) --
+# --- 20. Ordering x octant seeding (--ordering-octant-seeds, LBL models only) --
 # SBN: the flag is a no-op, byte-identical to t01. LBL: Asimov at normal ordering /
 # upper octant, fitted from one start at inverted / lower (--inject-cv) with no Latin
 # multistarts: without the flag the fit stays in that basin, with it a mirror of the
@@ -855,7 +908,7 @@ else
     FAIL=$((FAIL+1))
 fi
 
-# --- 20. Poisson analytic gradient ---------------------------------------------
+# --- 21. Poisson analytic gradient ---------------------------------------------
 # G^T (T w) with w = 2(1 - n/s), the linearised mode's weight with the exact
 # Jacobian. Poisson refuses covariance systematics, so exclude them. At random
 # spline points Poisson chi2 is huge (and s <= 0 bins add a 2e8 penalty), so the
@@ -879,7 +932,7 @@ else
     FAIL=$((FAIL+1))
 fi
 
-# --- 21. --profile-nuisances (Gauss-Newton nuisance solve, -c poisson only) -------
+# --- 22. --profile-nuisances (Gauss-Newton nuisance solve, -c poisson only) -------
 # Neyman has no Gauss-Newton system: the flag falls back to the normal descent, so an
 # SBN fit with it is byte-identical to t01. Poisson with it: smoke run.
 run_test t85aprofsbn --use-fake-data --profile-nuisances global

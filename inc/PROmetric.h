@@ -330,6 +330,21 @@ namespace PROfit {
             }
 
             /**
+             * @brief Full statistical covariance on @p bins when it is not diagonal, else empty.
+             * @details Non-empty only when the data carries shared-event cells (overlapping
+             * analyses, PROoverlap.h), which is neyman-only, so the variance is the data:
+             * the result is exactly the reduced matrix this metric's chi2 uses on those bins,
+             * incl. the singular-block floor. Conditioning sites use it in place of
+             * diag(GetStatVariances()).
+             * @param comparison  Collapsed data.
+             * @param bins        Collapsed bins entering the conditioning (active, positive variance).
+             */
+            Eigen::MatrixXf GetStatCovariance(const Eigen::VectorXf &comparison, const std::vector<int> &bins) const {
+                if(!data.has_overlap) return Eigen::MatrixXf();
+                return OverlapStatCovariance(comparison, data.overlap, std::vector<Eigen::Index>(bins.begin(), bins.end()));
+            }
+
+            /**
              * @brief Prior precision of the spline nuisances exactly as Pull() applies it.
              * @details The inverse prior covariance when the priors are correlated (XML
              * correlations or a PROjector external prior), else diag(1/sigma^2). Uniform-prior

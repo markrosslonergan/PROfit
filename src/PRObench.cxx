@@ -423,7 +423,10 @@ BenchResult time_collapse(const std::string &tag,
 // (o) Gradient cross-validation. Evaluates the gradient at random parameter
 // points under every mode and compares against the central-full FD reference.
 // Points rejected by the model constraint (chi² plateau, zero gradient) are
-// skipped. Emits one [GRADCHECK] line per mode.
+// skipped. Emits one [GRADCHECK] line per mode. The per-component relative
+// error blows up wherever one reference component is near zero (FD noise over a
+// floored denominator), so each line also carries the scale-free per-point
+// error ‖g − g_ref‖ / ‖g_ref‖, averaged (mean_norm_rel) and maximised over points.
 void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &params)
 {
     metric.setBounds(metric.LowerBound(), metric.UpperBound());
@@ -455,23 +458,32 @@ void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &param
     for (auto mode : modes) {
         metric.setGradientMode(mode);
         double max_abs = 0, sum_abs = 0, max_rel = 0, sum_rel = 0;
+        double max_norm_rel = 0, sum_norm_rel = 0;
         long   n_comp = 0;
         for (size_t r = 0; r < refs.size(); ++r) {
             metric.reset();
             metric(params[used_points[r]], g, true);
+            double diff2 = 0, ref2 = 0;
             for (size_t i = 0; i < np; ++i) {
                 const double a = std::abs((double)g(i) - (double)refs[r](i));
                 // Guard tiny denominators: FD reference noise dominates below ~1e-3.
                 const double rel = a / std::max(std::abs((double)refs[r](i)), 1e-3);
                 max_abs = std::max(max_abs, a);   sum_abs += a;
                 max_rel = std::max(max_rel, rel); sum_rel += rel;
+                diff2 += a * a;
+                ref2  += (double)refs[r](i) * (double)refs[r](i);
                 ++n_comp;
             }
+            const double norm_rel = std::sqrt(diff2) / std::max(std::sqrt(ref2), 1e-3);
+            max_norm_rel = std::max(max_norm_rel, norm_rel);
+            sum_norm_rel += norm_rel;
         }
         const double denom = std::max(1L, n_comp);
-        log<LOG_INFO>(L"[GRADCHECK] mode=%1% points=%2% max_abs=%3% mean_abs=%4% max_rel=%5% mean_rel=%6%")
+        const double npts  = std::max<double>(1.0, (double)refs.size());
+        log<LOG_INFO>(L"[GRADCHECK] mode=%1% points=%2% max_abs=%3% mean_abs=%4% max_rel=%5% mean_rel=%6% mean_norm_rel=%7% max_norm_rel=%8%")
             % PROmetric::gradientModeName(mode) % refs.size()
-            % max_abs % (sum_abs / denom) % max_rel % (sum_rel / denom);
+            % max_abs % (sum_abs / denom) % max_rel % (sum_rel / denom)
+            % (sum_norm_rel / npts) % max_norm_rel;
     }
 }
 

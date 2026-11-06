@@ -71,6 +71,7 @@ int main(int argc, char* argv[])
     std::vector<PROdata> variable_data;
     bool use_real_data = (!options.data_xml.empty() || config.m_has_data_section) && !options.use_fake_data;
     PROdata data = construct_data(variable_data, use_real_data, config, prop, *model, variable_systs, fakedataparams, options);
+    stat_overlap_check(options, prop, *model, data, use_real_data);
 
     // Leave this after creating fake data so we can make fake data using systs that aren't
     // included in the fit.

@@ -34,6 +34,7 @@
 #include "PROserial.h"
 #include "PROtocall.h"
 #include "PROspec.h"
+#include "PROoverlap.h"
 
 namespace PROfit{
 
@@ -68,6 +69,11 @@ public:
     /// (real data, Asimov); pseudo-experiments set ToyPhysicsPriorCenters. Metrics built from
     /// this data read it. Not serialized.
     std::vector<float> physics_prior_centers;
+
+    // Statistical overlap with another analysis (PROoverlap.h). Not serialised here: real
+    // data keeps its cells in <tag>_overlap_data.bin, toys get theirs from MakeToyData.
+    bool has_overlap = false;  ///< This dataset carries overlap information (opt-in; the cell list may be empty).
+    OverlapCells overlap;      ///< Shared-event cells, in this dataset's collapsed bins.
 
     /** @brief Boost serialisation support — serialises nbins, spec, error, and hash. */
     template<class Archive>

@@ -26,6 +26,7 @@
 #include <Eigen/Eigen>
 
 #include <algorithm>
+#include <optional>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -261,6 +262,11 @@ std::vector<PROmesh::AMRResult> generate_throws(
 
     std::normal_distribution<float> d;
 
+    // Statistical overlap: expected cells at the throws' truth (MC fractions only).
+    std::optional<OverlapFractions> overlap_frac;
+    if (prop.overlap)
+        overlap_frac = ComputeOverlapFractions(config, prop, model, fakeDataParams.head(N_phys_params), config.i_prime);
+
     for (int t = 0; t < acfg.n_throws; ++t) {
         // Build this throw's parameter vector.
         Eigen::VectorXf throwp = fakeDataParams;
@@ -276,14 +282,23 @@ std::vector<PROmesh::AMRResult> generate_throws(
         const bool binned_flag = acfg.binned;
         PROspec shifted = FillSpectra(config, prop, systs, model, throwp, binned_flag, config.i_prime);
 
-        PROspec newSpec = acfg.stat_only_throws
-            ? PROspec::PoissonVariation(collapsed_cv, dseed(proseed.global_rng))
-            : PROspec::PoissonVariation(
-                  PROspec(CollapseMatrix(config, shifted.Spec())
+        PROdata data;
+        if (!overlap_frac) {
+            PROspec newSpec = acfg.stat_only_throws
+                ? PROspec::PoissonVariation(collapsed_cv, dseed(proseed.global_rng))
+                : PROspec::PoissonVariation(
+                      PROspec(CollapseMatrix(config, shifted.Spec())
+                                  + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
+                              CollapseMatrix(config, shifted.Error())),
+                      dseed(proseed.global_rng));
+            data = PROdata(newSpec.Spec(), newSpec.Error());
+        } else {
+            const PROspec mean = acfg.stat_only_throws ? collapsed_cv
+                : PROspec(CollapseMatrix(config, shifted.Spec())
                               + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
-                          CollapseMatrix(config, shifted.Error())),
-                  dseed(proseed.global_rng));
-        PROdata data(newSpec.Spec(), newSpec.Error());
+                          CollapseMatrix(config, shifted.Error()));
+            data = MakeToyData(mean, &*overlap_frac, true, dseed(proseed.global_rng));
+        }
         data.physics_prior_centers = ToyPhysicsPriorCenters(model, fakeDataParams.head((Eigen::Index)N_phys_params), !acfg.stat_only_throws, PROseed::global_rng);
 
         log<LOG_INFO>(L"%1% || throw %2%/%3%: stat_only=%4%, n_splines_thrown=%5%, n_stat_bins=%6%.")
@@ -772,6 +787,15 @@ PROdata generate_pseudo_experiment_data(
     }
 
     PROspec shifted = FillSpectra(config, prop, systs, model, throws, binned, config.i_prime);
+    if (prop.overlap) {
+        const PROspec mean(CollapseMatrix(config, shifted.Spec(), config.i_prime)
+                               + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
+                           CollapseMatrix(config, shifted.Error(), config.i_prime));
+        const OverlapFractions frac = ComputeOverlapFractions(config, prop, model, fakeDataParams.head(nphys), config.i_prime);
+        PROdata data = MakeToyData(mean, &frac, true, dseed(proseed.global_rng));
+        data.physics_prior_centers = ToyPhysicsPriorCenters(model, fakeDataParams.head((Eigen::Index)nphys), true, PROseed::global_rng);
+        return data;
+    }
     PROspec newSpec = PROspec::PoissonVariation(
         PROspec(CollapseMatrix(config, shifted.Spec(), config.i_prime)
                     + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),

@@ -77,6 +77,7 @@ Appendices:
 * [Appendix D: shape-only fits (`--shapeonly`), in full](#appendix-d-shape-only-fits---shapeonly-in-full)
 * [Appendix E: counting degrees of freedom (ndf)](#appendix-e-counting-degrees-of-freedom-ndf)
 * [Appendix F: post-fit pull distributions, in full](#appendix-f-post-fit-pull-distributions-in-full)
+* [Appendix G: combining analyses that share events (statistical overlap)](#appendix-g-combining-analyses-that-share-events-statistical-overlap)
 
 ---
 
@@ -340,6 +341,11 @@ detector `pot` declared at the top of the XML. One wildcard caveat: the config
 hash sees only the pattern string, so new files appearing in a globbed
 directory do not invalidate the `_prop.bin`/`_syst.bin` caches — re-`process`
 with `--force`.
+
+Combining two analyses whose selections share events? Two more `<MCFile>`
+attributes, `overlap_matching_vars` and `overlap_common`, make the statistical
+covariance carry the shared events. They are opt-in and described in
+[Appendix G](#appendix-g-combining-analyses-that-share-events-statistical-overlap).
 
 ### Systematics: the `<variation_list>`
 
@@ -681,6 +687,7 @@ dataset from the command line:
 | Option | What it does |
 |---|---|
 | `-i/--inject dmsq 1 sinsq2thme 0.01` | inject an oscillation signal as truth (**name value pairs** in v2.X, in linear units) |
+| `--inject-data dmsq 1 sinsq2thme 0.01` | reweight *real* data to an oscillation signal using the data's own `<model>` (a `<model>` inside `<data>`, or `<data inherit_model="true">`); errors if the data has no model, and not allowed with `fc`/`fc-adaptive` |
 | `--inject-systs Flux1 1.0 DetSys2 -2.0` | shift spline systematics (in σ) into the fake data |
 | `--inject-cv` / `--inject-systs-cv` | same, but shift the *prediction* CV instead of the data |
 | `--poisson-throw` | Poisson-fluctuate the fake data |
@@ -3780,6 +3787,155 @@ variance W²/12.
 * **An Asimov fit gives z ≡ 0** for everything: nothing fluctuated, so
   nothing moved.
 * **One fit is one draw.** Pool pseudo-experiments for precision (section 6).
+
+---
+
+# Appendix G: combining analyses that share events (statistical overlap)
+
+When two analyses go into one XML, as different channels, and some
+interactions pass both selections, their spectra are not independent. A
+default fit treats them as independent, counts the shared events twice and
+overstates the sensitivity. This appendix describes the opt-in that fixes
+the statistical covariance. The systematic covariance needs nothing new:
+universes and spline knobs are coherent per event, so the cross-analysis
+systematic correlation is already there.
+
+### G.1 The statistics
+
+Every interaction is one Poisson count in one *cell*: the set S of collapsed
+bins it fills. An event only one analysis selects is a one-bin cell, and a
+shared event is a cell with one bin in each analysis. With N_S the count in
+cell S,
+
+```
+n_i = Σ_{S∋i} N_S,        Cov(n_i, n_j) = Σ_{S∋i,j} λ_S
+```
+
+The off-diagonal statistical covariance between bin a of one analysis and bin
+b of the other is the number of events in **both** (λ_ab). Within one
+analysis the bins stay uncorrelated. The two analyses may use different, even
+2D, variables: a shared event simply adds one to (its A bin, its B bin). The
+matrix is a sum of PSD rank-one terms, so it is positive semi-definite for
+observed and expected counts alike.
+
+### G.2 Switching it on
+
+The overlap is never detected automatically. You switch it on per
+`<MCFile>`, with the expressions that identify one interaction:
+
+```xml
+<data>
+  <MCFile treename="selected" filename="dataA.root" pot="..." overlap_matching_vars="run,subrun,evt,slc">
+    ...
+  </MCFile>
+  <MCFile treename="selected" filename="dataB.root" pot="..." overlap_matching_vars="run,subrun,evt,slc">
+    ...
+  </MCFile>
+</data>
+
+<MCFile treename="events" filename="mcA_*.root" pot="..." overlap_matching_vars="run,subrun,evt,nu_id"
+        overlap_common="run &lt; 5000">
+  ...
+</MCFile>
+```
+
+* **On data MCFiles** the attribute records the *observed* shared cells. The
+  neyman metric uses them: V = diag(n) + the shared counts off the diagonal.
+  The data events must have unit weight, which is fatal otherwise.
+* **On MC MCFiles** it records which MC entries are the same interaction.
+  Every toy (fc, fc-adaptive, surface `--brazil-band`, `--pseudo-experiment`,
+  `--poisson-throw`) and the Asimov fake data take their *expected* cells
+  from the MC at the toy's own truth. Toys never use the data's overlap,
+  because the toy distribution must depend on the hypothesis only.
+* **The key must identify one interaction**, not one trigger: include a
+  slice or neutrino ID. A key that fills the same channel twice is fatal.
+  Keys only match inside one (mode, detector) block, since one interaction
+  never reaches two detectors. The expression count must agree across the
+  flagged data files, and separately across the flagged MC files.
+* **`overlap_common`** (MC only, default: every entry) marks the MC entries
+  that *both* analyses processed. Use it when the two MC samples only partly
+  coincide (different file subsets or exposures). The expected overlap is
+  built from fractions measured on that common sample:
+
+  ```
+  F_S^(i) = (shared in S, bin i / common in bin i) × (flagged in bin i / all in bin i)
+  λ_S     = geomean_{i∈S}( F_S^(i) μ_i )       (= ρ √(μ_a μ_b) for a pair)
+  ```
+
+  Each analysis's own normalisation cancels in these ratios. Physics is exact,
+  because every MC entry carries its own true L/E. Systematics enter through
+  the marginals μ_i, which is consistent with PROfit's per-bin spline and
+  covariance model.
+* **Fatal combinations:**
+  * Real data fitted with MC overlap but no data overlap (the toys would be
+    correlated and the fit would not).
+  * Toy subcommands on real data with data overlap but no MC overlap.
+  * Any metric other than neyman. Poisson cannot carry a covariance at all;
+    pearson and CNP are not implemented.
+  * scale-test.
+  * Visible-decay models.
+
+`process` writes `<tag>_overlap_mc.bin` and `<tag>_overlap_data.bin` next to
+the usual caches. `_prop.bin`, `_syst.bin` and `_data.bin` are unchanged, and
+without the attributes nothing changes at all. The attributes enter the
+config hash. Toy artifacts record the MC overlap: FC.root's `fc_meta` gets
+`stat_overlap`, and `fc --reuse` refuses a mismatch. AFC banks and brazil
+archives carry its fingerprint (bank v4, archive v3), so merge-bank,
+merge-brazil, top-up and the classifying stages refuse to mix overlap and
+non-overlap toys. `proletariat` stages `_data.bin` and both overlap files.
+
+### G.3 What to expect
+
+* **Asimov sensitivity is exact.** In a closure test on the fake SBN sample,
+  channel B is a copy of channel A at half weight, so B carries no new
+  information. The A+B Asimov surface then reproduces A alone to 4–5
+  significant figures, stat-only and with systematics profiled. Treating the
+  two as independent overstates every Δχ² by about 1.5×. With B a random half
+  of A's events, the agreement is 1.0000–1.0001 (1.0001–1.0003 with only half
+  the MC declared common).
+* **Neyman is noisier on fluctuated data.** It builds the B-given-A part of the
+  covariance from *observed* counts. That adds a small θ-dependent term per
+  shared bin (the same family as Neyman's usual small-count bias). On
+  fluctuated data, A+B therefore tracks A alone only approximately: within
+  2–17% on the closure test's fake dataset, against 43–76% too high when the
+  overlap is ignored. In the closure test, the FC 90% critical value at one point
+  moved from 7.5 (A) to 9.0 (A+B). FC stays calibrated, because toys and data
+  use the same statistic; the combined statistic is just not optimal. Any
+  Gaussian χ² has this; only an exact Poisson likelihood over the cells would
+  not.
+* **Singular pairs are floored.** A sparse bin pair holding only shared
+  events (n_a = n_b = n_ab) gives Neyman a singular block. Only then, and
+  only for that group of bins, the zero-exclusive bins get half an event of
+  exclusive variance, with a one-time warning.
+* **Post-fit plots use the same correlated term.** The post-fit error band,
+  the Constrained Best-Fit, the covariance-mode pulls and the pull
+  distributions condition the systematics on the data with the V the fit
+  uses (Appendix C with C → V). On the closure test, the A channels' post-fit
+  band, the covariance bin pulls and every spline's posterior width equal the
+  A-only fit's to float precision. Ignoring the overlap narrows the νe band by
+  up to 17%. With no free splines, the band's logged uᵀ(V+Σ)⁻¹u still equals
+  the fit χ².
+* **FC toys match nature.** The check uses a harder closure: B keeps 60% of
+  A's νe events in a smeared energy variable, plus 20% of low-energy νμ CC as
+  a mis-ID sample, so cells cross bins and channels. Here "nature" throws each
+  MC interaction once as a Poisson count in every bin it fills. The thrower's
+  expected shared rates equal nature's to 1e-5. With only half the MC
+  declared common, they agree within MC noise. With a stat-only Δχ² over a
+  40×40 physics grid and 3000 toys at a signal point and at the null, the
+  thrower's Δχ² distribution is
+  indistinguishable from nature's (KS p = 0.93 and 0.61). The FC 90%
+  coverage on nature toys is 0.902 and 0.897 (nominal 0.900 ± 0.006).
+  Ignoring the overlap gives 0.890 and 0.859.
+
+### G.4 Not yet covered
+
+* **PROjector.** Each stage uses the overlap among its own channels, but
+  events shared between the pre-fit channels and the fitted channels count
+  as exclusive in stage 2. PROfit warns.
+* **MC-stat.** Off-diagonals of the MC-stat covariance for MC entries shared
+  between the analyses are not included.
+* **Exposure.** The MC fractions assume both analyses' data cover the same
+  exposure. That holds when their channels share one `<detector>`.
 
 ---
 

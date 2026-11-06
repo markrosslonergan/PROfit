@@ -545,6 +545,15 @@ namespace PROfit{
             std::vector<int> m_mcgen_numfriends;	
             std::vector<bool> m_mcgen_fake;
             std::vector<float> m_mcgen_partial_load_frac;
+            // Statistical overlap (PROoverlap.h), per MCFile: the overlap_matching_vars
+            // expressions (empty = not flagged) and the overlap_common cut (empty = all common).
+            std::vector<std::vector<std::string>> m_mcgen_overlap_matching_vars;
+            std::vector<std::string> m_mcgen_overlap_common;
+            /** @brief True if any MCFile carries overlap_matching_vars. */
+            bool HasOverlapMatching() const {
+                for(const auto &v : m_mcgen_overlap_matching_vars) if(!v.empty()) return true;
+                return false;
+            }
             // Friend trees, per MCFile (file × friend_index). Indexed by file id, NOT
             // keyed by filename: several <MCFile> blocks may legitimately share one
             // filename= string (e.g. the same TChain wildcard), and the old
@@ -607,6 +616,7 @@ namespace PROfit{
 
             //Some model infomation
             std::string m_model_tag;
+            bool m_has_model = false; ///< A <model> was parsed; lets --inject-data reweight a data config.
             std::vector<int> m_model_rule_index;
             std::vector<std::string> m_model_rule_names;
             std::vector<int> m_model_parameter_index;

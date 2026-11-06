@@ -184,6 +184,13 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
 
         PROspec collapsed_cv = PROspec(CollapseMatrix(config, cv.Spec()), CollapseMatrix(config, cv.Error()));
         const Eigen::MatrixXf frac_root = CovarianceThrowRoot(config, metric.GetSysts());
+        // Statistical overlap: expected cells at the throws' truth (MC fractions only); the
+        // stat-only throws fluctuate the CV, the others the injected truth.
+        std::optional<OverlapFractions> overlap_frac;
+        if(prop.overlap) {
+            const Eigen::VectorXf &truth = options.statonly_brazil ? CVParams : fakeDataParams;
+            overlap_frac = ComputeOverlapFractions(config, prop, metric.GetModel(), truth.head(metric.GetModel().nparams), config.i_prime);
+        }
         for(size_t i = 0; i < (size_t)options.n_brazil_throws; ++i) {
             Eigen::VectorXf throwp = fakeDataParams;
             // Shared truncated-Gaussian helper: samples each spline's actual prior
@@ -198,11 +205,20 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
             // variables whenever i_prime != 0 (same fix as src/PROfc.cxx).
             PROspec shifted = FillSpectra(config, prop, metric.GetSysts(), metric.GetModel(), throwp, binned, config.i_prime);
             // Covariance fluctuation scaled by this throw's own prediction (the covariance the metric assumes there).
-            PROspec newSpec = options.statonly_brazil ? PROspec::PoissonVariation(collapsed_cv, dseed(myseed.global_rng)) :
-                PROspec::PoissonVariation(PROspec(CollapseMatrix(config, shifted.Spec())
-                                                      + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
-                                                  CollapseMatrix(config, shifted.Error())), dseed(myseed.global_rng));
-            PROdata data(newSpec.Spec(), newSpec.Error());
+            PROdata data;
+            if(!overlap_frac) {
+                PROspec newSpec = options.statonly_brazil ? PROspec::PoissonVariation(collapsed_cv, dseed(myseed.global_rng)) :
+                    PROspec::PoissonVariation(PROspec(CollapseMatrix(config, shifted.Spec())
+                                                          + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
+                                                      CollapseMatrix(config, shifted.Error())), dseed(myseed.global_rng));
+                data = PROdata(newSpec.Spec(), newSpec.Error());
+            } else {
+                const PROspec mean = options.statonly_brazil ? collapsed_cv
+                    : PROspec(CollapseMatrix(config, shifted.Spec())
+                                  + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, config.i_prime),
+                              CollapseMatrix(config, shifted.Error()));
+                data = MakeToyData(mean, &*overlap_frac, true, dseed(myseed.global_rng));
+            }
             data.physics_prior_centers = ToyPhysicsPriorCenters(metric.GetModel(), throwp.head(metric.GetModel().nparams), !options.statonly_brazil, PROseed::global_rng);
             // Same construction point as the data fit (carries --shapeonly).
             PROmetric *brazil_metric = MakeMetric(options.chi2, config, prop, &metric.GetSysts(), metric.GetModel(), data,

@@ -223,6 +223,9 @@ namespace PROfit {
                                mask.cwiseProduct(variable_data[io].Error()));
                 masked.hash = variable_data[io].hash;
                 masked.physics_prior_centers = variable_data[io].physics_prior_centers;
+                // Cells keep their masked-out bins: the metric drops those (zero variance).
+                masked.has_overlap = variable_data[io].has_overlap;
+                masked.overlap = variable_data[io].overlap;
                 variable_data[io] = std::move(masked);
             }
             data = variable_data[config.i_prime];

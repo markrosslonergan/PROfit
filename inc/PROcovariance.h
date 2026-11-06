@@ -118,8 +118,10 @@ namespace PROfit{
              * data, in every mode incl. shape_only) is the only such case today. Metrics that
              * do not call it rebuild the reduced statistical covariance on every operator()
              * invocation.
+             * @param overlap  The dataset's shared-event cells (PROoverlap.h), or nullptr: their
+             *                 counts become the off-diagonal statistical covariance.
              */
-            void buildConstantStatCache(const Eigen::VectorXf &variances);
+            void buildConstantStatCache(const Eigen::VectorXf &variances, const OverlapCells *overlap = nullptr);
 
             /**
              * @brief Full-binning spectrum Jacobian ds/dθ (N × nParams, FillSpectraGradient).

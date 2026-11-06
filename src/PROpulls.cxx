@@ -295,11 +295,16 @@ namespace {
             u(r) = (double)data_spec(bins[r]) - pred(bins[r]);
         }
 
+        // Statistical overlap: the full C^-1 the fit used, in place of the diagonal.
+        const Eigen::MatrixXf C_full = metric.GetStatCovariance(data_spec, bins);
+        const Eigen::MatrixXd Cinv = C_full.size() ? OverlapStatPrecision(C_full.cast<double>()) : Eigen::MatrixXd();
+
         // Linearised posterior precision. Physics and uniform-prior splines have flat priors on
         // their box; they enter with the box's own variance W^2/12, so a direction the data
         // barely resolves cannot absorb the rest (exactly flat it would, at any tiny slope).
         // A <model><prior> adds its Gauss-Newton curvature g g^T / sigma^2 (g = dq/dphys).
-        Eigen::MatrixXd H = J.transpose() * cinv.asDiagonal() * J;
+        Eigen::MatrixXd H = Cinv.size() ? Eigen::MatrixXd(J.transpose() * Cinv * J)
+                                        : Eigen::MatrixXd(J.transpose() * cinv.asDiagonal() * J);
         for(Eigen::Index a = 0; a < nf; ++a) {
             const double W = ub(free_phys[a]) - lb(free_phys[a]);
             H(a, a) += 12.0 / (W * W);
@@ -359,8 +364,13 @@ namespace {
         Eigen::VectorXd alpha_hat = Eigen::VectorXd::Zero(k);
         if(k) {
             const Eigen::MatrixXd Lr = J.rightCols(k);
-            const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * cinv.asDiagonal() * Lr;
-            alpha_hat = spdInverse(inner) * (Lr.transpose() * cinv.cwiseProduct(u));
+            if(Cinv.size()) {
+                const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * Cinv * Lr;
+                alpha_hat = spdInverse(inner) * (Lr.transpose() * (Cinv * u));
+            } else {
+                const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * cinv.asDiagonal() * Lr;
+                alpha_hat = spdInverse(inner) * (Lr.transpose() * cinv.cwiseProduct(u));
+            }
         }
 
         std::vector<Eigen::Index> sys_index;   // per entry; -1 for uniform

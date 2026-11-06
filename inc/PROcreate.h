@@ -282,9 +282,11 @@ namespace PROfit{
      * @param syst_vector Output vector of SystStruct vectors (one inner vector per file); filled in-place.
      * @param inprop      Output PROpeller; filled in-place with per-event data.
      * @param noxrootd    If true, disable XRootD URL rewriting and use local paths directly.
+     * @param overlap_out If non-null and any MCFile carries overlap_matching_vars, receives the
+     *                    MC overlap structure (which entries are the same interaction; PROoverlap.h).
      * @return 0 on success; non-zero on failure.
      */
-    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false);
+    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false, PROoverlapMC *overlap_out = nullptr);
 
 
     /**

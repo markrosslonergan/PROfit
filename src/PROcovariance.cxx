@@ -5,6 +5,7 @@
 #include "PROtocall.h"
 #include "PROsyst.h"
 #include <Eigen/Eigen>
+#include <atomic>
 #include <cmath>
 using namespace PROfit;
 
@@ -110,7 +111,8 @@ void PROcovariance::ensureCovarianceReference() const {
     const Eigen::VectorXf collapsed = CollapseMatrix(config, spec);
     const Eigen::VectorXf var = statisticalVariances(collapsed, data.Spec(), &ref);
     std::vector<Eigen::Index> bins;
-    for(Eigen::Index i = 0; i < var.size(); ++i)
+    if(nec_valid) bins = nec_indices;
+    else for(Eigen::Index i = 0; i < var.size(); ++i)
         if(var(i) > 0 && binActive(i)) bins.push_back(i);
     if(bins.empty()) {
         log<LOG_ERROR>(L"%1% || No active bin has a positive statistical variance at the covariance reference point.") % __func__;
@@ -123,7 +125,9 @@ void PROcovariance::ensureCovarianceReference() const {
         const Eigen::SparseMatrix<float> R = ShapeProjectorCollapsed(config, collapsed, config.i_prime);
         cov = Eigen::MatrixXf(R * cov * R.transpose());
     }
-    const Eigen::MatrixXf M = Eigen::MatrixXf(var(idx).asDiagonal()) + cov(idx, idx);
+    // The statistical block exactly as operator() uses it: the constant cache when the metric
+    // keeps one (neyman, incl. the statistical-overlap covariance), else diag(var).
+    const Eigen::MatrixXf M = (nec_valid ? nec_reduced_stat_cov : Eigen::MatrixXf(var(idx).asDiagonal())) + cov(idx, idx);
     const Eigen::LLT<Eigen::MatrixXf> llt(M);
     if(llt.info() != Eigen::Success) {
         log<LOG_ERROR>(L"%1% || The covariance at the reference point is not positive definite.") % __func__;
@@ -138,7 +142,7 @@ void PROcovariance::ensureCovarianceReference() const {
     cov_ref_ready = true;
 }
 
-void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances) {
+void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances, const OverlapCells *overlap) {
     nec_indices.clear();
     nec_reduced_stat_cov.resize(0, 0);
     nec_valid = false;
@@ -149,7 +153,17 @@ void PROcovariance::buildConstantStatCache(const Eigen::VectorXf &variances) {
     if(nec_indices.empty()) return;
     const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
         idx(nec_indices.data(), (Eigen::Index)nec_indices.size());
-    nec_reduced_stat_cov = Eigen::MatrixXf(variances(idx).asDiagonal());
+    if(overlap) {
+        int floored = 0;
+        nec_reduced_stat_cov = OverlapStatCovariance(variances, *overlap, nec_indices, &floored);
+        if(floored) {
+            static std::atomic<bool> warned{false};
+            if(!warned.exchange(true))
+                log<LOG_WARNING>(L"%1% || Statistical overlap: %2% bins hold only shared events (singular Neyman block); their exclusive variance is floored at half an event. Logged once.") % __func__ % floored;
+        }
+    } else {
+        nec_reduced_stat_cov = Eigen::MatrixXf(variances(idx).asDiagonal());
+    }
     nec_valid = true;
 }
 
@@ -776,7 +790,8 @@ Eigen::VectorXf PROcovariance::GaussNewtonDiagonal(const Eigen::VectorXf &param)
     } else {
         const Eigen::VectorXf collapsed = CollapseMatrix(config, spec_full);
         const Eigen::VectorXf var = statisticalVariances(collapsed, data.Spec(), &param);
-        for(Eigen::Index i = 0; i < var.size(); ++i)
+        if(nec_valid) bins = nec_indices;
+        else for(Eigen::Index i = 0; i < var.size(); ++i)
             if(var(i) > 0 && binActive(i)) bins.push_back(i);
         if(bins.empty()) return Eigen::VectorXf();
         const Eigen::Map<const Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1>>
@@ -786,7 +801,7 @@ Eigen::VectorXf PROcovariance::GaussNewtonDiagonal(const Eigen::VectorXf &param)
             const Eigen::SparseMatrix<float> R = ShapeProjectorCollapsed(config, collapsed, config.i_prime);
             cov = Eigen::MatrixXf(R * cov * R.transpose());
         }
-        llt_local.compute(Eigen::MatrixXf(var(vidx).asDiagonal()) + cov(vidx, vidx));
+        llt_local.compute((nec_valid ? nec_reduced_stat_cov : Eigen::MatrixXf(var(vidx).asDiagonal())) + cov(vidx, vidx));
         if(llt_local.info() != Eigen::Success) return Eigen::VectorXf();
     }
     const Eigen::LLT<Eigen::MatrixXf> &llt = cov_frozen ? frozen_llt : llt_local;
