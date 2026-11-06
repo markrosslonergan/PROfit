@@ -843,10 +843,16 @@ namespace PROfit {
             inprop.variable_mc_stat_err.push_back(Eigen::VectorXf::Constant(inconfig.m_num_variable_bins_total[i], 0));
         }
 
-        //setup and initilizte the hists
+        // Pre-binned migration matrices, only for the off-diagonal pairs of filled variables
+        // (the only ones FillSpectra reads; see PROpeller::variable_hist_storage).
         inprop.variable_hist_storage.init(inconfig.m_num_variables);
         for(size_t i = 0; i < inconfig.m_num_variables; ++i) {
-            for(size_t j = i; j < inconfig.m_num_variables; ++j) {
+            if(!inconfig.IsFilledVariable(i)) {
+                log<LOG_INFO>(L"%1% || Variable %2% is carried along only (not fitted, plotted or a systematic binning): no pre-binned matrices are stored for it.") % __func__ % i;
+                continue;
+            }
+            for(size_t j = i + 1; j < inconfig.m_num_variables; ++j) {
+                if(!inconfig.IsFilledVariable(j)) continue;
                 log<LOG_DEBUG>(L"%1% || Init Storage hists (i,j): (%2%,%3%) of size (%4%,%5%).") % __func__ % i % j %  inconfig.m_num_variable_bins_total[i] % inconfig.m_num_variable_bins_total[j]; 
                 inprop.variable_hist_storage.set(i,j)= Eigen::MatrixXf::Constant(inconfig.m_num_variable_bins_total[i],inconfig.m_num_variable_bins_total[j],0.0);
             }
@@ -1144,11 +1150,16 @@ namespace PROfit {
             *overlap_out = BuildOverlapMC(overlap_records, inprop.NEvent(), inconfig.hash);
         // Convert the accumulated per-bin sum of squared weights into the sqrt of the
         // Kish effective count, sqrt(N_eff) = Sum(w)/sqrt(Sum(w^2)), using the CV Sum(w)
-        // from the pre-binned hist diagonal. PROsyst's square().inverse() then gives the
+        // of the stored events (summed in fill order, so identical to the hist diagonal
+        // this used to read). PROsyst's square().inverse() then gives the
         // exact fractional MC-stat variance Sum(w^2)/Sum(w)^2 for arbitrary event weights
         // (reduces to 1/N when all weights in a bin are equal).
         for(size_t i = 0; i < inconfig.m_num_variables; ++i) {
-            Eigen::ArrayXf sumw  = inprop.variable_hist_storage(i,i).diagonal().array();
+            Eigen::ArrayXf sumw = Eigen::ArrayXf::Zero(inprop.variable_mc_stat_err[i].size());
+            for(size_t ev = 0; ev < inprop.NEvent(); ++ev) {
+                const int bin = inprop.variable_bin_indices[i][ev];
+                if(bin >= 0) sumw(bin) += inprop.added_weights[ev];
+            }
             Eigen::ArrayXf sumw2 = inprop.variable_mc_stat_err[i].array();
             inprop.variable_mc_stat_err[i] = (sumw2 > 0).select(sumw / sumw2.sqrt(), 0.0f).matrix();
         }
@@ -1493,9 +1504,9 @@ namespace PROfit {
         for(size_t io = 0; io < inconfig.m_num_variables; ++io) {
             if(var_bin_indices[io] >= 0) {
                 inprop.variable_mc_stat_err[io](var_bin_indices[io]) += mc_weight * mc_weight;
-                for(size_t jo = io; jo < inconfig.m_num_variables; ++jo) {
+                for(size_t jo = io + 1; jo < inconfig.m_num_variables; ++jo) {
 
-                    if(var_bin_indices[jo]<0)continue;
+                    if(var_bin_indices[jo]<0 || !inprop.variable_hist_storage.has(io,jo))continue;
                     inprop.variable_hist_storage.set(io,jo)(var_bin_indices[io], var_bin_indices[jo]) += mc_weight; 
                 }
             }

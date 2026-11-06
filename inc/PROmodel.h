@@ -22,6 +22,7 @@
  *   - inc/PROmodels/PROmodel3p1decayvis.h — PRO3p1_decay_vis_model1/2 (3+1 with visible decay).
  *   - inc/PROmodels/PROmodel3p2.h    — PRO3p2.
  *   - inc/PROmodels/PROmodelLBL.h    — PROLBL (NuFastLBL three-flavour matter oscillations).
+ *   - inc/PROmodels/PROmodelLBL3p1.h — PROLBL3p1 (exact 3+1 vacuum oscillations for LBL configs).
  */
 #ifndef PROMODEL_H
 #define PROMODEL_H
@@ -35,7 +36,9 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -93,11 +96,40 @@ public:
     /// (no cross-variable validity coupling through a placeholder physics-grid variable).
     bool is_trivial = false;
 
+    /// A linear combination sum_k c_k * value(param_k) of physical parameter values
+    /// (10^x for a log10 parameter): the quantity a physics prior constrains.
+    using PhysicsCombination = std::vector<std::pair<size_t, float>>;
+    /// Named quantities a <model><prior> may constrain besides the parameters themselves,
+    /// e.g. the LBL models' "dmsq_32" = dmsq_31 - dmsq_21.
+    std::map<std::string, PhysicsCombination> derived_quantities;
+
+    /// A resolved <model><prior> (see PhysicsPriorSpec).
+    struct PhysicsPrior {
+        std::string name;          ///< Parameter or derived-quantity name, as in the XML.
+        PhysicsCombination terms;  ///< The constrained quantity.
+        float center = 0;          ///< Mean, physical units.
+        float sigma = 1;           ///< Width, physical units.
+        bool abs = false;          ///< Constrain |quantity|.
+    };
+    /// Physics priors from the XML, set by get_model_from_string (so every fresh model, e.g.
+    /// one per FC worker, carries them). The metrics add PROmetric::PhysicsPull.
+    std::vector<PhysicsPrior> physics_priors;
+
+    /**
+     * @brief The quantity physics prior @p p constrains at physics vector @p phys (internal
+     * space): its linear combination of physical values, the absolute value when abs.
+     * @param dqdx  If non-null, d(quantity)/d(phys) is ADDED into it (size nparams; zero at
+     *              quantity 0 under abs).
+     */
+    float physics_prior_quantity(const PhysicsPrior &p, const Eigen::VectorXf &phys, Eigen::VectorXf *dqdx = nullptr) const;
+
     /**
      * @brief Build H_combined from PROpeller event data.
      * @details Must be called after ivars and model_functions are set.  Iterates over all
      * events in @p prop, distributes them onto the flat physics grid, and constructs the
-     * concatenated H_combined matrices used by FillSpectra.
+     * concatenated H_combined matrices used by FillSpectra. Variables the propeller only
+     * carries along (!prop.IsBinnedVariable(v), see PROconfig::IsFilledVariable) get an empty
+     * matrix: FillSpectra refuses a binned fill of them.
      * @param prop                 The MC event store.
      * @param filter_by_model_rule If true (default), each event is placed in the histogram
      *                             matrix corresponding to its model_rule; if false, all events
@@ -183,8 +215,8 @@ public:
      * base-class default computes a central finite difference on get_probs —
      * well-conditioned since probabilities are O(1) — so every model supports
      * the analytic-gradient chi² mode. All sterile-family models (2-flavour,
-     * 3+1 and its reparametrisations, 3+1 invisible decay, 3+2) and the
-     * template model override with closed-form derivatives; PROLBL (external
+     * 3+1 and its reparametrisations, 3+1 invisible decay, 3+2, LBL 3+1 vacuum)
+     * and the template model override with closed-form derivatives; PROLBL (external
      * NuFast solver, both matter and vacuum regimes) keeps the finite-difference
      * default.
      *
@@ -222,6 +254,24 @@ public:
      * @return true if get_probs_grad is closed-form for this model.
      */
     virtual bool has_analytic_gradient() const { return nparams == 0; }
+
+    /**
+     * @brief Should PROfitter precondition its L-BFGS-B descents for this model by default?
+     * @details True for models whose physics parameters live in raw units of very
+     * different size (the LBL models: Δm² in eV², linear sin²), where the χ² curvatures
+     * span ~10 orders of magnitude and an unscaled L-BFGS-B stops far from the minimum.
+     * Read only when the fit option `precondition` is left at its default (auto).
+     */
+    virtual bool wants_preconditioning() const { return false; }
+
+    /**
+     * @brief Physics points this model treats as discrete degeneracies of @p phys.
+     * @details Used only by PROfitter's opt-in ordering × octant seeding (fit option
+     * `ordering_octant_seeds`): every start point of a fit is also refined from these.
+     * Default: none, so the option is a no-op for the model. The LBL models return the
+     * mass-ordering mirror, the θ23-octant mirror and both (lbl_ordering_octant_variants).
+     */
+    virtual std::vector<Eigen::VectorXf> degenerate_variants([[maybe_unused]] const Eigen::VectorXf &phys) const { return {}; }
 
     std::unordered_map<std::string, size_t> param_name_to_index; ///< Fast lookup: parameter name -> index in param_names.
 
@@ -269,10 +319,12 @@ public:
  * "SBL_3+1_Usq", "SBL_3+1_angles", "SBL_3+1_sinsq2thee", "SBL_3+1_sinsq2thmumu",
  * "SBL_3+1_sinsq2thmue" (each also with an "_NC" version),
  * "SBL_3+1+decay_invis", "SBL_3+1+decay_vis1", "SBL_3+1+decay_vis2",
- * "SBL_3+2_Usq", "LBL_3nu-matter_angles", "LBL_3nu-vacuum_angles".
- * The LBL tags also read the numeric <model> attributes density=,
- * electron_fraction= and n_newton= from config.m_model_options (fatal on any
- * other tag).
+ * "SBL_3+2_Usq", "LBL_3nu-matter_angles", "LBL_3nu-vacuum_angles", "LBL_3+1-vacuum_angles".
+ * The LBL tags also read the numeric <model> attributes baseline=, density=,
+ * electron_fraction=, n_newton= and bin_average= from config.m_model_options
+ * (fatal on any other tag).
+ * Every <model><prior> (config.m_model_physics_priors) is resolved here against the
+ * model's param_names or derived_quantities into physics_priors; an unknown name is fatal.
  * Legacy pre-v3.1 tags (numudis, nueapp, 3+1, 3+1_3A, NCdisapp, LBL, nullmodel,
  * template_fit, ...) are accepted as deprecated aliases via canonicalize_model_tag
  * (src/PROmodel.cxx), which logs a one-time warning per tag.
@@ -282,6 +334,19 @@ public:
  * @return        Owning pointer to the constructed PROmodel.
  */
 std::unique_ptr<PROmodel> get_model_from_string(const PROconfig& config, const PROpeller &prop);
+
+/**
+ * @brief The model's physics priors as re-observed by a pseudo-experiment at physics truth
+ * @p truth_phys (internal space), for PROdata::physics_prior_centers.
+ * @details A prior is an external measurement, so each toy re-measures it: centre k is drawn
+ * from N(q_k(truth), sigma_k), or is exactly q_k(truth) when @p fluctuate is false (the
+ * analogue of unthrown splines sitting at their centres). Keeping the XML centre instead would
+ * cancel the prior in a Neyman construction: at a tested point away from the centre the toys
+ * would pay the same prior penalty as the data. Returns empty and draws nothing when the model
+ * has no priors, so toy random streams are unchanged for configs without them.
+ */
+std::vector<float> ToyPhysicsPriorCenters(const PROmodel &model, const Eigen::VectorXf &truth_phys,
+                                          bool fluctuate, std::mt19937 &rng);
 
 }
 

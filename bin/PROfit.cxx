@@ -90,6 +90,8 @@ int main(int argc, char* argv[])
     // construction below. See inc/PROjector.h for the scheme.
     options.projector_config.force = options.force;
     options.projector_config.shape_only = options.shapeonly;
+    options.projector_config.lndet = options.lndet;
+    options.projector_config.frozen_cov = options.frozen_cov;
     if(options.projector_config.active()) {
         if(!PROjectorSetup(options.projector_config, config, variable_systs[config.i_prime],
                     variable_data, data, fakedataparams, options.fixed_params, *model, options.chi2))
@@ -146,6 +148,25 @@ int main(int argc, char* argv[])
         fitConfig.gradient_mode     = gmode_a;
         scanFitConfig.gradient_mode = gmode_a;
     }
+    if ((options.ordering_octant_seeds || options.ordering_octant_polish)
+        && model->degenerate_variants(model->default_val).empty())
+        log<LOG_WARNING>(L"%1% || --ordering-octant-seeds/--ordering-octant-polish: model %2% has no ordering/octant mirrors (LBL models only); the flags do nothing here.")
+            % __func__ % config.m_model_tag.c_str();
+    if (options.ordering_octant_seeds) {
+        fitConfig.ordering_octant_seeds = true;
+        scanFitConfig.ordering_octant_seeds = true;
+    }
+    if (options.ordering_octant_polish) {
+        fitConfig.ordering_octant_polish = true;
+        scanFitConfig.ordering_octant_polish = true;
+    }
+    if (options.profile_nuisances) {
+        if (options.chi2 != "poisson")
+            log<LOG_WARNING>(L"%1% || --profile-nuisances is implemented for -c poisson only so far; with %2% the fits use the normal descent.")
+                % __func__ % options.chi2.c_str();
+        fitConfig.profile_nuisances = true;
+        scanFitConfig.profile_nuisances = true;
+    }
     log<LOG_INFO>(L"%1% || Gradient mode: %2% (global) / %3% (scan)") % __func__
         % PROmetric::gradientModeName(fitConfig.gradient_mode)
         % PROmetric::gradientModeName(scanFitConfig.gradient_mode);
@@ -154,6 +175,8 @@ int main(int argc, char* argv[])
     Eigen::VectorXf global_lb = Eigen::VectorXf::Constant(N_params, -3.0);
     Eigen::VectorXf global_ub = Eigen::VectorXf::Constant(N_params, 3.0);
     std::vector<int> global_fixed(N_params, 0); 
+    // Before set_global_bounds: the reference check reads the model's XML ranges, not --fix pins.
+    set_covariance_options(config, options, *model, variable_systs[config.i_prime]);
     set_global_bounds(global_lb, global_ub, global_fixed, config, options, *model, variable_systs[config.i_prime], CVParams);
 
     //Metric Time

@@ -11,16 +11,20 @@
 
 namespace PROfit {
 
-PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : matter(matter), baseline_km(0) {
+std::vector<Eigen::VectorXf> lbl_ordering_octant_variants(const Eigen::VectorXf &phys, int i_dm21, int i_dm31, int i_s23) {
+    Eigen::VectorXf ordering = phys;
+    ordering(i_dm31) = 2.0f * phys(i_dm21) - phys(i_dm31);
+    Eigen::VectorXf octant = phys;
+    octant(i_s23) = 1.0f - phys(i_s23);
+    Eigen::VectorXf both = ordering;
+    both(i_s23) = octant(i_s23);
+    return {ordering, octant, both};
+}
 
-    // No model_functions: get_probs is overridden, so prob_types alone sets the
-    // component count (same pattern as the decay models).
-    prob_types = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-
+LBLInputMode resolve_lbl_inputs(const PROconfig &config, bool matter, std::vector<int> &ivars, double &baseline_km) {
     const std::map<std::string, int> &pmap = config.m_model_parameter_map;
-    const std::map<std::string, double> &opts = config.m_model_options;
     const bool has_L = pmap.count("L"), has_E = pmap.count("E"), has_LE = pmap.count("L/E");
-    const bool has_baseline = opts.count("baseline");
+    const bool has_baseline = config.m_model_options.count("baseline");
 
     if(has_LE && (has_L || has_E)) {
         log<LOG_ERROR>(L"%1% || Give the LBL model 'L'+'E', 'E' with baseline=, or a single 'L/E' — not a mix.") % __func__;
@@ -31,17 +35,25 @@ PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : ma
             log<LOG_ERROR>(L"%1% || baseline= conflicts with a per-event 'L' <parameter>: use one or the other.") % __func__;
             throw std::runtime_error("LBL baseline= given alongside an L parameter");
         }
-        input_mode = InputMode::PairLE;
         ivars = {pmap.at("L"), pmap.at("E")};
-    } else if(has_E && !has_L) {
+        return LBLInputMode::PairLE;
+    }
+    if(has_E && !has_L) {
         if(!has_baseline) {
             log<LOG_ERROR>(L"%1% || An 'E'-only LBL model needs the fixed baseline: <model ... baseline=\"<km>\">.") % __func__;
             throw std::runtime_error("LBL E-only mode requires baseline=");
         }
-        input_mode = InputMode::EOnly;
-        baseline_km = opts.at("baseline");
+        static bool warned_multi_detector = false;
+        if(config.m_num_detectors > 1 && !warned_multi_detector) {
+            warned_multi_detector = true;
+            log<LOG_WARNING>(L"%1% || baseline= applies ONE fixed baseline to all %2% detectors. If they sit at different baselines, use per-event 'L'+'E' <parameter>s instead.")
+                % __func__ % config.m_num_detectors;
+        }
+        baseline_km = config.m_model_options.at("baseline");
         ivars = {pmap.at("E")};
-    } else if(has_LE) {
+        return LBLInputMode::EOnly;
+    }
+    if(has_LE) {
         if(has_baseline) {
             log<LOG_ERROR>(L"%1% || baseline= is redundant with an 'L/E' <parameter>: only the ratio is physical in vacuum.") % __func__;
             throw std::runtime_error("LBL baseline= given alongside an L/E parameter");
@@ -50,13 +62,23 @@ PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : ma
             log<LOG_ERROR>(L"%1% || The matter LBL model cannot take a bare 'L/E': the MSW potential scales with E alone. Use per-event 'L'+'E', or 'E' with baseline=. (Pre-v3.0.4 'L/E' was silently read as E at L = 1300 km.)") % __func__;
             throw std::runtime_error("Matter LBL model cannot use a bare L/E");
         }
-        input_mode = InputMode::RatioLE;
         ivars = {pmap.at("L/E")};
-    } else {
-        log<LOG_ERROR>(L"%1% || Missing LBL model <parameter>s: 'L'+'E' [km, GeV signed], or 'E' with baseline=%2%.") % __func__
-            % (matter ? "" : ", or a single signed 'L/E' [km/GeV]");
-        throw std::runtime_error("Missing LBL parameters");
+        return LBLInputMode::RatioLE;
     }
+    log<LOG_ERROR>(L"%1% || Missing LBL model <parameter>s: 'L'+'E' [km, GeV signed], or 'E' with baseline=%2%.") % __func__
+        % (matter ? "" : ", or a single signed 'L/E' [km/GeV]");
+    throw std::runtime_error("Missing LBL parameters");
+}
+
+PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : matter(matter), baseline_km(0) {
+
+    // No model_functions: get_probs is overridden, so prob_types alone sets the
+    // component count (same pattern as the decay models).
+    prob_types = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+    input_mode = resolve_lbl_inputs(config, matter, ivars, baseline_km);
+
+    const std::map<std::string, double> &opts = config.m_model_options;
     auto opt_or = [&opts](const char *key, double fallback) {
         auto it = opts.find(key);
         return it == opts.end() ? fallback : it->second;
@@ -66,6 +88,11 @@ PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : ma
     n_newton          = (int)opt_or("n_newton",     default_n_newton);
 
     // Warnings are one-time: FC/AFC construct fresh models per universe.
+    static bool warned_bin_average = false;
+    if(opts.count("bin_average") && !warned_bin_average) {
+        warned_bin_average = true;
+        log<LOG_WARNING>(L"%1% || bin_average= only applies to LBL_3+1-vacuum_angles; the 3nu LBL models sample each truth bin at its midpoint. Ignored.") % __func__;
+    }
     if(!matter) {
         std::string ignored;
         for(const char *key : {"density", "electron_fraction", "n_newton"})
@@ -112,6 +139,8 @@ PROLBL::PROLBL(const PROconfig &config, const PROpeller &prop, bool matter) : ma
     pretty_param_units = {"eV^{2}", "eV^{2}", "", "", "", "rad"};
     is_log10 = {false, false, false, false, false, false};
     build_param_index();
+    // For <model><prior name="dmsq_32">: dm^2_32 = dm^2_31 - dm^2_21.
+    derived_quantities["dmsq_32"] = {{1, 1.0f}, {0, -1.0f}};
     lb = Eigen::VectorXf(6);
     ub = Eigen::VectorXf(6);
     lb << 6e-5f, -3e-3f, 0.2f, 0.01f, 0.3f, -M_PI;

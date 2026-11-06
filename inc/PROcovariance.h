@@ -33,7 +33,7 @@ namespace PROfit{
      * @brief Common engine for covariance-matrix chi-squared metrics.
      * @details Gathers the MC store (PROpeller), systematic object (PROsyst), and oscillation
      * model (PROmodel) into a single callable object whose operator() returns the chi-squared
-     * value and gradient for use by PROfitter. PROchi, PROpearson, and PROCNP
+     * value and gradient for use by PROfitter. PROchi, PROchi_pearson, and PROCNP
      * specialize only the per-bin statistical variance. All heavy objects are
      * stored as references or pointers to objects owned by the caller.
      */
@@ -77,6 +77,18 @@ namespace PROfit{
             virtual bool statisticalVariancesDependOnPrediction() const { return false; }
 
             /**
+             * @brief d var_k / d c_k, for a variance that is a per-bin function of the collapsed
+             * (shape-rescaled) prediction c handed to statisticalVariances().
+             * @details Only consulted when statisticalVariancesDependOnPrediction() is true. A
+             * non-empty result enables the analytic gradient, which then adds the
+             * −uᵀ diag(dvar/dθ) u term; an empty one (the default) falls back to
+             * analyticFallbackMode(). PROchi_pearson implements it. PROCNP cannot: its mu is the
+             * physics-only CV, not c.
+             */
+            virtual Eigen::VectorXf statisticalVarianceSlope(
+                [[maybe_unused]] const Eigen::VectorXf &collapsed_prediction) const { return Eigen::VectorXf(); }
+
+            /**
              * @brief Per-bin statistical variance used by getSingleChannelChi().
              * @details Defaults to statisticalVariances() with no parameter vector. PROchi and
              * PROCNP override it because their per-channel diagnostic path has historically
@@ -90,10 +102,11 @@ namespace PROfit{
             /**
              * @brief Gradient mode used when GradientAnalytic is requested but unavailable.
              * @details Defaults to PROmetric::GradientFallback (Gauss-Newton linearised FD),
-             * matching upstream's choice for PROCNP. PROpearson overrides this with a
-             * full-FD mode: its statistical variance is the prediction itself, so the
-             * (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the linearised mode drops is first-order in the
-             * fitted parameters, and dropping it stalls the minimiser.
+             * matching upstream's choice for PROCNP. PROchi_pearson (which only needs a
+             * fallback for EventByEvent) overrides this with a full-FD mode: its statistical
+             * variance is the prediction itself, so the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the
+             * linearised mode drops is first-order in the fitted parameters, and dropping it
+             * stalls the minimiser.
              */
             virtual GradientMode analyticFallbackMode() const { return GradientFallback; }
 
@@ -109,6 +122,36 @@ namespace PROfit{
              *                 counts become the off-diagonal statistical covariance.
              */
             void buildConstantStatCache(const Eigen::VectorXf &variances, const OverlapCells *overlap = nullptr);
+
+            /**
+             * @brief Full-binning spectrum Jacobian ds/dθ (N × nParams, FillSpectraGradient).
+             * @details In shape_only mode the per-channel rescale chain rule is applied, so
+             * Tᵀ G is the Jacobian of the collapsed, rescaled prediction. Binned strategies only.
+             * @param result   The prediction FillSpectra returned at @p param.
+             * @param shape_r  Per-collapsed-bin rescale factors from ShapeRescaleToData (shape_only).
+             */
+            Eigen::MatrixXf spectrumJacobian(const Eigen::VectorXf &param, const PROspec &result,
+                                             const Eigen::VectorXf &shape_r);
+
+            // Covariance options (PROconfig::CovarianceOptions), read at construction.
+            bool cov_lndet = false;               ///< Add ln det M − ln det M(reference) to χ².
+            bool cov_frozen = false;              ///< M held at the reference prediction.
+            std::vector<float> cov_reference_in;  ///< Configured reference vector (may be empty).
+
+            // Lazily built at the first evaluation (it calls the subclasses' statisticalVariances,
+            // so it cannot run in this constructor); reset by override_systs.
+            mutable bool cov_ref_ready = false;
+            mutable double lndet_ref = 0.0;                  ///< ln det M at the reference.
+            mutable std::vector<Eigen::Index> frozen_idx;    ///< Usable bins of the frozen M.
+            mutable Eigen::VectorXf frozen_var;              ///< Statistical variances at the reference (collapsed).
+            mutable Eigen::LLT<Eigen::MatrixXf> frozen_llt;  ///< Cholesky factor of the frozen M.
+            mutable float last_lndet_term = 0.0f;            ///< ln det part of the last operator() value.
+
+            /// The reference parameter vector: configured physics (and splines, when the vector
+            /// matches nParams()), else model defaults and the splines' prior centres.
+            Eigen::VectorXf covarianceReferenceParams() const;
+            /// Build lndet_ref (and the frozen M) at the reference prediction, once.
+            void ensureCovarianceReference() const;
 
         public:
             const PROconfig &config;  ///< Analysis configuration (non-owning reference).
@@ -138,6 +181,7 @@ namespace PROfit{
             virtual void override_systs(const PROsyst &new_syst) {
                 syst = &new_syst;
                 fs_cache.invalidate();
+                cov_ref_ready = false;
             }
 
             /** @brief The analysis configuration (also public as `config`). */
@@ -151,9 +195,20 @@ namespace PROfit{
              */
             std::vector<Eigen::Index> contributingBins() const override;
 
+            /**
+             * @brief Gauss-Newton Hessian diagonal 2 diag(Jᵀ M⁻¹ J) + prior curvature (see
+             * PROmetric). M is the metric's own stat + systematic covariance at @p param, held
+             * fixed. Binned strategies only; empty for EventByEvent or a rejected point.
+             */
+            Eigen::VectorXf GaussNewtonDiagonal(const Eigen::VectorXf &param) override;
+
+            float CovarianceLnDetTerm(const Eigen::VectorXf &param) override;
+
+            /// With a frozen M, the variances frozen at the reference prediction.
             Eigen::VectorXf GetStatVariances(const Eigen::VectorXf &collapsed_prediction,
                                              const Eigen::VectorXf &comparison,
                                              const Eigen::VectorXf &param) const override {
+                if(cov_frozen) { ensureCovarianceReference(); return frozen_var; }
                 return statisticalVariances(collapsed_prediction, comparison, &param);
             }
 

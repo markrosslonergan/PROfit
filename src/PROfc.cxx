@@ -98,6 +98,11 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
         // Without Poisson, clamp negative bins to 0 as PoissonVariation does.
         PROdata data = MakeToyData(variedSpec, overlap_frac ? &*overlap_frac : nullptr, args.throw_poisson,
                                    args.throw_poisson ? dseed(rng) : 0);
+        // The toy re-measures any physics prior about its own truth (systematic-like: held
+        // at the truth when systematics are not thrown).
+        data.physics_prior_centers = ToyPhysicsPriorCenters(*model, args.phy_params, args.throw_systematics, rng);
+        if(!data.physics_prior_centers.empty())
+            log<LOG_DEBUG>(L"%1% || Throw #%2% physics-prior centres: %3%") % __func__ % u % data.physics_prior_centers;
         //Metric Time
         // Same construction point as the data fit (carries shape_only etc.).
         PROmetric *metric = MakeMetric(args.chi2, args.config, args.prop, &args.systs, *model, data,

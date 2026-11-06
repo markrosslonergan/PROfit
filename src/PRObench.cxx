@@ -3,7 +3,7 @@
 #include "PROlog.h"
 #include "PROdata.h"
 #include "PROmetric.h"
-#include "PROmetrics/PROchi_neyman.h"
+#include "PROmetrics/PROmetricFactory.h"
 #include "PROmodel.h"
 #include "PROsyst.h"
 #include "PROpeller.h"
@@ -423,7 +423,10 @@ BenchResult time_collapse(const std::string &tag,
 // (o) Gradient cross-validation. Evaluates the gradient at random parameter
 // points under every mode and compares against the central-full FD reference.
 // Points rejected by the model constraint (chi² plateau, zero gradient) are
-// skipped. Emits one [GRADCHECK] line per mode.
+// skipped. Emits one [GRADCHECK] line per mode. The per-component relative
+// error blows up wherever one reference component is near zero (FD noise over a
+// floored denominator), so each line also carries the scale-free per-point
+// error ‖g − g_ref‖ / ‖g_ref‖, averaged (mean_norm_rel) and maximised over points.
 void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &params)
 {
     metric.setBounds(metric.LowerBound(), metric.UpperBound());
@@ -455,23 +458,32 @@ void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &param
     for (auto mode : modes) {
         metric.setGradientMode(mode);
         double max_abs = 0, sum_abs = 0, max_rel = 0, sum_rel = 0;
+        double max_norm_rel = 0, sum_norm_rel = 0;
         long   n_comp = 0;
         for (size_t r = 0; r < refs.size(); ++r) {
             metric.reset();
             metric(params[used_points[r]], g, true);
+            double diff2 = 0, ref2 = 0;
             for (size_t i = 0; i < np; ++i) {
                 const double a = std::abs((double)g(i) - (double)refs[r](i));
                 // Guard tiny denominators: FD reference noise dominates below ~1e-3.
                 const double rel = a / std::max(std::abs((double)refs[r](i)), 1e-3);
                 max_abs = std::max(max_abs, a);   sum_abs += a;
                 max_rel = std::max(max_rel, rel); sum_rel += rel;
+                diff2 += a * a;
+                ref2  += (double)refs[r](i) * (double)refs[r](i);
                 ++n_comp;
             }
+            const double norm_rel = std::sqrt(diff2) / std::max(std::sqrt(ref2), 1e-3);
+            max_norm_rel = std::max(max_norm_rel, norm_rel);
+            sum_norm_rel += norm_rel;
         }
         const double denom = std::max(1L, n_comp);
-        log<LOG_INFO>(L"[GRADCHECK] mode=%1% points=%2% max_abs=%3% mean_abs=%4% max_rel=%5% mean_rel=%6%")
+        const double npts  = std::max<double>(1.0, (double)refs.size());
+        log<LOG_INFO>(L"[GRADCHECK] mode=%1% points=%2% max_abs=%3% mean_abs=%4% max_rel=%5% mean_rel=%6% mean_norm_rel=%7% max_norm_rel=%8%")
             % PROmetric::gradientModeName(mode) % refs.size()
-            % max_abs % (sum_abs / denom) % max_rel % (sum_rel / denom);
+            % max_abs % (sum_abs / denom) % max_rel % (sum_rel / denom)
+            % (sum_norm_rel / npts) % max_norm_rel;
     }
 }
 
@@ -493,16 +505,17 @@ void run_grad_check(PROmetric &metric, const std::vector<Eigen::VectorXf> &param
 //     logged after each cell completes so [GRADBENCH] lines never interleave.
 //   - Fitted physics parameters are logged per fit for parameter-recovery
 //     plots; the injected truth is logged once as [GRADBENCH-TRUTH].
-// Metrics are constructed fresh per universe as PROchi/BinnedChi2 regardless of
-// the CLI --chi2 choice (the analytic mode is PROchi-only so far, and a fresh
-// metric is needed anyway to bind the per-universe data).
+// Metrics are constructed fresh per universe (to bind the per-universe data) with
+// the CLI --chi2 / --shapeonly choice and the BinnedChi2 strategy.
 void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
                         PROmetric &base_metric, const PROdata &base_data,
                         int n_universes, uint32_t base_seed, int nthreads,
                         const Eigen::VectorXf &truth_params,
                         const std::string &csv_path,
                         const std::string &preset_filter,
-                        bool throw_systs, bool throw_phys)
+                        bool throw_systs, bool throw_phys,
+                        const std::string &chi2_kind, bool shape_only, int precondition, bool ordering_octant_seeds,
+                        bool ordering_octant_polish, bool profile_nuisances)
 {
     const PROmodel &model = base_metric.GetModel();
     const PROsyst  &syst  = base_metric.GetSysts();
@@ -658,6 +671,10 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
         // Preset defaults only — CLI --fit-options are deliberately NOT applied
         // here so the presets are compared as-shipped.
         PROfitterConfig pcfg({}, preset, /*isScan=*/false);
+        pcfg.precondition = precondition;
+        pcfg.ordering_octant_seeds = ordering_octant_seeds;
+        pcfg.ordering_octant_polish = ordering_octant_polish;
+        pcfg.profile_nuisances = profile_nuisances;
         for (auto mode : *cell.modes) {
             pcfg.gradient_mode = mode;
 
@@ -665,8 +682,9 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
             std::atomic<int> next{0};
             auto worker = [&]() {
                 for (int u = next.fetch_add(1); u < n_universes; u = next.fetch_add(1)) {
-                    PROchi m("", config, prop, &syst, model, universes[u],
-                             PROmetric::BinnedChi2, /*shape_only=*/false);
+                    std::unique_ptr<PROmetric> mp = MakeMetric(chi2_kind, config, prop, &syst, model, universes[u],
+                                                               PROmetric::BinnedChi2, shape_only);
+                    PROmetric &m = *mp;
                     m.setBounds(bench_lb, bench_ub);
                     // Same fitter seed per universe across all (preset, mode)
                     // cells → identical LHS/PSO trajectories per universe.
@@ -859,7 +877,9 @@ std::vector<BenchResult> run_scale_test(
         run_grad_mode_fits(config, prop, metric, data, N_fit,
                            opts.rng_seed ^ 0x80u, opts.nthreads, opts.truth_params,
                            opts.grad_csv, opts.grad_presets,
-                           opts.throw_systs, opts.throw_phys);
+                           opts.throw_systs, opts.throw_phys,
+                           opts.chi2, opts.shape_only, opts.precondition, opts.ordering_octant_seeds,
+                           opts.ordering_octant_polish, opts.profile_nuisances);
     }
 
     log<LOG_INFO>(L"%1% || ===== PRObench scale-test complete: %2% tests =====")

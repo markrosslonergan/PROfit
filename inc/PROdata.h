@@ -64,6 +64,11 @@ private:
 
 public:
     uint32_t hash = 0; ///< MurmurHash3 of the PROconfig used to create this data; checked during serialisation. Zero-initialized so copies made before save() never carry (or serialize) indeterminate bytes.
+    /// Observed centres of the <model> physics priors (one per PROmodel::physics_priors
+    /// entry), i.e. the external measurement as seen by this dataset. Empty = the XML centres
+    /// (real data, Asimov); pseudo-experiments set ToyPhysicsPriorCenters. Metrics built from
+    /// this data read it. Not serialized.
+    std::vector<float> physics_prior_centers;
 
     // Statistical overlap with another analysis (PROoverlap.h). Not serialised here: real
     // data keeps its cells in <tag>_overlap_data.bin, toys get theirs from MakeToyData.

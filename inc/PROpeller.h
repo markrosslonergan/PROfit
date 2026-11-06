@@ -117,6 +117,7 @@ namespace PROfit{
              * copy on every access; here the transpose is folded into the GEMV instead.
              */
             Eigen::VectorXf WeightedColSum(size_t rowvar, size_t colvar, const Eigen::VectorXf &w) const {
+                require(rowvar, colvar);
                 if (rowvar <= colvar) return data[compute_index(rowvar, colvar)].transpose() * w;
                 return data[compute_index(colvar, rowvar)] * w;
             }
@@ -124,6 +125,7 @@ namespace PROfit{
             /// Column sums of the logical histogram H(rowvar, colvar) (per-colvar-bin totals),
             /// transpose-free like WeightedColSum.
             Eigen::VectorXf UnweightedColSum(size_t rowvar, size_t colvar) const {
+                require(rowvar, colvar);
                 if (rowvar <= colvar) return data[compute_index(rowvar, colvar)].colwise().sum().transpose();
                 return data[compute_index(colvar, rowvar)].rowwise().sum();
             }
@@ -146,6 +148,24 @@ namespace PROfit{
 
             /** @brief Return the number of variables for which storage was initialised. */
             size_t size() const { return n_vars; }
+
+            /** @brief True if the matrix for pair (i, j) was allocated (pairs nothing reads are left empty). */
+            bool has(size_t i, size_t j) const {
+                if (i >= n_vars || j >= n_vars) return false;
+                return data[i <= j ? compute_index(i, j) : compute_index(j, i)].size() > 0;
+            }
+
+            /** @brief Fatal error unless pair (i, j) was allocated. */
+            void require(size_t i, size_t j) const {
+                if (has(i, j)) return;
+                log<LOG_ERROR>(L"%1% || No pre-binned matrix for variables (%2%, %3%): one of them was carried along only (neither fitted, plotted nor a systematic binning) when this _prop.bin was written. Re-run with --force to re-process.") % __func__ % i % j;
+                throw std::runtime_error("Missing pre-binned matrix for variable pair (" + std::to_string(i) + ", " + std::to_string(j) + ")");
+            }
+
+            /** @brief Free the matrix for pair (i, j). */
+            void drop(size_t i, size_t j) {
+                if (has(i, j)) data[i <= j ? compute_index(i, j) : compute_index(j, i)] = Eigen::MatrixXf();
+            }
     };
 
     /**
@@ -217,8 +237,14 @@ namespace PROfit{
             std::vector<Eigen::VectorXf> variable_mc_stat_err;
             /// Per-variable bin centre value vectors.
             std::vector<Eigen::VectorXf> variable_midbin;
-            /// Pre-binned 2D histogram storage for all (variable, variable) pairs.
+            /// Pre-binned 2D histogram storage for (variable, variable) pairs. FillSpectra only
+            /// reads pair (b, v) to migrate a spline binned in variable b into a filled variable
+            /// v != b, so only off-diagonal pairs of filled variables (PROconfig::IsFilledVariable)
+            /// are allocated; the rest stay empty.
             PROhistStorage variable_hist_storage;
+            /// Variables FillSpectra may fill in binned mode (models build H_combined only for
+            /// these); empty = every variable. Not serialized: run_process sets it from the config.
+            std::vector<char> binned_variables;
 
             uint32_t hash; ///< MurmurHash3 of the PROconfig used to create this PROpeller; checked during serialisation.
 
@@ -265,6 +291,22 @@ namespace PROfit{
 
             /** @brief Return the number of analysis variables stored in this PROpeller. */
             size_t NVariable() const {return variable_values.size();}
+            /** @brief True if variable @p v gets binned response matrices (see binned_variables). */
+            bool IsBinnedVariable(size_t v) const { return binned_variables.empty() || (v < binned_variables.size() && binned_variables[v]); }
+
+            /**
+             * @brief Restrict the binned machinery to the variables in @p filled.
+             * @details Sets binned_variables and frees every hist-storage pair FillSpectra
+             * cannot read (a diagonal pair, or one touching an unfilled variable), so a
+             * _prop.bin written before pairs were skipped shrinks to the same footprint.
+             */
+            void RestrictBinnedVariables(const std::vector<char> &filled) {
+                binned_variables = filled;
+                const size_t n = variable_hist_storage.size();
+                for (size_t i = 0; i < n; ++i)
+                    for (size_t j = i; j < n; ++j)
+                        if (i == j || !IsBinnedVariable(i) || !IsBinnedVariable(j)) variable_hist_storage.drop(i, j);
+            }
             /** @brief Return the number of MC events stored in this PROpeller. */
             size_t NEvent() const {return added_weights.size();}
 
@@ -353,6 +395,7 @@ namespace PROfit{
                     //Scale the binned bits first
                     for(size_t io =0; io<inconfig.m_num_variables; io++){
                         for(size_t jo =io; jo<inconfig.m_num_variables; jo++){
+                            if(!variable_hist_storage.has(io,jo)) continue;
                             log<LOG_INFO>(L"%1% || and scales other bins  %2% .") % __func__  %  scaleotherbins[io];
                             for (int o : scaleotherbins[io]) {
                                 for (int j : scaleotherbins[jo]) {

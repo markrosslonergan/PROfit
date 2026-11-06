@@ -133,6 +133,12 @@ struct PROpt {
     bool show_fit_help = false;
     bool eventbyevent=false;
     bool shapeonly = false;
+    bool lndet = false;        // --lndet: add ln det M to the covariance chi2
+    bool frozen_cov = false;   // --frozen-cov: hold M at the --cov-reference prediction
+    std::map<std::string, float> cov_reference;
+    bool ordering_octant_seeds = false;  // --ordering-octant-seeds (LBL models only)
+    bool ordering_octant_polish = false; // --ordering-octant-polish (LBL models only)
+    bool profile_nuisances = false;      // --profile-nuisances (-c poisson only so far)
     bool rateonly = false;
     int fit_variable = -1; // -1 => take the fitting variable from the XML (fit="true", else var0)
     bool force = false;
@@ -284,7 +290,8 @@ void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmo
 Eigen::VectorXf remap_spline_params(const Eigen::VectorXf &params, size_t nphys, const std::vector<std::string> &old_names, const std::vector<std::string> &new_names);
 void empty_bin_check(const PROconfig &config, const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROsyst &systs, const PROdata data, bool use_real_data);
 void set_global_bounds(Eigen::VectorXf &lb, Eigen::VectorXf &ub, std::vector<int> &fixed, const PROconfig &config, const PROpt &options, PROmodel &model, PROsyst &systs, const Eigen::VectorXf &CVParams);
-void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, const PROmetric &metric);
+void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, PROmetric &metric);
+void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs);
 
 // Per-subcommand entry points (one PROfit_<name>.cxx each).
 void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstructs, const PROconfig &config, PROpt &options);

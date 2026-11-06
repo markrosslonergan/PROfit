@@ -219,6 +219,7 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
                               CollapseMatrix(config, shifted.Error()));
                 data = MakeToyData(mean, &*overlap_frac, true, dseed(myseed.global_rng));
             }
+            data.physics_prior_centers = ToyPhysicsPriorCenters(metric.GetModel(), throwp.head(metric.GetModel().nparams), !options.statonly_brazil, PROseed::global_rng);
             // Same construction point as the data fit (carries --shapeonly).
             PROmetric *brazil_metric = MakeMetric(options.chi2, config, prop, &metric.GetSysts(), metric.GetModel(), data,
                                                   options.eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2,

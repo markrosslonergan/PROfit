@@ -13,6 +13,16 @@
 
 namespace PROfit {
 
+    // A binned fill reads the model's response matrix for var_index, which is not built for a
+    // variable the propeller only carries along (PROconfig::IsFilledVariable).
+    static void RequireBinnedVariable(const PROconfig &config, const PROmodel &model, size_t var_index) {
+        if(var_index < model.H_combined.size()
+           && (size_t)model.H_combined[var_index].rows() == config.m_num_variable_bins_total[var_index]) return;
+        log<LOG_ERROR>(L"%1% || Binned fill of variable %2%, which is carried along only (not the fitting variable, plot=\"false\", and no systematic is binned in it), so no response matrix was built. Mark it plot=\"true\" to fill it.")
+            % __func__ % var_index;
+        throw std::runtime_error("Binned FillSpectra of a carried-only variable " + std::to_string(var_index));
+    }
+
     PROspec FillSpectra(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const std::map<std::string, float> &inparams, bool binned, size_t var_index) {
         // default parameters
         Eigen::VectorXf params = Eigen::VectorXf::Zero(inmodel.nparams + insyst.GetNSplines());
@@ -70,6 +80,7 @@ namespace PROfit {
                                   cache.last_syst_ptr != &insyst ||
                                   cache.last_model_ptr != &inmodel);
         if(ctx_changed) {
+            RequireBinnedVariable(inconfig, inmodel, var_index);
             cache.phys_grid_valid = false;
             cache.unweighted_sums.clear();
         }
@@ -246,6 +257,7 @@ namespace PROfit {
 
 
     Eigen::MatrixXf FillSpectraGradient(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, size_t var_index) {
+        RequireBinnedVariable(inconfig, inmodel, var_index);
         const size_t nbins_var = inconfig.m_num_variable_bins_total[var_index];
         const size_t nsplines  = insyst.GetNSplines();
         const size_t nphys     = inmodel.nparams;
@@ -351,6 +363,7 @@ namespace PROfit {
         Eigen::VectorXf shifts = params.segment(inmodel.nparams, params.size() - inmodel.nparams);
 
         if(binned) {
+            RequireBinnedVariable(inconfig, inmodel, var_index);
             //log<LOG_INFO>(L"%1% || Starting systw calculation %2%") % __func__ % var_index;
             //auto start_systw = std::chrono::high_resolution_clock::now();
 
