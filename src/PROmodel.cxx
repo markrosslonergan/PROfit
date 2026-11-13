@@ -11,6 +11,7 @@
 #include "PROmodels/PROmodel3p2.h"
 #include "PROmodels/PROmodelLBL.h"
 #include "PROmodels/PROmodelSine.h"
+#include <stdexcept>
 
 namespace PROfit {
 
@@ -30,26 +31,27 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
     size_t J    = model_functions.empty() ? prob_types.size() : model_functions.size();
     H_combined.resize(nvar);
 
-    // This pre-bins the WHOLE MC event store into the dense binned-eval
+    // This pre-bins the WHOLE MC event store into the sparse binned-eval
     // response matrices for every variable, and is the silent chunk of model
-    // construction — announce the size up front so a long stall here is
-    // labeled (it scales with subchannel count via the uncollapsed reco bins).
-    {
-        size_t total_floats = 0;
-        for(size_t v = 0; v < nvar; ++v)
-            total_floats += prop.variable_mc_stat_err[v].size() * (size_t)n_phys_bins * J;
-        log<LOG_INFO>(L"%1% || Pre-binning %2% MC events into response matrices: %3% variables x %4% components x %5% physics-grid bins (~%6% MB). This runs once per model construction.")
-            % __func__ % prop.NEvent() % nvar % J % n_phys_bins
-            % (total_floats * sizeof(float) / (1024.0 * 1024.0));
+    // construction — announce it up front so a long stall here is labeled.
+    log<LOG_INFO>(L"%1% || Pre-binning %2% MC events into sparse response matrices: %3% variables x %4% components x %5% physics-grid bins. This runs once per model construction.")
+        % __func__ % prop.NEvent() % nvar % J % n_phys_bins;
+
+    if((long long)n_phys_bins * (long long)J > (long long)std::numeric_limits<HMatrix::StorageIndex>::max()) {
+        log<LOG_ERROR>(L"%1% || Physics grid too large for sparse column index: %2% bins x %3% components.") % __func__ % n_phys_bins % J;
+        throw std::runtime_error("H_combined column count exceeds sparse StorageIndex range");
     }
 
+    std::vector<Eigen::Triplet<float>> trips;
+    trips.reserve(prop.NEvent());
     for(size_t v = 0; v < nvar; ++v) {
         size_t n_reco_v = prop.variable_mc_stat_err[v].size();
-        // Fill events directly into component m's column block
-        // [m*n_phys_bins, (m+1)*n_phys_bins) of H_combined[v] — no per-component
-        // staging copy (nothing read the old `hists` member, and the duplicate
-        // doubled peak memory plus a full zero+copy pass).
-        H_combined[v] = Eigen::MatrixXf::Zero(n_reco_v, n_phys_bins * J);
+        // Collect (row, col, weight) per event into component m's column block
+        // [m*n_phys_bins, (m+1)*n_phys_bins) of H_combined[v]. Element-wise
+        // insertion into a compressed sparse matrix is O(nnz) per insert, so
+        // build from triplets once; setFromTriplets sums duplicate (row, col)
+        // entries, reproducing the dense `+=` accumulation.
+        trips.clear();
         for(size_t i = 0; i < prop.NEvent(); ++i) {
             int rbin = prop.VariableBinIndex(v, i);
             if(rbin < 0) continue;
@@ -73,8 +75,17 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
             }
             if(!valid) continue;
 
-            H_combined[v](rbin, (long int)col * n_phys_bins + flat_phys) += prop.added_weights[i];
+            trips.emplace_back(rbin, (long int)col * n_phys_bins + flat_phys, prop.added_weights[i]);
         }
+        H_combined[v] = HMatrix(n_reco_v, n_phys_bins * J);
+        H_combined[v].setFromTriplets(trips.begin(), trips.end());
+        H_combined[v].makeCompressed();
+
+        const double total = (double)n_reco_v * (double)(n_phys_bins * J);
+        log<LOG_INFO>(L"%1% || Variable %2%: response matrix %3% x %4%, %5% non-zeros (%6%%% filled, ~%7% MB).")
+            % __func__ % v % n_reco_v % (n_phys_bins * J) % H_combined[v].nonZeros()
+            % (total > 0 ? 100.0 * H_combined[v].nonZeros() / total : 0.0)
+            % (H_combined[v].nonZeros() * (sizeof(float) + sizeof(HMatrix::StorageIndex)) / (1024.0 * 1024.0));
     }
 
     // Store per-ivar bin counts for downstream use (e.g. decay redistribution).
