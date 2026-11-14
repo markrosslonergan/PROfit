@@ -1,3 +1,4 @@
+#include "CSRDoubleProduct.h"
 #include "PROcess.h"
 #include "PROlog.h"
 #include "PROspec.h"
@@ -226,7 +227,7 @@ namespace PROfit {
 
                 auto probs = inmodel.get_probs(phys, cache.phys_grid);
                 Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-                result = inmodel.H_combined[var_index] * probs_flat;
+                result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             }
             cache.last_result = std::move(result);
             cache.last_phys = phys;
@@ -312,7 +313,7 @@ namespace PROfit {
             }
             auto probs = inmodel.get_probs(phys, cache.phys_grid);
             Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-            result = inmodel.H_combined[var_index] * probs_flat;
+            result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             pgrads = inmodel.get_probs_grad(phys, cache.phys_grid);
         }
 
@@ -321,7 +322,7 @@ namespace PROfit {
         if(!inmodel.is_trivial) {
             for(size_t p = 0; p < nphys; ++p) {
                 Eigen::Map<const Eigen::VectorXf> dprobs_flat(pgrads[p].data(), pgrads[p].size());
-                G.col(p) = systw.cwiseProduct(inmodel.H_combined[var_index] * dprobs_flat);
+                G.col(p) = systw.cwiseProduct(CSRDoubleProduct::multiply(inmodel.H_combined[var_index], dprobs_flat));
             }
         }
         constexpr float kTiny = 1e-30f;
@@ -482,7 +483,7 @@ namespace PROfit {
                 // Single GEMV: H_combined[var_index] has shape (n_reco, n_phys*J).
                 // probs is (n_phys, J) in column-major, so probs.data() = [col0 | col1 | ...] = probs_flat.
                 Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-                result = inmodel.H_combined[var_index] * probs_flat;
+                result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             }
 
             // Apply post-migration systematic weights (cross-section, detector) at reco level.

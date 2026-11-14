@@ -30,6 +30,7 @@
 #include "PROpeller.h"
 
 #include <Eigen/Eigen>
+#include <Eigen/Sparse>
 
 #include <cstdlib>
 #include <cmath>
@@ -72,12 +73,16 @@ public:
     /// for physics parameters @p phys and kinematic variable value @p x.
     std::vector<std::function<float(const Eigen::VectorXf&, float)>> model_functions;
     std::function<int(const Eigen::VectorXf&)> model_constraint; ///< Optional parameter constraint function.
+    /// Sparse storage for H_combined. Row-major (CSR) so the FillSpectra GEMV
+    /// walks each reco row's non-zeros contiguously.
+    using HMatrix = Eigen::SparseMatrix<float, Eigen::RowMajor>;
     /// Pre-binned event histograms, one matrix per reco variable v of shape
     /// (n_reco_v, n_phys_bins * J): component m's block is columns
     /// [m*n_phys_bins, (m+1)*n_phys_bins). Enables a single GEMV in FillSpectra.
-    /// (Events are filled directly into these blocks; there is no separate
-    /// per-component staging copy.)
-    std::vector<Eigen::MatrixXf> H_combined;
+    /// Stored sparse: a reco row only couples to the physics-grid block of its
+    /// own mode/detector/subchannel, so almost all entries are structural zeros
+    /// and the GEMV cost scales with the number of non-zeros, not rows x cols.
+    std::vector<HMatrix> H_combined;
 
     std::vector<size_t> prob_types; ///< Probability-type indices, matching model_functions indices.
 
