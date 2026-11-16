@@ -1043,6 +1043,15 @@ namespace PROfit {
             chains[fid]->SetCacheSize(100000000); // 100 MB read-ahead cache
             chains[fid]->AddBranchToCache("*", kTRUE); // cache all active branches
 
+            // Lazy loading of the systematic weight branches. The entry loop below only
+            // positions the chain (LoadTree); every TTreeFormula loads the branches it
+            // needs by itself at evaluation time
+            std::vector<std::string> lazy_weight_names;
+            for(const auto& [name, _] : f_event_weights[fid][0]) lazy_weight_names.push_back(name);
+            std::vector<TBranch*> lazy_weight_branches;
+            long int n_entries_filled = 0, n_entries_weights_loaded = 0;
+            std::vector<char> branch_fills(num_branch, 0);
+
             // loop over all entries
             size_t to_print = nevents > 5 ? nevents / 5 : 1;
             if(to_print>50000)to_print=50000;
@@ -1061,7 +1070,14 @@ namespace PROfit {
                     }
                     time_stamp = time(nullptr);
                 }
-                chains[fid]->GetEntry(i);
+                // Instead of loading every branch for every entry, we position the chain
+                // on entry i and reads nothing, then the formulas load what they need
+                // when evaluated
+                if(chains[fid]->LoadTree(i) < 0){
+                    log<LOG_ERROR>(L"%1% || ERROR: could not load entry %2% of file %3% (%4%).") % __func__ % i % fid % fn.c_str();
+                    log<LOG_ERROR>(L"Terminating.");
+                    exit(EXIT_FAILURE);
+                }
 
                 // update the branches to the current event
                 for(int ib = 0; ib != num_branch; ++ib) {
@@ -1076,6 +1092,19 @@ namespace PROfit {
                 // Refresh the systematics loaders
                 if (chains[fid]->GetTreeNumber() != currentTreeNumber) {
                     currentTreeNumber = chains[fid]->GetTreeNumber();
+
+                    // The TBranch objects belong to the current tree of the chain, so the
+                    // lazily loaded weight branches must be looked up again on every switch
+                    lazy_weight_branches.clear();
+                    for(const auto &name : lazy_weight_names){
+                        TBranch *wb = chains[fid]->GetBranch(name.c_str());
+                        if(!wb){
+                            log<LOG_ERROR>(L"%1% || ERROR: systematic weight branch %2% not found in tree %3% of file %4% (%5%).") % __func__ % name.c_str() % currentTreeNumber % fid % fn.c_str();
+                            log<LOG_ERROR>(L"Terminating.");
+                            exit(EXIT_FAILURE);
+                        }
+                        lazy_weight_branches.push_back(wb);
+                    }
 
                    for(size_t is = 0; is != total_num_systematics; ++is){
                         if(syst_vector[0][is].HasWeightFormula()){
@@ -1093,6 +1122,28 @@ namespace PROfit {
                         const char* branchName = branch->GetName();
                         bool isActive = chains[fid]->GetBranchStatus(branchName);
                         log<LOG_DEBUG>(L"%1% || BRANCH %2% is %3%") % __func__ % branchName % (isActive ? "active" : "inactive");
+                    }
+                }
+
+                // Which branches fill this entry? process_cafana_event drops an entry whose
+                // total weight is exactly zero before storing anything, so such branches
+                // are skipped here, before any variable, matching var or universe weight
+                // is evaluated
+                bool any_fill = false, need_syst_weights = false;
+                for(int ib = 0; ib != num_branch; ++ib) {
+                    branch_fills[ib] = (branches[ib]->GetTotalWeight() != 0);
+                    if(branch_fills[ib]){
+                        any_fill = true;
+                        if(branches[ib]->GetIncludeSystematics()) need_syst_weights = true;
+                    }
+                }
+                if(!any_fill) continue;
+                ++n_entries_filled;
+
+                if(need_syst_weights){
+                    ++n_entries_weights_loaded;
+                    for(TBranch *wb : lazy_weight_branches) {
+                        wb->GetEntry(wb->GetTree()->GetReadEntry());
                     }
                 }
 
@@ -1121,6 +1172,7 @@ namespace PROfit {
 
                 //branch loop
                 for(int ib = 0; ib != num_branch; ++ib) {
+                    if(!branch_fills[ib]) continue;
                     const size_t prop_size_before = inprop.NEvent();
                     process_cafana_event(inconfig, branches[ib], f_event_weights[fid][0], inconfig.m_mcgen_pot[fid]  / inconfig.m_mcgen_scale[fid] * inconfig.m_mcgen_partial_load_frac[fid], subchannel_index[ib], syst_vector, sys_weight_value, branch_force_cv_fill[ib] ? zero_syst_applies : branch_syst_applies[ib], inprop, (bool)branch_force_cv_fill[ib]);
                     // Store matching vars only if process_cafana_event actually added an entry
@@ -1135,6 +1187,7 @@ namespace PROfit {
                 }
 
             } //end of entry loop
+            log<LOG_INFO>(L"%1% || File %2% -- %3% of %4% entries filled a subchannel; systematic weight branches (%5%) were read for %6% of them.") % __func__ % fid % n_entries_filled % nevents % lazy_weight_names.size() % n_entries_weights_loaded;
 
         } //end of file loop
 
