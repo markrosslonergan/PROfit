@@ -222,6 +222,7 @@ namespace PROfit {
                 PROdata masked(mask.cwiseProduct(variable_data[io].Spec()),
                                mask.cwiseProduct(variable_data[io].Error()));
                 masked.hash = variable_data[io].hash;
+                masked.physics_prior_centers = variable_data[io].physics_prior_centers;
                 // Cells keep their masked-out bins: the metric drops those (zero variance).
                 masked.has_overlap = variable_data[io].has_overlap;
                 masked.overlap = variable_data[io].overlap;
@@ -325,6 +326,11 @@ namespace PROfit {
             if(c.shape_only != pjconf.shape_only) {
                 log<LOG_ERROR>(L"%1% || PROjector constraint was produced %2% --shapeonly but this run is %3%; the nuisance posterior is not transferable.")
                     % __func__ % (c.shape_only ? "with" : "without") % (pjconf.shape_only ? "shape-only" : "not shape-only");
+                return false;
+            }
+            if(c.lndet != pjconf.lndet || c.frozen_cov != pjconf.frozen_cov) {
+                log<LOG_ERROR>(L"%1% || PROjector constraint was produced with --lndet %2% / --frozen-cov %3%, this run has %4% / %5%; the nuisance posterior is not transferable.")
+                    % __func__ % c.lndet % c.frozen_cov % pjconf.lndet % pjconf.frozen_cov;
                 return false;
             }
 
@@ -568,6 +574,8 @@ namespace PROfit {
         c.physics_were_fixed = !pjconf.float_physics;
         c.prefit_chi2 = chi2;
         c.shape_only = metric.ShapeOnly();
+        c.lndet = metric.GetConfig().m_covariance_options.lndet;
+        c.frozen_cov = metric.GetConfig().m_covariance_options.frozen;
 
         log<LOG_INFO>(L"%1% || ############ PROjector pre-fit posterior summary ############") % __func__;
         int n_widened = 0;

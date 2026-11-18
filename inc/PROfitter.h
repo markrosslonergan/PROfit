@@ -143,6 +143,35 @@ namespace PROfit {
         /// See PROmetric::GradientMode for the full mode matrix.
         PROmetric::GradientMode gradient_mode = PROmetric::GradientAnalytic; ///< Gradient mode PROfitter::Fit sets on the metric (default: exact analytic; see PROmetric::GradientMode for the fallback).
 
+        /// Diagonal preconditioning of every L-BFGS-B descent: 1 = on, 0 = off, -1 = auto
+        /// (on when the model asks for it, PROmodel::wants_preconditioning — the LBL models).
+        /// Each descent runs in z = (x − x0)/s with s_i = 1/sqrt(F_ii), F the Gauss-Newton
+        /// Hessian diagonal at its start x0 (PROmetric::GaussNewtonDiagonal), so every free
+        /// parameter has χ² curvature ~1; see PROfitter::localMinimize.
+        int precondition = -1;
+
+        /// Ordering × octant seeding (off by default; `--ordering-octant-seeds`): every Fit also
+        /// starts from the four ordering/octant variants of each of its start points — every
+        /// passed-in seed and the best Latin/swarm point (PROmodel::degenerate_variants: mass
+        /// ordering × θ23 octant for the LBL models; a no-op for every other model) — and the
+        /// harmonic-scan minima in calcFreqSeedPoints are polished from their variants too. The
+        /// variants are extra descents: they do not take budget from the Latin multistarts.
+        bool ordering_octant_seeds = false;
+
+        /// Ordering × octant polish (off by default; `--ordering-octant-polish`), independent of
+        /// ordering_octant_seeds (either, or both): after its usual descents every Fit refines once
+        /// more from each degenerate variant of its best point, so all four basins are tried from
+        /// the fit's own minimum — a fixed 3 extra descents per fit (LBL models only).
+        bool ordering_octant_polish = false;
+
+        /// Nuisance profiling (off by default; `--profile-nuisances`; -c poisson only so far):
+        /// every local descent runs L-BFGS-B over the free physics parameters only, and at each
+        /// physics point solves the nuisances by projected, damped Gauss-Newton steps on the
+        /// metric's full Hessian (PROmetric::GaussNewtonSystem). For ~10² nuisances whose data
+        /// constraints mix them (condition numbers ~10⁵), where L-BFGS alone needs thousands of
+        /// iterations. Metrics without GaussNewtonSystem keep the normal descent (one warning).
+        bool profile_nuisances = false;
+
         /** @brief Default constructor — leaves all parameters at their default values. */
         PROfitterConfig(){};
 
@@ -359,6 +388,19 @@ namespace PROfit {
                     n_max_local_retries = value;
                 } else if(param_name == "use_bkg_seed") {
                     use_bkg_seed = (value != 0);
+                } else if(param_name == "ordering_octant_seeds") {
+                    ordering_octant_seeds = (value != 0);
+                } else if(param_name == "ordering_octant_polish") {
+                    ordering_octant_polish = (value != 0);
+                } else if(param_name == "profile_nuisances") {
+                    profile_nuisances = (value != 0);
+                } else if(param_name == "precondition") {
+                    precondition = (int)value;
+                    if(precondition < -1 || precondition > 1 || (float)precondition != value) {
+                        log<LOG_ERROR>(L"%1% || precondition must be -1 (auto), 0 (off) or 1 (on). Provided value is %2%.")
+                            % __func__ % value;
+                        exit(EXIT_FAILURE);
+                    }
 
                 // Particle Swarm Optimization parameters
                 } else if(param_name == "n_swarm_particles") {
@@ -473,6 +515,10 @@ namespace PROfit {
             log<LOG_INFO>(L"%1% || n_localfit: %2%  ") % __func__ % n_localfit;
             log<LOG_INFO>(L"%1% || n_max_local_retries: %2%  ") % __func__ % n_max_local_retries;
             log<LOG_INFO>(L"%1% || use_bkg_seed: %2%  ") % __func__ % use_bkg_seed;
+            log<LOG_INFO>(L"%1% || precondition: %2%  ") % __func__ % precondition;
+            log<LOG_INFO>(L"%1% || ordering_octant_seeds: %2%  ") % __func__ % ordering_octant_seeds;
+            log<LOG_INFO>(L"%1% || ordering_octant_polish: %2%  ") % __func__ % ordering_octant_polish;
+            log<LOG_INFO>(L"%1% || profile_nuisances: %2%  ") % __func__ % profile_nuisances;
             
             log<LOG_INFO>(L"%1% || ------------ Particle Swarm Optimization -------------- ") % __func__ ;
             log<LOG_INFO>(L"%1% || n_swarm_particles: %2%  ") % __func__ % n_swarm_particles;
@@ -539,6 +585,10 @@ namespace PROfit {
             log<LOG_INFO>(L"  n_localfit                           : Total number of L-BFGS-B fits to do after PSO");
             log<LOG_INFO>(L"  n_max_local_retries                  : Maximum retries if L-BFGS-B throws an exception");
             log<LOG_INFO>(L"  use_bkg_seed                         : 1 (default) fits the background-only fixed seed (physics pinned at model defaults) as a candidate; 0 disables");
+            log<LOG_INFO>(L"  precondition                         : Scale each L-BFGS-B descent by the Gauss-Newton curvature of every parameter: -1 (default) auto = on for LBL models, 1 on, 0 off");
+            log<LOG_INFO>(L"  ordering_octant_seeds                : 1 = also refine every seed / start point from its mass-ordering x theta23-octant mirrors (LBL models only); 0 (default) off");
+            log<LOG_INFO>(L"  ordering_octant_polish               : 1 = after the usual descents, refine from the mass-ordering x theta23-octant mirrors of the best point (LBL models only); 0 (default) off");
+            log<LOG_INFO>(L"  profile_nuisances                    : 1 = L-BFGS-B over physics only, nuisances solved by damped Gauss-Newton at every physics point (-c poisson only so far); 0 (default) off");
             
             log<LOG_INFO>(L"");
             log<LOG_INFO>(L"------ Particle Swarm Optimization (PSO) Parameters ------");
@@ -700,14 +750,26 @@ namespace PROfit {
                     progress = pin;
                     return;
             }
+            // The solver's state belongs to the LAST descent; a preconditioned descent ran in
+            // z = (x − x0)/s, so these map it back to x with that descent's scales. After a
+            // profile_nuisances descent it describes the outer physics-only problem.
             /** @brief Return the gradient vector at the final L-BFGS-B solution. */
-            Eigen::VectorXf FinalGradient() const {return solver.final_grad();}
-            /** @brief Return the L2 norm of the gradient at the final solution. */
+            Eigen::VectorXf FinalGradient() const {
+                return last_scales.size() ? Eigen::VectorXf(solver.final_grad().cwiseQuotient(last_scales)) : solver.final_grad();
+            }
+            /** @brief Return the projected-gradient norm at the final solution (in the descent's own variables). */
             float FinalGradientNorm() const {return solver.final_grad_norm();}
             /** @brief Return the approximate Hessian matrix at the final solution (from L-BFGS-B). */
-            Eigen::MatrixXf Hessian() const {return solver.final_approx_hessian();}
+            Eigen::MatrixXf Hessian() const {
+                if(!last_scales.size()) return solver.final_approx_hessian();
+                const Eigen::VectorXf inv = last_scales.cwiseInverse();
+                return inv.asDiagonal() * solver.final_approx_hessian() * inv.asDiagonal();
+            }
             /** @brief Return the approximate inverse Hessian (parameter covariance) at the final solution. */
-            Eigen::MatrixXf InverseHessian() const {return solver.final_approx_inverse_hessian();}
+            Eigen::MatrixXf InverseHessian() const {
+                if(!last_scales.size()) return solver.final_approx_inverse_hessian();
+                return last_scales.asDiagonal() * solver.final_approx_inverse_hessian() * last_scales.asDiagonal();
+            }
             /** @brief Return the parameter covariance matrix (alias for InverseHessian()). */
             Eigen::MatrixXf Covariance() const {return InverseHessian();}
             /** @brief Return the best-fit parameter vector. */
@@ -731,6 +793,72 @@ namespace PROfit {
                 return Covariance()*chi2/float(ndof);
             }
 
+        private:
+            Eigen::VectorXf last_scales; ///< Scales of the last descent when it was preconditioned, else empty.
+
+            /// True if this fitter's descents on @p metric are preconditioned (fit option `precondition`).
+            bool usePreconditioning(const PROmetric &metric) const;
+
+            /**
+             * @brief Per-parameter scales for a preconditioned descent starting at @p x0.
+             * @details s_i = 1/sqrt(F_ii) from PROmetric::GaussNewtonDiagonal, clamped to
+             * [1e-6, 0.25] × R_i, with R_i the bound width (4 for an infinite bound, as the Latin
+             * hypercube). Falls back to 1e-3 R_i where F is unavailable or the direction is
+             * numerically flat (F_ii R_i² < 1e-6, e.g. a phase at zero mixing). Fixed (zero-width)
+             * parameters get 1.
+             */
+            Eigen::VectorXf preconditionScales(PROmetric &metric, const Eigen::VectorXf &x0,
+                                               const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
+
+            /**
+             * @brief One local L-BFGS-B descent from @p x within [lb, ub]; the single entry point
+             * of every local fit in Fit() and calcFreqSeedPoints().
+             * @details Without preconditioning this is solver.minimize(metric, x, fx, lb, ub).
+             * With it, the solver minimises χ²(x0 + s∘z) over z in [(lb − x0)/s, (ub − x0)/s]
+             * (gradient s∘∇χ²) and x is mapped back (clamped into the box against rounding).
+             * The curvature of a log10 mixing angle changes by orders of magnitude along a
+             * descent, so a descent that ends more than 3 scales from its start in any
+             * parameter is rescaled at its end point and run once more; if that second
+             * descent throws, the first one's result is kept.
+             * @return L-BFGS-B iterations, summed over both descents. Throws like solver.minimize.
+             */
+            int localMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
+                              const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
+
+            /**
+             * @brief The model's degenerate mirrors of point @p x that fit in [lb, ub].
+             * @details Full parameter vectors (splines as in @p x, clamped into the box). A mirror
+             * is dropped when it changes a pinned (zero-width) parameter — e.g. the scanned axis
+             * of a profile or surface point — or moves one outside its bounds, or equals @p x.
+             */
+            std::vector<Eigen::VectorXf> degenerateSeedVariants(const PROmetric &metric, const Eigen::VectorXf &x,
+                                                                const Eigen::VectorXf &lb, const Eigen::VectorXf &ub) const;
+
+            /**
+             * @brief Solve the free nuisances of @p x at fixed physics by projected, damped
+             * Gauss-Newton steps (fit option profile_nuisances).
+             * @details Each step solves (H_FF + λI) Δ = −g_F in double over the free nuisances not
+             * held at a bound (active set), then backtracks on the double χ² (Armijo); λ grows
+             * only when H_FF is not positive definite or no step decreases χ². Stops on the
+             * Newton decrement. @p x is updated in place.
+             * @param value,grad Out: χ² and its full gradient at the returned point.
+             * @param hess       Out: the Gauss-Newton Hessian there (for outer scales).
+             * @return Gauss-Newton iterations, or -1 if the metric cannot evaluate the system.
+             */
+            int solveNuisances(PROmetric &metric, Eigen::VectorXf &x, const Eigen::VectorXf &lb,
+                               const Eigen::VectorXf &ub, double &value, Eigen::VectorXd &grad,
+                               Eigen::MatrixXd &hess);
+
+            /**
+             * @brief The profile_nuisances form of localMinimize: L-BFGS-B over the free physics,
+             * each evaluation re-solving the nuisances (solveNuisances, warm-started). The outer
+             * gradient is ∂χ²/∂θ_phys at the solved nuisances (envelope theorem). With
+             * preconditioning on, the outer scales come from the Schur complement of the Gauss-
+             * Newton Hessian (the profiled curvature). Returns -1 when the metric has no
+             * GaussNewtonSystem, so the caller falls back to the normal descent.
+             */
+            int profiledMinimize(PROmetric &metric, Eigen::VectorXf &x, float &fx,
+                                 const Eigen::VectorXf &lb, const Eigen::VectorXf &ub);
 
     };
     

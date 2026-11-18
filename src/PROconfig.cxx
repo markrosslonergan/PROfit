@@ -2219,6 +2219,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
             {"density",           0.0,                      std::numeric_limits<double>::max(), false, "a number >= 0 (g/cm^3)"},
             {"electron_fraction", std::nextafter(0.0, 1.0), 1.0,                                false, "a number in (0, 1]"},
             {"n_newton",          0.0,                      10.0,                               true,  "an integer in [0, 10]"},
+            {"bin_average",       0.0,                      1.0,                                true,  "0 or 1"},
         };
         for (const tinyxml2::XMLAttribute* attr = pModel->FirstAttribute(); attr; attr = attr->Next()) {
             std::string name = attr->Name();
@@ -2240,7 +2241,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
             }
             if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
                 log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <model> element is not expected.") % __func__ % name.c_str()  ;
-                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2% plus the model options baseline, density, electron_fraction, n_newton") % __func__ % expected_attrs ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2% plus the model options baseline, density, electron_fraction, n_newton, bin_average") % __func__ % expected_attrs ;
                 throw std::invalid_argument(std::string("<model> attribute not allowed : ") + name);
             }
         }
@@ -2340,6 +2341,57 @@ int PROconfig::LoadFromXML(const std::string &filename){
             log<LOG_DEBUG>(L"%1% || Model Param Name :  %2% and index %3% (min %4%, max %5%) ") % __func__ % m_model_parameter_names.back().c_str() % m_model_parameter_index.back() % m_model_parameter_min.back() % m_model_parameter_max.back()  ;
             m_model_parameter_map[m_model_parameter_names.back()]=m_model_parameter_index.back();
             pModelParam = pModelParam->NextSiblingElement("parameter");
+        }
+
+        // Gaussian priors on physics parameters, e.g.
+        //   <prior name="dmsq_31" center="0.0025" sigma="0.0005" abs="true"/>
+        // center/sigma are in physical units (not log10). Names are resolved against the model
+        // in get_model_from_string, once its parameter list exists.
+        for(tinyxml2::XMLElement *pPrior = pModel->FirstChildElement("prior"); pPrior; pPrior = pPrior->NextSiblingElement("prior")){
+            const std::vector<std::string> prior_attrs = {"name", "center", "sigma", "abs"};
+            for (const tinyxml2::XMLAttribute* attr = pPrior->FirstAttribute(); attr; attr = attr->Next()) {
+                if (std::find(prior_attrs.begin(), prior_attrs.end(), std::string(attr->Name())) == prior_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in a <model><prior> element is not expected; allowed: %3%") % __func__ % attr->Name() % prior_attrs;
+                    throw std::invalid_argument(std::string("<prior> attribute not allowed : ") + attr->Name());
+                }
+            }
+            PhysicsPriorSpec prior;
+            const char *pname = pPrior->Attribute("name");
+            if(pname == NULL || pname[0] == '\0'){
+                log<LOG_ERROR>(L"%1% || ERROR! A <model><prior> needs name=\"<physics parameter>\".") % __func__;
+                throw std::invalid_argument("<prior> without a name");
+            }
+            prior.name = pname;
+            auto number = [&](const char *key, double &out) {
+                const char *s = pPrior->Attribute(key);
+                char *e = NULL;
+                out = s ? strtod(s, &e) : 0.0;
+                if(s == NULL || e == s || *e != '\0' || !std::isfinite(out)){
+                    log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> needs a numeric %3%= (got \"%4%\").") % __func__ % pname % key % (s ? s : "");
+                    throw std::invalid_argument(std::string("<prior> ") + pname + " has an invalid " + key);
+                }
+            };
+            number("center", prior.center);
+            number("sigma", prior.sigma);
+            if(prior.sigma <= 0){
+                log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> has sigma=%3%; it must be > 0.") % __func__ % pname % prior.sigma;
+                throw std::invalid_argument(std::string("<prior> ") + pname + " has sigma <= 0");
+            }
+            if(const char *sabs = pPrior->Attribute("abs")){
+                const std::string v = sabs;
+                if(v != "true" && v != "false" && v != "1" && v != "0"){
+                    log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> has abs=\"%3%\"; use true or false.") % __func__ % pname % sabs;
+                    throw std::invalid_argument(std::string("<prior> ") + pname + " has an invalid abs");
+                }
+                prior.abs = (v == "true" || v == "1");
+            }
+            for(const auto &p : m_model_physics_priors){
+                if(p.name == prior.name){
+                    log<LOG_ERROR>(L"%1% || ERROR! Two <model><prior>s on parameter '%2%'.") % __func__ % pname;
+                    throw std::invalid_argument(std::string("duplicate <prior> on ") + pname);
+                }
+            }
+            m_model_physics_priors.push_back(prior);
         }
 
     }//end model
@@ -2698,6 +2750,14 @@ size_t PROconfig::NActiveBins(size_t var_index) const {
     size_t n = 0;
     for(char m : m_variable_active_bins_collapsed[var_index]) n += (m != 0);
     return n;
+}
+
+bool PROconfig::IsFilledVariable(size_t v) const {
+    if(v == i_prime) return true;
+    if(v < m_channel_variable_plot_bool.size() && m_channel_variable_plot_bool[v]) return true;
+    for(const auto &[name, binning] : m_mcgen_variation_binning_map)
+        if(binning >= 0 && (size_t)binning == v) return true;
+    return false;
 }
 
 namespace {

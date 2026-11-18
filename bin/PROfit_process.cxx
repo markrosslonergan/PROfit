@@ -1,5 +1,6 @@
 #include "PROfit_common.h"
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <cmath>
 
@@ -420,6 +421,31 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     //    log<LOG_WARNING>(L"%1% || Process command complete. Binary files saved successfully.") % __func__;
     //    return 0;
     //}
+
+    // Bin only the variables FillSpectra can be asked to fill: the config's filled variables
+    // plus every systematic's actual binning (a cached struct keeps its process-time binning).
+    std::vector<char> filled(config.m_num_variables, 0);
+    std::set<int> binnings{(int)config.i_prime};
+    for(size_t v = 0; v < config.m_num_variables; ++v) filled[v] = config.IsFilledVariable(v);
+    for(const auto &ssv : systsstructs)
+        for(const auto &ss : ssv)
+            if(ss.binning >= 0 && (size_t)ss.binning < filled.size()) { filled[ss.binning] = 1; binnings.insert(ss.binning); }
+    prop.RestrictBinnedVariables(filled);
+    // Plot flags and binnings are not hashed: a variable that was carried-only when the cache
+    // was written lacks the migration matrices a spline binned elsewhere now needs.
+    std::vector<std::string> missing;
+    for(int b : binnings)
+        for(size_t v = 0; v < config.m_num_variables; ++v)
+            if(filled[v] && v != (size_t)b && !prop.variable_hist_storage.has(b, v))
+                missing.push_back("(var" + std::to_string(b) + ", var" + std::to_string(v) + ")");
+    if(!missing.empty()) {
+        if(options.force) {
+            log<LOG_WARNING>(L"%1% || %2% has no pre-binned matrices for %3%: those variables were carried-only when it was written. Forcing ahead; a binned fill that needs them will fail.") % __func__ % propBinName.c_str() % missing;
+        } else {
+            log<LOG_ERROR>(L"%1% || %2% has no pre-binned matrices for %3%: those variables were carried-only (not fitted, plotted or a systematic binning) when it was written. Run the process subcommand to rebuild it.") % __func__ % propBinName.c_str() % missing;
+            exit(EXIT_FAILURE);
+        }
+    }
 
     //Scale events by some percentage of total detector POT
     if(options.scale_arg.size()) {

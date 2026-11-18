@@ -20,7 +20,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
-        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c pearson / -c CNP / -c poisson, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
+        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c CNP, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
         app.add_option("--fit-options", global_fit_options, "Parameters for single, detailed global best fit LBFGSB. See PROfitter.h or run --fit-help for available settings.");
         app.add_option("--scan-fit-options", scan_fit_options, "Parameters for simpier, multiple best fits in PROfile/surface LBFGSB.");
         app.add_flag("--fit-help", show_fit_help, "Show detailed help for all fitting parameters (L-BFGS-B, PSO, MCMC, etc.)");
@@ -31,8 +31,8 @@ PROpt::PROpt(int argc, char **argv) {
                        "central-lin (central FD on delta only, M frozen at base; Gauss-Newton, ~5-10x), "
                        "one-sided-lin (forward FD on delta only, M frozen at base; ~10-20x), "
                        "analytic (DEFAULT; exact closed-form gradient incl. the dM/dtheta term; no FD truncation, "
-                       "no extra spectrum fills; neyman (PROchi) binned strategies only — CNP, poisson and the "
-                       "event-by-event strategy fall back to central-lin, pearson to one-sided-full, with a warning). "
+                       "no extra spectrum fills; neyman, pearson and poisson binned strategies only — CNP and the "
+                       "event-by-event strategy fall back to central-lin (pearson event-by-event to one-sided-full), with a warning). "
                        "Applies to every fit (global, scan, FC).")
             ->default_str("");
 
@@ -96,6 +96,32 @@ PROpt::PROpt(int argc, char **argv) {
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
                 "Implies --area-norm for the plots. fc / brazil / fc-adaptive inherit the flag.");
+        app.add_flag("--lndet", lndet,
+                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries when its covariance M "
+                "is rebuilt from the prediction at every tested point (without it fits lean towards larger predictions). "
+                "Reported relative to ln det M at --cov-reference.");
+        app.add_flag("--frozen-cov", frozen_cov,
+                "Hold the whole covariance M (statistical + systematic) at its value at the --cov-reference prediction instead "
+                "of rebuilding it at every tested point (neyman / pearson / CNP).");
+        app.add_option("--cov-reference", cov_reference,
+                "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
+                "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
+            ->expected(-1);
+        app.add_flag("--ordering-octant-seeds", ordering_octant_seeds,
+                "LBL models only: start every fit (global, profile, surface, adaptive mesh, fc) also from the four mass-ordering x "
+                "theta23-octant variants of each of its start points (every seed and the best Latin/swarm point), and polish every "
+                "harmonic-scan minimum from its variants. No effect on other models. Same as --fit-options/--scan-fit-options "
+                "ordering_octant_seeds 1.");
+        app.add_flag("--ordering-octant-polish", ordering_octant_polish,
+                "LBL models only: after its usual descents, every fit (global, profile, surface, adaptive mesh, fc) refines once "
+                "more from the three mass-ordering x theta23-octant variants of its best point (3 extra descents per fit). "
+                "Independent of --ordering-octant-seeds: use either or both. No effect on other models. Same as "
+                "--fit-options/--scan-fit-options ordering_octant_polish 1.");
+        app.add_flag("--profile-nuisances", profile_nuisances,
+                "-c poisson only (so far): every local descent runs L-BFGS-B over the free physics parameters only and, at "
+                "each physics point, solves the nuisances by damped Gauss-Newton steps on the full Hessian. For many "
+                "nuisances whose data constraints mix them. Default off. Same as --fit-options/--scan-fit-options "
+                "profile_nuisances 1.");
         auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");
