@@ -3568,6 +3568,7 @@ ROOTFormula::ROOTFormula(const std::string &name, const std::string &formula, TT
             }
             exit(EXIT_FAILURE);
         }
+        f->SetQuickLoad(true); // remove redundant GetEntry() calls
         fs.push_back(std::move(f));
     }
     log<LOG_DEBUG>(L"%1% || Successfully compiled %2% formula(s) for '%3%'") % __func__ % fs.size() % name.c_str();
