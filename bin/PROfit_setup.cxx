@@ -14,6 +14,47 @@ static int find_spline_index(const PROsyst &systs, const PROconfig &config, cons
     return it == systs.spline_names.end() ? -1 : (int)std::distance(systs.spline_names.begin(), it);
 }
 
+// File-name tag for an --inject-data point, e.g. "dmsq3_sinsq2thmm0.25". Values use the short form
+// unless it doesn't round-trip, so distinct points never share a cached binary.
+static std::string inject_tag(const PROpt &options) {
+    std::string tag;
+    for(const auto &[name, value]: options.inject_data_osc_params) { // std::map: sorted by name
+        std::ostringstream v; v << value;
+        if(std::stof(v.str()) != value) { v.str(""); v << std::setprecision(std::numeric_limits<float>::max_digits10) << value; }
+        tag += (tag.empty() ? "" : "_") + name + v.str();
+    }
+    for(char &c: tag) if(!std::isalnum((unsigned char)c) && c != '.' && c != '-' && c != '_') c = '_';
+    return tag;
+}
+
+// Real data + --inject-data with a data <model>: process data like MC (no systs) and return the
+// histograms at the injected point, ready to be cached like CreatePROdata's output.
+static std::vector<PROdata> CreateInjectedPROdata(const PROconfig &dataconfig, const PROpt &options) {
+    PROpeller dataprop;
+    std::vector<std::vector<SystStruct>> nosysts;
+    PROcess_CAFAna(dataconfig, nosysts, dataprop, options.noxrootd);
+    std::unique_ptr<PROmodel> datamodel = get_model_from_string(dataconfig, dataprop);
+    // Values are given in linear units (like -i/--inject); un-injected params stay at their defaults.
+    Eigen::VectorXf dataparams = datamodel->default_val;
+    for(const auto &[name, value]: options.inject_data_osc_params) {
+        auto it = std::find(datamodel->param_names.begin(), datamodel->param_names.end(), name);
+        if(it == datamodel->param_names.end()) {
+            log<LOG_ERROR>(L"%1% || --inject-data parameter %2% is not in the data model %3%.") % __func__ % name.c_str() % datamodel->param_names;
+            exit(EXIT_FAILURE);
+        }
+        size_t j = std::distance(datamodel->param_names.begin(), it);
+        dataparams(j) = datamodel->is_log10[j] ? std::log10(value) : value;
+    }
+    log<LOG_INFO>(L"%1% || Filling data (%2% events) at injected point %3%") % __func__ % dataprop.NEvent() % dataparams;
+    PROsyst emptySyst;
+    std::vector<PROdata> alldata;
+    for(size_t io = 0; io < dataconfig.m_num_variables; ++io) {
+        Eigen::VectorXf vec = CollapseMatrix(dataconfig, FillSpectra(dataconfig, dataprop, emptySyst, *datamodel, dataparams, !options.eventbyevent, io).Spec(), io);
+        alldata.push_back(PROdata(vec, vec.array().sqrt()));
+    }
+    return alldata;
+}
+
 PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const std::vector<PROsyst> &variable_systs, const Eigen::VectorXf &fakedataparams, const PROpt &options) {
     PROdata data;
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
@@ -53,12 +94,34 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             exit(EXIT_FAILURE);
         }
 
-        if((*options.process_command) || (!std::filesystem::exists(dataBinName))  ){
+        const bool inject = !options.inject_data_osc_params.empty();
+        if(inject && !dataconfig.m_has_model) {
+            log<LOG_ERROR>(L"%1% || --inject-data requires a <model> in the data config: add a <model> inside <data>, "
+                           L"or set <data inherit_model=\"true\">. Terminating.") % __func__;
+            exit(EXIT_FAILURE);
+        }
+        // Observed statistical overlap (opt-in via overlap_matching_vars on data MCFiles), kept
+        // out of _data.bin, which is unchanged without the opt-in.
+        const bool data_overlap = dataconfig.HasOverlapMatching();
+        const std::string dataOverlapBinName = options.analysis_tag+"_overlap_data.bin";
+        // Reweighted data carry no shared cells, and the overlap cache is not keyed by the point.
+        if(inject && (data_overlap || prop.overlap)) {
+            log<LOG_ERROR>(L"%1% || --inject-data does not support statistical overlap (overlap_matching_vars) yet. Terminating.") % __func__;
+            exit(EXIT_FAILURE);
+        }
+        // The injected point is in the name, so a binary is only reused at the same point.
+        if(inject) dataBinName = options.analysis_tag + "_data_inject_" + inject_tag(options) + ".bin";
+        if((*options.process_command) || (!std::filesystem::exists(dataBinName)) || (data_overlap && !std::filesystem::exists(dataOverlapBinName))){
             log<LOG_INFO>(L"%1% || Processing Data Spectrum and saving to binary output also: %2%") % __func__ % dataBinName.c_str();
 
             //Process the CAF files to grab and fill spectrum directly
-            std::vector<PROdata> alldata = CreatePROdata(dataconfig);
+            std::vector<PROdata> alldata = inject ? CreateInjectedPROdata(dataconfig, options) : CreatePROdata(dataconfig);
             PROdata::saveVector(dataconfig, alldata, dataBinName);
+            if(data_overlap) {
+                std::vector<OverlapCells> cells;
+                for(const auto &d : alldata) cells.push_back(d.overlap);
+                SaveDataOverlap(dataOverlapBinName, dataconfig.hash, cells);
+            }
             data = alldata[config.i_prime];
             //data.save(dataconfig,dataBinName);
             
@@ -71,6 +134,19 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             //data.load(dataBinName);
             std::vector<PROdata> alldata;
             PROdata::loadVector(alldata, dataBinName);
+            if(data_overlap) {
+                uint32_t overlap_hash = 0;
+                const std::vector<OverlapCells> cells = LoadDataOverlap(dataOverlapBinName, overlap_hash);
+                if((overlap_hash != dataconfig.hash || cells.size() != alldata.size()) && !options.force) {
+                    log<LOG_ERROR>(L"%1% || ERROR data overlap file %2% (hash %3%) does not match the data config (hash %4%). Re-run process.")
+                        % __func__ % dataOverlapBinName.c_str() % overlap_hash % dataconfig.hash;
+                    exit(EXIT_FAILURE);
+                }
+                for(size_t io = 0; io < alldata.size() && io < cells.size(); ++io) {
+                    alldata[io].has_overlap = true;
+                    alldata[io].overlap = cells[io];
+                }
+            }
             data = alldata[config.i_prime];
             //data.save(dataconfig,dataBinName);
 
@@ -91,9 +167,27 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             }
         }
 
+        if(data_overlap)
+            log<LOG_INFO>(L"%1% || Observed statistical overlap in the data: %2%") % __func__ % DescribeOverlap(data).c_str();
+
+        // Cache the Asimov injected spectrum; any Poisson throw is applied fresh each run.
+        if(inject && options.poisson_throw)
+            for(auto &d: variable_data) {
+                PROspec thrown = PROspec::PoissonVariation(PROspec(d.Spec(), d.Error()), dseed(PROseed::global_rng));
+                d = PROdata(thrown.Spec(), thrown.Spec().array().sqrt());
+            }
     }//if no data, use injected or fake data;
     else{
+        if(!options.inject_data_osc_params.empty()) {
+            log<LOG_ERROR>(L"%1% || --inject-data reweights real data, but this run uses fake data (no -d/--data, no embedded "
+                           L"<data> section, or --use-fake-data). Use -i/--inject for a fake-data signal. Terminating.") % __func__;
+            exit(EXIT_FAILURE);
+        }
         log<LOG_INFO>(L"%1% || Going to get fake data set up for each variable.") % __func__ ;
+        // With MC overlap the fake data carries the cells its own truth implies.
+        auto fake_overlap = [&](size_t io) {
+            return ComputeOverlapFractions(config, prop, model, fakedataparams.head(model.nparams), io);
+        };
         for(size_t io = 0; io < config.m_num_variables; ++io) {
             // plot="false" only suppresses drawing; the fitting variable always needs real
             // fake-data, so i_prime bypasses the flag here and in the Asimov branch below
@@ -130,11 +224,22 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
 
                 PROspec shifted = FillSpectra(config, prop, variable_systs[io], model,
                                               throws, !options.eventbyevent, io);
-                PROspec newSpec = PROspec::PoissonVariation(
-                    PROspec(CollapseMatrix(config, shifted.Spec(), io)
-                                + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
-                            CollapseMatrix(config, shifted.Error(), io)),
-                    dseed(PROseed::global_rng));
+                PROdata pseudo;
+                if(!prop.overlap) {
+                    PROspec newSpec = PROspec::PoissonVariation(
+                        PROspec(CollapseMatrix(config, shifted.Spec(), io)
+                                    + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
+                                CollapseMatrix(config, shifted.Error(), io)),
+                        dseed(PROseed::global_rng));
+                    pseudo = PROdata(newSpec.Spec(), newSpec.Error());
+                } else {
+                    const PROspec mean(CollapseMatrix(config, shifted.Spec(), io)
+                                           + ThrowCovarianceShift(config, frac_root, shifted.Spec(), PROseed::global_rng, d, io),
+                                       CollapseMatrix(config, shifted.Error(), io));
+                    const OverlapFractions frac = fake_overlap(io);
+                    pseudo = MakeToyData(mean, &frac, true, dseed(PROseed::global_rng));
+                    log<LOG_INFO>(L"%1% || Pseudo-experiment overlap: %2%") % __func__ % DescribeOverlap(pseudo).c_str();
+                }
 
                 const int nheld = (int)std::count(held.begin(), held.end(), 1);
                 log<LOG_INFO>(L"%1% || Generated FC-style pseudo-experiment for i_prime variable %2% "
@@ -152,12 +257,29 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                 log<LOG_INFO>(L"%1% || Pseudo-experiment thrown spline pulls (sigma): %2%")
                     % __func__ % thrown_str.c_str();
 
-                variable_data.push_back(PROdata(newSpec.Spec(), newSpec.Error()));
+                // A pseudo-experiment re-measures any physics prior about the injected truth too.
+                pseudo.physics_prior_centers = ToyPhysicsPriorCenters(model, fakedataparams.head(nphys), true, PROseed::global_rng);
+                for (size_t k = 0; k < model.physics_priors.size(); ++k)
+                    log<LOG_INFO>(L"%1% || Pseudo-experiment physics prior on %2%: centre %3% (XML %4%).")
+                        % __func__ % model.physics_priors[k].name.c_str()
+                        % pseudo.physics_prior_centers[k] % model.physics_priors[k].center;
+                variable_data.push_back(pseudo);
                 continue;
             }
 
             const bool fill_this_variable = config.m_channel_variable_plot_bool.at(io) || io == config.i_prime;
             PROspec data_spec = fill_this_variable ?  FillSpectra(config, prop, variable_systs[io], model, fakedataparams, !options.eventbyevent, io) : PROspec(config.m_num_variable_bins_total[io]) ;
+            if(prop.overlap && fill_this_variable) {
+                // The overlap throw works on collapsed bins (the cells live there); without
+                // --poisson-throw this is the Asimov spectrum carrying its expected cells.
+                const Eigen::VectorXf mean = CollapseMatrix(config, data_spec.Spec(), io);
+                const OverlapFractions frac = fake_overlap(io);
+                variable_data.push_back(MakeToyData(PROspec(mean, mean.array().max(0.0f).sqrt()), &frac,
+                                                    options.poisson_throw, options.poisson_throw ? dseed(PROseed::global_rng) : 0));
+                if(io == config.i_prime)
+                    log<LOG_INFO>(L"%1% || Fake-data overlap (%2%): %3%") % __func__ % (options.poisson_throw ? "Poisson-thrown" : "Asimov") % DescribeOverlap(variable_data.back()).c_str();
+                continue;
+            }
             if(options.poisson_throw) data_spec = PROspec::PoissonVariation(data_spec, dseed(PROseed::global_rng));
             Eigen::VectorXf data_vec = CollapseMatrix(config, data_spec.Spec(), io);
             variable_data.push_back(PROdata(data_vec, data_vec.array().sqrt()));
@@ -241,6 +363,56 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
     }
 }
 
+// --lndet / --frozen-cov / --cov-reference become PROconfig::CovarianceOptions, which every
+// PROcovariance reads at construction: install them before the first metric is built.
+void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs) {
+    if(!options.lndet && !options.frozen_cov) {
+        if(!options.cov_reference.empty())
+            log<LOG_WARNING>(L"%1% || --cov-reference is only used with --lndet or --frozen-cov; ignoring it.") % __func__;
+        return;
+    }
+    if(options.chi2 == "poisson") {
+        log<LOG_ERROR>(L"%1% || -c poisson has no covariance matrix: --lndet and --frozen-cov apply to neyman, pearson and CNP only.") % __func__;
+        exit(EXIT_FAILURE);
+    }
+    if(options.lndet && options.frozen_cov)
+        log<LOG_WARNING>(L"%1% || With --frozen-cov, ln det M is a constant: --lndet adds nothing.") % __func__;
+
+    const size_t nphys = model.nparams, nsyst = systs.GetNSplines();
+    std::vector<float> ref(nphys + nsyst, 0.0f);
+    for(size_t i = 0; i < nphys; ++i) ref[i] = model.default_val(i);
+    for(size_t i = 0; i < nsyst && i < (size_t)systs.spline_centers.size(); ++i) ref[nphys + i] = systs.spline_centers(i);
+    for(const auto &[name, value]: options.cov_reference) {
+        const auto pit = std::find(model.param_names.begin(), model.param_names.end(), name);
+        if(pit != model.param_names.end()) {
+            const size_t i = std::distance(model.param_names.begin(), pit);
+            if(model.is_log10[i] && !(value > 0)) {
+                log<LOG_ERROR>(L"%1% || --cov-reference %2% = %3%: a log10 parameter takes a positive physical value.") % __func__ % name.c_str() % value;
+                exit(EXIT_FAILURE);
+            }
+            ref[i] = model.is_log10[i] ? std::log10(value) : value;
+            if(ref[i] < model.lb(i) || ref[i] > model.ub(i))
+                log<LOG_WARNING>(L"%1% || --cov-reference %2% = %3% lies outside the parameter's fit range.") % __func__ % name.c_str() % value;
+            continue;
+        }
+        const auto sit = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
+        if(sit != systs.spline_names.end()) {
+            ref[nphys + std::distance(systs.spline_names.begin(), sit)] = value;
+            continue;
+        }
+        log<LOG_ERROR>(L"%1% || --cov-reference: '%2%' is neither a physics parameter of model %3% %4% nor a spline systematic.")
+            % __func__ % name.c_str() % config.m_model_tag.c_str() % model.param_names;
+        exit(EXIT_FAILURE);
+    }
+    config.m_covariance_options.lndet = options.lndet;
+    config.m_covariance_options.frozen = options.frozen_cov;
+    config.m_covariance_options.reference = ref;
+    Eigen::VectorXf phys(nphys);
+    for(size_t i = 0; i < nphys; ++i) phys(i) = model.is_log10[i] ? std::pow(10.0f, ref[i]) : ref[i];
+    log<LOG_INFO>(L"%1% || Covariance options: ln det M %2%, frozen M %3%; reference physics (physical units) %4%")
+        % __func__ % (options.lndet ? "on" : "off") % (options.frozen_cov ? "on" : "off") % phys;
+}
+
 // Decide which fitter presets this run actually gets, now that both the metric
 // choice and the model are known.
 //
@@ -248,7 +420,7 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
 // hypercube, PSO effectively off, the budget spent on many cheap multistart
 // descents. That shape only pays off when a gradient really costs ~one evaluation
 // and is exact. Three things can take that away:
-//   * a metric other than neyman/PROchi (pearson / CNP / poisson demote to central-lin),
+//   * a metric other than neyman/pearson/poisson (CNP demotes to central-lin),
 //   * --event-by-event (the unbinned strategy demotes too),
 //   * a model without closed-form get_probs_grad (PROmodel's base class falls back
 //     to a central finite difference on the probabilities, so every gradient costs
@@ -257,7 +429,10 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
 // them unless the user picked a preset themselves — an explicit -p is always honoured.
 void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel &model) {
     std::vector<std::string> reasons;
-    if(options.chi2 != "neyman")        reasons.push_back(options.chi2);
+    // A frozen M gives every covariance metric (CNP too) the analytic gradient.
+    const bool analytic_metric = options.chi2 == "neyman" || options.chi2 == "pearson" || options.chi2 == "poisson"
+                              || (options.chi2 == "CNP" && options.frozen_cov);
+    if(!analytic_metric) reasons.push_back(options.chi2);
     if(options.eventbyevent)            reasons.push_back("--event-by-event");
     if(!model.has_analytic_gradient())  reasons.push_back("model '" + config.m_model_tag +
                                                           "' (no closed-form get_probs_grad)");
@@ -402,6 +577,32 @@ void poisson_covariance_check(const PROpt &options, const PROconfig &config, con
     exit(EXIT_FAILURE);
 }
 
+void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROdata &data, bool use_real_data) {
+    const bool mc_overlap = (bool)prop.overlap;
+    if(!mc_overlap && !data.has_overlap) return;
+    auto fatal = [](const std::string &msg) {
+        log<LOG_ERROR>(L"stat_overlap_check || %1%") % msg.c_str();
+        log<LOG_ERROR>(L"Terminating.");
+        exit(EXIT_FAILURE);
+    };
+
+    if(options.chi2 != "neyman")
+        fatal("statistical overlap between analyses is only supported by the neyman metric (-c neyman); got " + options.chi2 + ".");
+    if(mc_overlap && model.uses_get_counts())
+        fatal("statistical overlap is not supported for visible-decay models.");
+    // Toys and the fit statistic must treat the overlap the same way.
+    if(use_real_data && mc_overlap && !data.has_overlap)
+        fatal("the MC MCFiles carry overlap_matching_vars but the data MCFiles do not: the data fit would ignore the overlap while every toy carries it. Add overlap_matching_vars to the data MCFiles.");
+    const bool throws_toys = *options.profc_command || *options.afc_command || (*options.surface_command && options.run_brazil);
+    if(use_real_data && data.has_overlap && !mc_overlap && throws_toys)
+        fatal("the data carries overlap_matching_vars but the MC does not, so toys cannot reproduce the overlap. Add overlap_matching_vars (and overlap_common if the MC samples only partly coincide) to the MC MCFiles.");
+    if(*options.bench_command)
+        fatal("scale-test does not support statistical overlap.");
+
+    if(options.projector_config.active())
+        log<LOG_WARNING>(L"%1% || Statistical overlap with PROjector: each stage uses the overlap among its own channels, but events shared between the pre-fit and the fitted channels count as exclusive in stage 2 (the constraint and the stage-2 data are not decorrelated).") % __func__;
+}
+
 Eigen::VectorXf remap_spline_params(const Eigen::VectorXf &params, size_t nphys,
                                     const std::vector<std::string> &old_names, const std::vector<std::string> &new_names) {
     Eigen::VectorXf out = Eigen::VectorXf::Zero(nphys + new_names.size());
@@ -507,7 +708,7 @@ void set_global_bounds(Eigen::VectorXf &lb, Eigen::VectorXf &ub, std::vector<int
     }
 }
 
-void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, const PROmetric &metric) {
+void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, PROmetric &metric) {
     std::ofstream global_fit_out;
     if(global_fit_result.size() > 0) {
         global_fit_out.open(options.final_output_tag+"_global_fit.txt");
@@ -515,6 +716,8 @@ void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &glob
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % global_fit_chi2;
+        if(config.m_covariance_options.lndet && !config.m_covariance_options.frozen)
+            log<LOG_INFO>(L"%1% || of which ln det M - ln det M(reference): %2%") % __func__ % metric.CovarianceLnDetTerm(global_fit_result);
         log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
 
         global_fit_out << "Global best fit:\n";

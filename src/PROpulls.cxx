@@ -284,14 +284,27 @@ namespace {
             lin.u(r) = (double)data_spec(bins[r]) - pred(bins[r]);
         }
 
+        // Statistical overlap: the full C^-1 the fit used, in place of the diagonal.
+        const Eigen::MatrixXf C_full = metric.GetStatCovariance(data_spec, bins);
+        if(C_full.size()) lin.Cinv = OverlapStatPrecision(C_full.cast<double>());
+
         // Linearised posterior precision. Physics and uniform-prior splines have flat priors on
         // their box; they enter with the box's own variance W^2/12, so a direction the data
         // barely resolves cannot absorb the rest (exactly flat it would, at any tiny slope).
+        // A <model><prior> adds its Gauss-Newton curvature g g^T / sigma^2 (g = dq/dphys).
         Eigen::MatrixXd &H = lin.H;
-        H = J.transpose() * lin.cinv.asDiagonal() * J;
+        if(lin.Cinv.size()) H = J.transpose() * lin.Cinv * J;
+        else                H = J.transpose() * lin.cinv.asDiagonal() * J;
         for(Eigen::Index a = 0; a < nf; ++a) {
             const double W = ub(free_phys[a]) - lb(free_phys[a]);
             H(a, a) += 12.0 / (W * W);
+        }
+        for(const auto &p : metric.GetPhysicsPriors()) {
+            Eigen::VectorXf dq = Eigen::VectorXf::Zero((Eigen::Index)nphys);
+            model.physics_prior_quantity(p, best_fit.head((Eigen::Index)nphys), &dq);
+            for(Eigen::Index a = 0; a < nf; ++a)
+                for(Eigen::Index b = 0; b < nf; ++b)
+                    H(a, b) += (double)dq((Eigen::Index)free_phys[a]) * dq((Eigen::Index)free_phys[b]) / ((double)p.sigma * p.sigma);
         }
         const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
         for(Eigen::Index a = 0; a < ns; ++a) {
@@ -413,6 +426,7 @@ namespace {
         }
         const Eigen::MatrixXd &J = lin.J, &H = lin.H;
         const Eigen::VectorXd &cinv = lin.cinv, &u = lin.u;
+        const Eigen::MatrixXd &Cinv = lin.Cinv;
         const Eigen::MatrixXd Q = metric.SplinePriorPrecision().cast<double>();
         const Eigen::MatrixXd Spost = spdInverse(H);
 
@@ -453,8 +467,13 @@ namespace {
         Eigen::VectorXd alpha_hat = Eigen::VectorXd::Zero(k);
         if(k) {
             const Eigen::MatrixXd Lr = J.rightCols(k);
-            const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * cinv.asDiagonal() * Lr;
-            alpha_hat = spdInverse(inner) * (Lr.transpose() * cinv.cwiseProduct(u));
+            if(Cinv.size()) {
+                const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * Cinv * Lr;
+                alpha_hat = spdInverse(inner) * (Lr.transpose() * (Cinv * u));
+            } else {
+                const Eigen::MatrixXd inner = Eigen::MatrixXd::Identity(k, k) + Lr.transpose() * cinv.asDiagonal() * Lr;
+                alpha_hat = spdInverse(inner) * (Lr.transpose() * cinv.cwiseProduct(u));
+            }
         }
 
         std::vector<Eigen::Index> sys_index;   // per entry; -1 for uniform

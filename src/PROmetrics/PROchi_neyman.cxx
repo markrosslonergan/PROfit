@@ -12,7 +12,8 @@ PROchi::PROchi(const std::string tag, const PROconfig &conin, const PROpeller &p
     // variances are constant across the whole fit and can be built once here. This holds
     // in shape_only mode too: it is the PREDICTION that is rescaled per channel there,
     // never the data.
-    buildConstantStatCache(data.Spec());
+    // Statistical overlap with another analysis: the shared counts are the off-diagonals.
+    buildConstantStatCache(data.Spec(), data.has_overlap ? &data.overlap : nullptr);
 }
 
 Eigen::VectorXf PROchi::statisticalVariances(

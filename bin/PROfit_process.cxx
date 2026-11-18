@@ -2,6 +2,7 @@
 #include "PROparallel.h"
 #include <mutex>
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <cmath>
 
@@ -135,14 +136,22 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     std::string propBinName = options.analysis_tag+"_prop.bin";
     std::string systBinName = options.analysis_tag+"_syst.bin";
 
-    bool need_main_process = (*options.process_command) || (!std::filesystem::exists(systBinName) || !std::filesystem::exists(propBinName));
+    // MC statistical overlap (opt-in via overlap_matching_vars on MC MCFiles): which entries
+    // are the same interaction. Kept out of _prop.bin, which is unchanged without the opt-in.
+    const bool mc_overlap = config.HasOverlapMatching();
+    std::string overlapBinName = options.analysis_tag+"_overlap_mc.bin";
 
+    bool need_main_process = (*options.process_command) || (!std::filesystem::exists(systBinName) || !std::filesystem::exists(propBinName))
+        || (mc_overlap && !std::filesystem::exists(overlapBinName));
+
+    PROoverlapMC overlap_mc;
     if(need_main_process){
         log<LOG_INFO>(L"%1% || Processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
         //Process the CAF files to grab and fill all SystStructs and PROpeller
-        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd, options.nthread);
+        PROcess_CAFAna(config, systsstructs, prop, options.noxrootd, options.nthread, mc_overlap ? &overlap_mc : nullptr);
         prop.save(propBinName);
         saveSystStructVector(systsstructs, systBinName);
+        if(mc_overlap) overlap_mc.save(overlapBinName);
         log<LOG_INFO>(L"%1% || Done processing PROpeller and PROsysts from XML defined root files, and saving to binary output also: %2%") % __func__ % propBinName.c_str();
 
     }else{
@@ -161,6 +170,13 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
                 exit(1);
             }
         }
+        if(mc_overlap) {
+            overlap_mc.load(overlapBinName);
+            if(overlap_mc.hash != config.hash && !options.force) {
+                log<LOG_ERROR>(L"%1% || ERROR config hash (%2%) and MC overlap file %3% (%4%) not compatable! Re-run process.") % __func__ % config.hash % overlapBinName.c_str() % overlap_mc.hash;
+                exit(1);
+            }
+        }
         //Now check syststructs, if there is any!
         if(systsstructs.front().size()>0){
             log<LOG_INFO>(L"%1% || Done loading. Config hash (%2%) and binary loaded PROsyst hash(%3%) are here. ") % __func__ %  config.hash % systsstructs[0][0].hash;
@@ -175,6 +191,10 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
             }
         }
 
+    }
+    if(mc_overlap) {
+        log<LOG_INFO>(L"%1% || MC statistical overlap active: %2% shared interactions (toys and Asimov data carry correlated cells).") % __func__ % overlap_mc.groups.size();
+        prop.overlap = std::make_shared<const PROoverlapMC>(std::move(overlap_mc));
     }
 
     // Combined DetVar propeller binary: one file for all DetVar files, keyed by section+name.
@@ -412,6 +432,31 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     //    log<LOG_WARNING>(L"%1% || Process command complete. Binary files saved successfully.") % __func__;
     //    return 0;
     //}
+
+    // Bin only the variables FillSpectra can be asked to fill: the config's filled variables
+    // plus every systematic's actual binning (a cached struct keeps its process-time binning).
+    std::vector<char> filled(config.m_num_variables, 0);
+    std::set<int> binnings{(int)config.i_prime};
+    for(size_t v = 0; v < config.m_num_variables; ++v) filled[v] = config.IsFilledVariable(v);
+    for(const auto &ssv : systsstructs)
+        for(const auto &ss : ssv)
+            if(ss.binning >= 0 && (size_t)ss.binning < filled.size()) { filled[ss.binning] = 1; binnings.insert(ss.binning); }
+    prop.RestrictBinnedVariables(filled);
+    // Plot flags and binnings are not hashed: a variable that was carried-only when the cache
+    // was written lacks the migration matrices a spline binned elsewhere now needs.
+    std::vector<std::string> missing;
+    for(int b : binnings)
+        for(size_t v = 0; v < config.m_num_variables; ++v)
+            if(filled[v] && v != (size_t)b && !prop.variable_hist_storage.has(b, v))
+                missing.push_back("(var" + std::to_string(b) + ", var" + std::to_string(v) + ")");
+    if(!missing.empty()) {
+        if(options.force) {
+            log<LOG_WARNING>(L"%1% || %2% has no pre-binned matrices for %3%: those variables were carried-only when it was written. Forcing ahead; a binned fill that needs them will fail.") % __func__ % propBinName.c_str() % missing;
+        } else {
+            log<LOG_ERROR>(L"%1% || %2% has no pre-binned matrices for %3%: those variables were carried-only (not fitted, plotted or a systematic binning) when it was written. Run the process subcommand to rebuild it.") % __func__ % propBinName.c_str() % missing;
+            exit(EXIT_FAILURE);
+        }
+    }
 
     //Scale events by some percentage of total detector POT
     if(options.scale_arg.size()) {

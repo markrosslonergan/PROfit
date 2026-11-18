@@ -11,7 +11,8 @@
  * uses Spack on AL9 / UPS on SL7); PROletariat stages the PROfit binary (self-located
  * via /proc/self/exe, override with --profit-bin), the analysis XML,
  * auto-detected analysis artifacts in the current directory
- * (<tag>_prop.bin, <tag>_syst.bin, <tag>_<out>_mesh.bin, <tag>_<out>_bank.bin)
+ * (<tag>_prop.bin, <tag>_syst.bin, <tag>_data.bin, <tag>_overlap_{mc,data}.bin,
+ * <tag>_<out>_mesh.bin, <tag>_<out>_bank.bin)
  * and any --input extras into a fresh temp dir, tars them under the literal
  * root directory grid_dir/ (the worker-script contract: workers read
  * $INPUT_TAR_DIR_LOCAL/grid_dir/), and invokes jobsub_submit as a subprocess

@@ -287,9 +287,11 @@ namespace PROfit{
      * @param nthreads    MC files read in parallel; later files are merged in file order, so the
      *                    result does not depend on this number (a single-file config is exactly a
      *                    serial read; spectra filled by several files differ from one at float level).
+     * @param overlap_out If non-null and any MCFile carries overlap_matching_vars, receives the
+     *                    MC overlap structure (which entries are the same interaction; PROoverlap.h).
      * @return 0 on success; non-zero on failure.
      */
-    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false, size_t nthreads = 1);
+    int PROcess_CAFAna(const PROconfig &inconfig, std::vector<std::vector<SystStruct>> &syst_vector, PROpeller &inprop, bool noxrootd = false, size_t nthreads = 1, PROoverlapMC *overlap_out = nullptr);
 
 
     /**
@@ -329,7 +331,8 @@ namespace PROfit{
      * Note: designed to be called internally by PROcess_SBNfit() function
      *
      * Arguments: 
-     * 		branch: pointer to branch variable, each corresponding to one subchannel 
+     * 		branch: pointer to branch variable, each corresponding to one subchannel
+     * 		weight_vals: the branch's weight formulas evaluated for this entry (GetWeight order)
      * 		plan: per-systematic fill data for the current MCFile (BuildSystFillPlan)
      * 		subchannel_index: index associated with current branch/subchannel
      *		syst_vector: list of SystStruct TO BE UPDATED, each stores all variation spectra of one systematic
@@ -340,7 +343,7 @@ namespace PROfit{
     /// branch (pass an all-zero syst_applies with it). Used when the branch's subchannel is
     /// also filled by a systematics-carrying branch: its events must enter every SystStruct
     /// CV and universe at the CV weight so the fractional response is correctly diluted.
-    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::vector<SystFillPlan>& plan, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill = false);
+    void process_cafana_event(const PROconfig &inconfig, const std::shared_ptr<BranchVariable>& branch, const std::vector<float>& weight_vals, const std::vector<SystFillPlan>& plan, float mcpot, int subchannel_index, std::vector<std::vector<SystStruct>> &syst_vector, const std::vector<float>& syst_additional_weight, const std::vector<char>& syst_applies, PROpeller& inprop, bool force_syst_cv_fill = false);
 
     /**
      * @brief Convert a local or EOS file path to an XRootD URL.

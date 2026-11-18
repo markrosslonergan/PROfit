@@ -15,7 +15,8 @@
  * fit over every free parameter at once: physics, spline nuisances, and the eigenmodes alpha
  * of the summed covariance (Sigma = L L^T, prior N(0,1), the same modes as
  * plotCovariancePosteriorPulls), with the spline Jacobian from finite differences of the
- * collapsed prediction and C the metric's own statistical variance. Each sigma_post is
+ * collapsed prediction and C the metric's own statistical variance (its full matrix for
+ * overlapping analyses, PROmetric::GetStatCovariance). Each sigma_post is
  * therefore marginal over everything else that floats, which is what the variance identity
  * needs. Shape-only fits linearise the per-channel rescaled prediction and project L,
  * exactly as the metric does.
@@ -129,6 +130,7 @@ namespace PROfit {
         std::vector<size_t> free_phys, free_spl; ///< Free physics / spline indices.
         Eigen::MatrixXd J;                       ///< bins x [free physics | free splines | modes].
         Eigen::VectorXd cinv, u;                 ///< 1/C and data - prediction on the bins.
+        Eigen::MatrixXd Cinv;                    ///< Full C^-1 on the bins for overlapping analyses; empty = diag(cinv).
         Eigen::MatrixXd H;                       ///< Posterior precision over the columns of J.
     };
 
