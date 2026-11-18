@@ -1,5 +1,22 @@
 # PROfit short test suite
 
+## Sparse response product regression
+
+This header-only test requires Eigen 3.4 and a C++17 compiler, without ROOT or
+MC inputs. From the repository root (adjust the Eigen include path if needed):
+
+```bash
+c++ -std=c++17 -O3 -DNDEBUG -pthread -Iinc -Ibuild/_deps/eigen-src \
+    tests/test_CSRDoubleProduct.cxx -o /tmp/test_CSRDoubleProduct
+/tmp/test_CSRDoubleProduct
+```
+
+It checks mapped probability/derivative inputs, cancellation-sensitive double
+accumulation, agreement with a dense64 reference, unchanged float coefficients,
+concurrent calls, and empty response rows. The API still returns float vectors;
+bitwise agreement with the former float-accumulated dense products is not
+expected. Use the workflow suite below to assess changes to fitted results.
+
 Two scripts for fast, deterministic, end-to-end regression testing of PROfit —
 not CI, just something you run by hand before/after a change.
 
