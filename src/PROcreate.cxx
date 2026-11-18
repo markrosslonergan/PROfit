@@ -1007,6 +1007,8 @@ namespace PROfit {
             PROpeller &fprop = acc ? acc->prop : inprop;
             std::vector<std::vector<SystStruct>> &fsyst = acc ? acc->syst : syst_vector;
             OverlapRecords &foverlap = acc ? acc->overlap : file0_overlap;
+            foverlap.arity = overlap_records.arity;
+            foverlap.channels_per_block = overlap_records.channels_per_block;
             const auto& fn = inconfig.m_mcgen_file_name.at(fid);
             long int nevents = std::min(inconfig.m_mcgen_maxevents[fid], (long int)(nentries[fid] * inconfig.m_mcgen_partial_load_frac[fid]));
             log<LOG_DEBUG>(L"%1% || Start @files: %2% which has %3% total events, loading fraction %4% (%5% events)") % __func__ % fn.c_str() % nentries[fid] % inconfig.m_mcgen_partial_load_frac[fid] % nevents;
