@@ -2555,7 +2555,8 @@ namespace PROfit{
                         log<LOG_ERROR>(L"%1% || FATAL: bin_edges is empty for channel %2%! Histogram will be invalid.")
                             % __func__ % global_channel_index;
                     }
-                    if (bin_edges.size() != nbins + 1) {
+                    // 1D check should not be applied to 2D
+                    if (config.m_channel_variable_dims[channel][other_index] != 2 && bin_edges.size() != nbins + 1) {
                         log<LOG_ERROR>(L"%1% || WARNING: bin_edges.size() (%2%) != nbins+1 (%3%) for channel %4%")
                             % __func__ % bin_edges.size() % (nbins + 1) % global_channel_index;
                     }
