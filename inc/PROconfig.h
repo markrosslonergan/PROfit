@@ -111,6 +111,9 @@ namespace PROfit{
       class Formula {
         public:
           virtual Value EvalInstance() = 0;
+          /// EvalInstance().first() and EvalInstance() without the per-call allocation (hot loop).
+          virtual float EvalFirst() { return EvalInstance().first(); }
+          virtual void EvalInto(Value &out) { out = EvalInstance(); }
           virtual void LoadEvent(unsigned evtno) = 0;
           virtual std::string FormulaName() const = 0;
           virtual std::set<std::string> GetNeededBranchNames() const { return {}; }
@@ -154,7 +157,7 @@ namespace PROfit{
       inline
       float GetWeight(int i) const{
         if(i >= 0 && i < (int)branch_weight_formulas.size() && branch_weight_formulas[i]){
-          return branch_weight_formulas[i]->EvalInstance().first();
+          return branch_weight_formulas[i]->EvalFirst();
         }
         return 1.0;
       }
@@ -164,7 +167,7 @@ namespace PROfit{
       float GetTotalWeight() const{
         float product = 1.0;
         for(const auto& f : branch_weight_formulas){
-          if(f) product *= f->EvalInstance().first();
+          if(f) product *= f->EvalFirst();
         }
         return product;
       }
@@ -196,6 +199,13 @@ namespace PROfit{
           return ret;
       }
 
+      /// GetVariables into a reused vector (no allocation once its sizes settle).
+      void GetVariablesInto(std::vector<BranchVariable::Value> &out) const {
+          out.resize(branch_variable_formulas.size());
+          for(size_t i = 0; i < branch_variable_formulas.size(); ++i)
+              branch_variable_formulas[i]->EvalInto(out[i]);
+      }
+
 
     };
 
@@ -209,6 +219,8 @@ namespace PROfit{
       public:
         ROOTFormula(const std::string &name, const std::string &formula, TTree *t);
         BranchVariable::Value EvalInstance() override;
+        float EvalFirst() override;
+        void EvalInto(BranchVariable::Value &out) override;
         void LoadEvent(unsigned eventno) override;
         std::string FormulaName() const override;
         // Returns the names of all TBranches referenced by this formula.

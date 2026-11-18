@@ -3,12 +3,20 @@
 
 #include "PROmetric.h"
 #include "PROgress.h"
+#include "PROparallel.h"
+#include "PROtocall.h"
 #include "PROwatermark.h"
 #include <Eigen/Eigen>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <exception>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <utility>
 #include <numeric>
 #include <random>
 #include <optional>
@@ -22,6 +30,169 @@ namespace PROfit {
     // Not sure why, that should be taken care of by include guards.
     void set_matrix_palette();
         
+    /**
+     * @brief Autocorrelation PDF of independent chains: |rho(lag)| (log) and rho(lag) per
+     * parameter, then every parameter overlaid. @p drawn_objs receives "<name>_autocorr" clones.
+     * @details Per chain, the FFT of the mean-subtracted samples zero-padded to twice the chain
+     * length gives the linear autocovariance sum_t x_t x_{t+k}. Unpadded it is circular (lag k
+     * equals lag n-k), so a short chain's curve mirrors about n/2 and returns to 1 at lag n. The
+     * sums are pooled over chains and normalised at lag 0; lags stop at the shortest chain's
+     * length. Also logs each parameter's integrated autocorrelation time tau (Geyer initial
+     * positive sequence) and effective sample size N/tau. @p obj_suffix names the drawn objects
+     * ("<name><obj_suffix>"), so two chains' plots can share one output file.
+     */
+    inline void plotChainAutocorrelation(const std::vector<std::vector<Eigen::VectorXf>> &chains, const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000, const std::string &obj_suffix = "_autocorr") {
+        size_t nmin = std::numeric_limits<size_t>::max(), ntot = 0;
+        long nparam = 0;
+        for(const auto &ch : chains) {
+            if(ch.empty()) continue;
+            nmin = std::min(nmin, ch.size());
+            ntot += ch.size();
+            nparam = ch[0].size();
+        }
+        if(ntot == 0) {
+            log<LOG_ERROR>(L"%1% || Error: cannot calculate autocorrelation without a saved chain."
+                           L" Did you forget to run the Metropolis object, or tell the Metropolis"
+                           L" object to not save the chain?")
+                % __func__;
+            log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
+            return;
+        }
+        if(param_names.size() < (size_t)nparam) {
+            log<LOG_ERROR>(L"%1% || Passed in parameter names is not the same size (%2%) "
+                           L"as the number of parameters in each step of the chain (%3%).")
+                % __func__ % param_names.size() % nparam;
+            log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
+            return;
+        }
+        max_lag = std::max<size_t>(1, std::min(max_lag, nmin));
+
+        // Autocovariance sums at lags 0..max_lag-1 of parameter i, pooled over chains.
+        auto pooled_autocov = [&](long i) {
+            std::vector<double> sum(max_lag, 0.0);
+            for(const auto &ch : chains) {
+                if(ch.empty()) continue;
+                const int n = (int)ch.size();
+                int m = 2 * n;
+                double mean = 0;
+                for(const auto &step : ch) mean += step(i);
+                mean /= n;
+                std::vector<double> x(m, 0.0);
+                for(int t = 0; t < n; ++t) x[t] = ch[t](i) - mean;
+                std::unique_ptr<TVirtualFFT> fft(TVirtualFFT::FFT(1, &m, "R2C ES K"));
+                fft->SetPoints(x.data());
+                fft->Transform();
+                std::vector<double> power(m), ims(m, 0.0);
+                for(int k = 0; k < m; ++k) {
+                    double re, im;
+                    fft->GetPointComplex(k, re, im);
+                    power[k] = re*re + im*im;
+                }
+                std::unique_ptr<TVirtualFFT> ifft(TVirtualFFT::FFT(1, &m, "C2R ES K"));
+                ifft->SetPointsComplex(power.data(), ims.data());
+                ifft->Transform();
+                // The unnormalised forward + inverse transform multiplies by m.
+                for(size_t k = 0; k < max_lag; ++k) sum[k] += ifft->GetPointReal((int)k) / m;
+            }
+            return sum;
+        };
+
+        std::vector<std::pair<TH1D*,TH1D*>> hs;
+        std::vector<std::string> degenerate;
+        double worst_ess = std::numeric_limits<double>::infinity();
+        std::string worst_name;
+        TH1D zero("z","",max_lag, 0, max_lag);
+        for(size_t i = 1; i <= max_lag; ++i) zero.SetBinContent(i, 0);
+        zero.SetLineStyle(kDashed);
+        TCanvas c;
+        c.Divide(2);
+        c.Print((filename + "[").c_str());
+        for(long i = 0; i < nparam; ++i) {
+            hs.emplace_back(new TH1D(("hautoc"+obj_suffix+std::to_string(i)).c_str(), (param_names[i]+";lag;abs(autocorrelation)").c_str(), max_lag, 0, max_lag), new TH1D(("h2autoc"+obj_suffix+std::to_string(i)).c_str(), (param_names[i]+";lag;autocorrelation").c_str(), max_lag, 0, max_lag));
+            const std::vector<double> acov = pooled_autocov(i);
+            const double lag0 = acov[0];
+            // A constant chain column gives lag0 == 0; rho would put literal 'nan's into the
+            // PDF stream and corrupt the page. Plot zeros instead.
+            if(!std::isfinite(lag0) || lag0 <= 0) {
+                degenerate.push_back(param_names[i]);
+            } else {
+                for(size_t k = 0; k < max_lag; ++k) {
+                    const double rho = acov[k] / lag0;
+                    hs.back().first->SetBinContent(k+1, std::abs(rho));
+                    hs.back().second->SetBinContent(k+1, rho);
+                }
+                // tau = 1 + 2 sum rho(k), summed in pairs while a pair stays positive.
+                double tau = 1.0;
+                bool truncated = false;
+                for(size_t k = 1; k + 1 < max_lag; k += 2) {
+                    const double pair = (acov[k] + acov[k+1]) / lag0;
+                    if(pair <= 0) { truncated = true; break; }
+                    tau += 2 * pair;
+                }
+                const double ess = ntot / tau;
+                if(ess < worst_ess) { worst_ess = ess; worst_name = param_names[i]; }
+                log<LOG_INFO>(L"%1% || Parameter %2%: integrated autocorrelation time %3%%4%, effective samples %5% of %6%.")
+                    % __func__ % param_names[i].c_str() % (truncated ? "" : ">= ") % tau % ess % ntot;
+            }
+            c.cd(1);
+            gPad->SetLogy(1);
+            hs.back().first->Draw("l");
+            c.cd(2);
+            gPad->SetLogy(0);
+            hs.back().second->Draw("l");
+            zero.Draw("l same");
+            drawVersionWatermark(&c, WatermarkPos::BottomRight);
+            c.Print(filename.c_str());
+            if(drawn_objs) {
+                (*drawn_objs)->insert({param_names[i]+obj_suffix, hs.back().second->Clone()});
+            }
+        }
+        if(std::isfinite(worst_ess))
+            log<LOG_INFO>(L"%1% || %2% chain(s), %3% samples: lowest effective sample size %4% (%5%).")
+                % __func__ % chains.size() % ntot % worst_ess % worst_name.c_str();
+        if(!degenerate.empty())
+            log<LOG_WARNING>(L"%1% || %2% of %3% parameters never moved (constant chain, e.g. %4%); their autocorrelation is undefined and plotted as zero.")
+                % __func__ % degenerate.size() % nparam % degenerate.front().c_str();
+        c.Clear();
+        gStyle->SetPalette(kCool);
+        TLegend leg(0.3, 0.6, 0.89, 0.89);
+        leg.SetNColumns(2);
+        leg.SetFillStyle(0);
+        leg.SetLineWidth(0);
+        int i = 0;
+        for(auto [h, _] : hs) {
+            gPad->SetLogy(1);
+            h->SetTitle(";lag;abs(autocorrelation)");
+            h->SetMinimum(1e-5);
+            h->Draw("plclsame");
+            leg.AddEntry(h, param_names[i++].c_str(), "l");
+        }
+        leg.Draw("same");
+        drawVersionWatermark(&c);
+        c.Print(filename.c_str());
+        gPad->SetLogy(0);
+        i = 0;
+        TLegend leg2(0.3, 0.6, 0.89, 0.89);
+        leg2.SetNColumns(2);
+        leg2.SetFillStyle(0);
+        leg2.SetLineWidth(0);
+        zero.SetTitle(";lag;autocorrelation");
+        zero.SetMinimum(-0.07);
+        zero.SetMaximum(1.05);
+        zero.Draw("l");
+        for(auto [_, h] : hs) {
+            gPad->SetLogy(0);
+            h->SetTitle(";lag;autocorrelation");
+            h->Draw("plclsame");
+            leg2.AddEntry(h, param_names[i++].c_str(), "l");
+        }
+        leg2.Draw("same");
+        drawVersionWatermark(&c);
+        c.Print(filename.c_str());
+        c.Print((filename + "]").c_str());
+        set_matrix_palette();
+    }
+
     template<class Target_FN, class Proposal_FN>
         class Metropolis {
             private:
@@ -42,6 +213,7 @@ namespace PROfit {
                 Eigen::VectorXf current;
                 std::vector<Eigen::VectorXf> chain;
                 size_t naccept;
+                bool warn_frozen = true; ///< Warn when run() accepts nothing (runMetropolisChains reports once for all chains).
 
                 Metropolis(Target_FN target, Proposal_FN proposal, const Eigen::VectorXf &initial, uint32_t seed, bool save_chain = true) 
                     : seed(seed), target(target), proposal(proposal), current(initial), save_chain(save_chain) {
@@ -88,7 +260,8 @@ namespace PROfit {
                         }
                         if(pbar && (i + 1) % pbar_stride == 0) pbar->set_progress(i + 1);
                     }
-                    proposal.tune_mode = false;
+                    // Freeze the proposal at its final tuning: the kept steps are plain Metropolis.
+                    proposal.finalize();
                     for(size_t i = 0; i < steps; i++) {
                         step();
                         if(save_chain) chain.push_back(current);
@@ -99,131 +272,42 @@ namespace PROfit {
                         pbar->finish();
                         std::cerr << std::endl;
                     }
-                    if(naccept == 0)
+                    if(naccept == 0 && warn_frozen)
                         log<LOG_WARNING>(L"%1% || Metropolis chain accepted 0 of %2% proposals — the chain is frozen at its start"
                                          L" point (check bounds vs start values and proposal widths); results from this chain are meaningless.")
                             % __func__ % (burnin + steps);
                 }
 
                 void plot_autocorrelation(const std::string &filename, const std::vector<std::string> &param_names, std::optional<std::map<std::string, TObject*>*> drawn_objs, size_t max_lag = 1000) const {
-                    if(chain.size() == 0) {
-                        log<LOG_ERROR>(L"%1% || Error: cannot calculate autocorrelation without a saved chain."
-                                       L" Did you forget to run the Metropolis object, or tell the Metropolis"
-                                       L" object to not save the chain?")
-                            % __func__;
-                        log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
-                        return;
-                    }
-                    long nparam = chain[0].size();
-                    if(param_names.size() < (size_t)nparam) {
-                        log<LOG_ERROR>(L"%1% || Passed in parameter names is not the same size (%2%) "
-                                       L"as the number of parameters in each step of the chain (%3%).")
-                            % __func__ % param_names.size() % nparam;
-                        log<LOG_ERROR>(L"%1% || Not saving autocorrelations as a result.");
-                        return;
-                    }
-                    std::vector<std::pair<TH1D*,TH1D*>> hs;
-                    TH1D zero("z","",max_lag, 0, max_lag);
-                    for(size_t i = 1; i <= max_lag; ++i) zero.SetBinContent(i, 0);
-                    zero.SetLineStyle(kDashed);
-                    TCanvas c;
-                    c.Divide(2);
-                    c.Print((filename + "[").c_str());
-                    for(long i = 0; i < nparam; ++i) {
-                        hs.emplace_back(new TH1D(("hautoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;abs(autocorrelation)").c_str(), max_lag, 0, max_lag), new TH1D(("h2autoc"+std::to_string(i)).c_str(), (param_names[i]+";lag;autocorrelation").c_str(), max_lag, 0, max_lag));
-                        int n = chain.size();
-                        std::vector<double> values;
-                        values.reserve(n);
-                        double mean = 0;
-                        for(const auto &step : chain) {
-                            values.push_back(step(i));
-                            mean += step(i);
-                        }
-                        mean /= n;
-                        for(double &v : values) v -= mean;
-                        TVirtualFFT *fft = TVirtualFFT::FFT(1, &n, "R2C");
-                        fft->SetPoints(values.data());
-                        fft->Transform();
-                        std::vector<double> fft_pts;
-                        std::vector<double> ims(n, 0); // Dummy vector to hold imag value of 0 for each point.
-                        for(int k = 0; k < n; ++k) {
-                            double re, im;
-                            fft->GetPointComplex(k, re, im);
-                            fft_pts.push_back(re*re+im*im);
-                        }
-                        TVirtualFFT *ifft = TVirtualFFT::FFT(1, &n, "C2R");
-                        ifft->SetPointsComplex(fft_pts.data(), ims.data());
-                        ifft->Transform();
-                        double lag0 = ifft->GetPointReal(0), klag = 0;
-                        // A constant chain column gives lag0 == 0; klag/lag0 would put literal
-                        // 'nan's into the PDF stream and corrupt the page. Plot zeros instead.
-                        if(!std::isfinite(lag0) || lag0 <= 0) {
-                            log<LOG_WARNING>(L"%1% || Chain for parameter %2% is constant/degenerate (lag0 = %3%);"
-                                             L" autocorrelation undefined, plotting zeros.")
-                                % __func__ % param_names[i].c_str() % lag0;
-                        } else {
-                            for(int k = 0; k < n && k < max_lag; ++k) {
-                                klag = ifft->GetPointReal(k);
-                                hs.back().first->SetBinContent(k+1, std::abs(klag/lag0));
-                                hs.back().second->SetBinContent(k+1, klag/lag0);
-                            }
-                            log<LOG_INFO>(L"%1% || Lag %2% autocorrelation for parameter %3% is %4%.")
-                                % __func__ % std::min(max_lag, (size_t)n) % param_names[i].c_str() % (klag/lag0);
-                        }
-                        c.cd(1);
-                        gPad->SetLogy(1);
-                        hs.back().first->Draw("l");
-                        c.cd(2);
-                        gPad->SetLogy(0);
-                        hs.back().second->Draw("l");
-                        zero.Draw("l same");
-                        drawVersionWatermark(&c, WatermarkPos::BottomRight);
-                        c.Print(filename.c_str());
-                        if(drawn_objs) {
-                            (*drawn_objs)->insert({param_names[i]+"_autocorr", hs.back().second->Clone()});
-                        }
-                    }
-                    c.Clear();
-                    gStyle->SetPalette(kCool);
-                    TLegend leg(0.3, 0.6, 0.89, 0.89);
-                    leg.SetNColumns(2);
-                    leg.SetFillStyle(0);
-                    leg.SetLineWidth(0);
-                    int i = 0;
-                    for(auto [h, _] : hs) {
-                        gPad->SetLogy(1);
-                        h->SetTitle(";lag;abs(autocorrelation)");
-                        h->SetMinimum(1e-5);
-                        h->Draw("plclsame");
-                        leg.AddEntry(h, param_names[i++].c_str(), "l");
-                    }
-                    leg.Draw("same");
-                    drawVersionWatermark(&c);
-                    c.Print(filename.c_str());
-                    gPad->SetLogy(0);
-                    i = 0;
-                    TLegend leg2(0.3, 0.6, 0.89, 0.89);
-                    leg2.SetNColumns(2);
-                    leg2.SetFillStyle(0);
-                    leg2.SetLineWidth(0);
-                    zero.SetTitle(";lag;autocorrelation");
-                    zero.SetMinimum(-0.07);
-                    zero.SetMaximum(1.05);
-                    zero.Draw("l");
-                    for(auto [_, h] : hs) {
-                        gPad->SetLogy(0);
-                        h->SetTitle(";lag;autocorrelation");
-                        h->Draw("plclsame");
-                        leg2.AddEntry(h, param_names[i++].c_str(), "l");
-                    }
-                    leg2.Draw("same");
-                    drawVersionWatermark(&c);
-                    c.Print(filename.c_str());
-                    c.Print((filename + "]").c_str());
-                    set_matrix_palette();
+                    plotChainAutocorrelation(std::vector<std::vector<Eigen::VectorXf>>{chain}, filename, param_names, drawn_objs, max_lag);
                 }
 
         };
+
+    /**
+     * @brief The interval a Metropolis chain samples parameter @p i in.
+     * @details Physics: the model bounds. An infinite lower bound (log10 mixing) is floored to
+     * stop runaway exploration, at -5 or lower to include the model's no-oscillation default and
+     * the chain's @p start: a background-only best fit sits at the default (-10 for
+     * SBL_2flav_numudis, -8 for the 3+1 tags), and a start outside the box rejects every
+     * proposal. Splines: the restrict= range, else [-1, 1] for 0..1 splines, else the knot range.
+     */
+    inline std::pair<float, float> mcmcParamBox(const PROmetric &metric, long i, float start = NAN) {
+        const long nparams = metric.GetModel().nparams;
+        if(i < nparams) {
+            float lo = metric.GetModel().lb(i);
+            if(!std::isfinite(lo)) {
+                lo = std::min(-5.0f, metric.GetModel().default_val(i));
+                if(std::isfinite(start)) lo = std::min(lo, start);
+            }
+            return {lo, metric.GetModel().ub(i)};
+        }
+        const size_t si = i - nparams;
+        const PROsyst &syst = metric.GetSysts();
+        if(syst.spline_has_restrict[si]) return {syst.spline_restrict_lo[si], syst.spline_restrict_hi[si]};
+        if(syst.spline_hi[si] == 1.0f) return {-1.0f, 1.0f};
+        return {syst.spline_lo[si], syst.spline_hi[si]};
+    }
 
     struct simple_target {
         PROmetric &metric;
@@ -343,29 +427,10 @@ namespace PROfit {
         }
 
         bool within_bound(const Eigen::VectorXf &value) {
-            long int nparams = metric.GetModel().nparams;
             for(long int i = 0; i < value.size(); ++i) {
                 if(std::find(fixed.begin(), fixed.end(), i) != std::end(fixed)) continue;
-                if(i < nparams) {
-                    // A finite model bound is authoritative; the -5 floor only stops runaway
-                    // exploration of log-space params whose model lb is -inf.
-                    float lo = std::isfinite(metric.GetModel().lb(i)) ? metric.GetModel().lb(i) : -5.0f;
-                    if(value(i) > metric.GetModel().ub(i) || value(i) < lo)
-                        return false;
-                } else {
-                    size_t si = i - nparams;
-                    float lo, hi;
-                    if(metric.GetSysts().spline_has_restrict[si]) {
-                        lo = metric.GetSysts().spline_restrict_lo[si];
-                        hi = metric.GetSysts().spline_restrict_hi[si];
-                    } else if(metric.GetSysts().spline_hi[si] == 1.0f) {
-                        lo = -1.0f; hi = 1.0f;
-                    } else {
-                        lo = metric.GetSysts().spline_lo[si];
-                        hi = metric.GetSysts().spline_hi[si];
-                    }
-                    if(value(i) < lo || value(i) > hi) return false;
-                }
+                const auto [lo, hi] = mcmcParamBox(metric, i);
+                if(value(i) < lo || value(i) > hi) return false;
             }
             return true;
         }
@@ -424,6 +489,14 @@ namespace PROfit {
         Eigen::MatrixXf sub_L;
         bool tune_mode;
 
+        bool seeded = false;   ///< seed() set the covariance: beta stays at its adapted value.
+        bool started = false;  ///< last_accepted holds a real chain point.
+        Eigen::VectorXf origin; ///< The chain's start point (mcmcParamBox keeps it inside the box).
+        bool stale = true;     ///< width or scale changed since sub_L was factorised.
+        size_t since_refresh = 0;
+        /// While tuning, refactorise sub_L at most this often (an n^3 decomposition per step otherwise).
+        static constexpr size_t refresh_every = 100;
+
         adaptive_proposal(PROmetric &metric, uint32_t seed, std::vector<int> fixed = {}) 
             : metric(metric), seed(seed), fixed(fixed), rng(seed) {
                 int nparams = metric.GetModel().nparams + metric.GetSysts().GetNSplines();
@@ -449,7 +522,91 @@ namespace PROfit {
 
             }
 
+        /**
+         * @brief Start the adaptation from a known covariance instead of a tiny diagonal.
+         * @details With a good seed (the linearised posterior at the start point) the proposal is
+         * efficient from the first step, so burn-in only refines it. The seed counts as
+         * @p n_prior pseudo-samples of the running covariance (0: 20 per moving parameter). Each
+         * variance is capped at its sampling box's W^2/12 (1 when unbounded), so a direction the
+         * data leaves free does not propose far outside the box. An empty or non-finite seed falls
+         * back to the diagonal prior variances. Unless @p local_physics, physics parameters take
+         * their box variance with no correlations instead of the seed: the linearised posterior is
+         * local, and an oscillation posterior is often flat or multimodal around a narrow best-fit
+         * dip. A local seed traps the chain in the dip (ICARUS tutorial, injected signal: dmsq
+         * posterior sigma 0.14-0.6 against the true 1.17). The target is untouched: kept steps
+         * run with a frozen proposal, i.e. plain Metropolis.
+         */
+        void seed_proposal(const Eigen::MatrixXf &seed_cov, const Eigen::VectorXf &start, size_t n_prior = 0, bool local_physics = false) {
+            const long n = start.size();
+            const long nphys = metric.GetModel().nparams;
+            auto box_var = [&](long i) {
+                const auto [lo, hi] = mcmcParamBox(metric, i, start(i));
+                const float w = hi - lo;
+                return std::isfinite(w) && w > 0 ? w * w / 12.0f : 1.0f;
+            };
+            Eigen::MatrixXf S = seed_cov;
+            if(S.rows() != n || S.cols() != n || !S.allFinite()) {
+                if(S.size()) log<LOG_WARNING>(L"%1% || Proposal seed covariance is unusable (size %2%x%3%, finite %4%); seeding with the diagonal prior variances.")
+                    % __func__ % S.rows() % S.cols() % S.allFinite();
+                S = Eigen::MatrixXf::Zero(n, n);
+                for(long i = 0; i < n; ++i) {
+                    const long si = i - nphys;
+                    const bool gauss = si >= 0 && (size_t)si < metric.GetSysts().spline_prior_types.size()
+                                    && metric.GetSysts().spline_prior_types[si] != SplinePriorType::Uniform;
+                    const float prior_var = gauss ? metric.GetSysts().spline_priors(si) * metric.GetSysts().spline_priors(si) : INFINITY;
+                    S(i, i) = std::min(prior_var, box_var(i));
+                }
+            }
+            if(!local_physics) {
+                for(long i = 0; i < std::min(nphys, n); ++i) {
+                    S.row(i).setZero();
+                    S.col(i).setZero();
+                    S(i, i) = box_var(i);
+                }
+            }
+            Eigen::VectorXf d = Eigen::VectorXf::Ones(n);
+            for(long i = 0; i < n; ++i) {
+                const float cap = box_var(i);
+                if(S(i, i) > cap) d(i) = std::sqrt(cap / S(i, i));
+            }
+            S = d.asDiagonal() * S * d.asDiagonal();
+            for(int idx : fixed) {
+                S.row(idx).setZero();
+                S.col(idx).setZero();
+            }
+            cov = S;
+            width = S;
+            width.diagonal().array() += 1e-8f;
+            mean = start;
+            last_accepted = start;
+            origin = start;
+            started = true;
+            tune_calls = n_prior ? n_prior : 20 * active.size();
+            seeded = true;
+            beta = 0.05f;
+            stale = true;
+        }
+
+        void refresh() {
+            Eigen::MatrixXf inp = scale*width;
+            sub_L = ComputeSquareRootCovariance(inp(active, active)); //magic eigen indexing
+            stale = false;
+            since_refresh = 0;
+        }
+
+        /// End of burn-in: freeze the proposal at the final width and scale.
+        void finalize() {
+            tune_mode = false;
+            if(stale || sub_L.size() == 0) refresh();
+        }
+
         Eigen::VectorXf operator()(Eigen::VectorXf &current) {
+            if(!started) {
+                // Until the first acceptance tune() must see the start point, not zero.
+                last_accepted = current;
+                origin = current;
+                started = true;
+            }
 
             Eigen::VectorXf sub_throw1(active.size());
             Eigen::VectorXf sub_throw2(active.size());
@@ -458,10 +615,9 @@ namespace PROfit {
                 sub_throw1(i) = nd(rng);
                 sub_throw2(i) = nd(rng);
             }
-            
-            Eigen::MatrixXf inp = scale*width;//fulldim
 
-            if(tune_mode)sub_L = ComputeSquareRootCovariance(inp(active, active)); //magic eigen indexing
+            if(sub_L.size() == 0 || (tune_mode && stale && since_refresh >= refresh_every)) refresh();
+            ++since_refresh;
 
             last_proposed = current;//fulldim
             last_proposed(active) += (1.0f - beta) * sub_L * sub_throw1 + beta * sub_diagL * sub_throw2; //More index nonsesne?!
@@ -475,31 +631,10 @@ namespace PROfit {
 
 
         bool within_bound(const Eigen::VectorXf &value) {
-            long int nparams = metric.GetModel().nparams;
             for(long int i = 0; i < value.size(); ++i) {
                 if(std::find(fixed.begin(), fixed.end(), i) != std::end(fixed)) continue;
-                if(i < nparams) {
-                    // A finite model bound is authoritative; the -5 floor only stops runaway
-                    // exploration of log-space params whose model lb is -inf. The old
-                    // max(lb, -5) froze the whole chain when the best fit sat below -5
-                    // (e.g. Asimov no-signal fits driving a mixing angle to its bound).
-                    float lo = std::isfinite(metric.GetModel().lb(i)) ? metric.GetModel().lb(i) : -5.0f;
-                    if(value(i) > metric.GetModel().ub(i) || value(i) < lo)
-                        return false;
-                } else {
-                    size_t si = i - nparams;
-                    float lo, hi;
-                    if(metric.GetSysts().spline_has_restrict[si]) {
-                        lo = metric.GetSysts().spline_restrict_lo[si];
-                        hi = metric.GetSysts().spline_restrict_hi[si];
-                    } else if(metric.GetSysts().spline_hi[si] == 1.0f) {
-                        lo = -1.0f; hi = 1.0f;
-                    } else {
-                        lo = metric.GetSysts().spline_lo[si];
-                        hi = metric.GetSysts().spline_hi[si];
-                    }
-                    if(value(i) < lo || value(i) > hi) return false;
-                }
+                const auto [lo, hi] = mcmcParamBox(metric, i, i < origin.size() ? origin(i) : NAN);
+                if(value(i) < lo || value(i) > hi) return false;
             }
             return true;
         }
@@ -530,22 +665,131 @@ namespace PROfit {
                 } else {
                     scale /= adapt_factor;
                 }
+                stale = true;
                 accept_history.clear();
                 log<LOG_DEBUG>(L"%1% || Adaptive scale updated to %2%, acceptance rate = %3%") % __func__ % scale % acc_rate;
             }
 
-            if(tune_calls > (size_t)(4*last_proposed.size())) {
-                Eigen::MatrixXf cov_pd = cov;
-                for(long int i = 0; i < cov_pd.rows(); ++i)
-                    cov_pd(i, i) += 1e-8;
-                width = cov_pd;
-                beta = tune_calls > (size_t)(100*last_proposed.size()) ? 0.05 : 0.5;
+            if(seeded || tune_calls > (size_t)(4*last_proposed.size())) {
+                width = cov;
+                width.diagonal().array() += 1e-8f;
+                beta = seeded || tune_calls > (size_t)(100*last_proposed.size()) ? 0.05 : 0.5;
+                stale = true;
             }
 
 
         }
 
     };
+
+    /** @brief Kept steps of one Metropolis chain and its acceptance count. */
+    struct MCMCChainOut {
+        std::vector<Eigen::VectorXf> values; ///< Kept steps, in order.
+        size_t naccept = 0;                  ///< Accepted proposals, burn-in included.
+        size_t nsteps = 0;                   ///< Burn-in plus kept steps.
+    };
+
+    /** @brief Settings shared by every chain of runMetropolisChains. */
+    struct MCMCChainSpec {
+        std::vector<int> fixed;     ///< Parameter indices every chain holds fixed.
+        Eigen::MatrixXf seed_cov;   ///< Proposal covariance seed (adaptive_proposal::seed_proposal; empty = prior diagonal).
+        bool seeded = true;         ///< false: the historic unseeded adaptation.
+        size_t burnin = 0;          ///< Tuning steps per chain.
+        size_t iterations = 0;      ///< Kept steps over all chains.
+        size_t nthreads = 1;
+        std::vector<uint32_t> seeds; ///< Two per chain (proposal, sampler); sets the chain count.
+        /// Each chain's metric keeps its last prediction (PROmetric::LastSpectrum) while it runs.
+        bool remember_spectrum = false;
+
+        size_t nchains() const { return seeds.size() / 2; }
+        /// Kept steps of chain @p c: an even split, the first iterations % K chains take one more.
+        size_t chainSteps(size_t c) const {
+            const size_t K = std::max<size_t>(1, nchains());
+            return iterations / K + (c < iterations % K ? 1 : 0);
+        }
+    };
+
+    /** @brief Two seeds per chain drawn from @p rng, the chain count capped at the kept steps. */
+    inline std::vector<uint32_t> drawChainSeeds(size_t nchains, size_t iterations, std::mt19937 &rng) {
+        nchains = std::max<size_t>(1, std::min(nchains, std::max<size_t>(1, iterations)));
+        std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
+        std::vector<uint32_t> seeds(2 * nchains);
+        for(auto &sd : seeds) sd = dseed(rng);
+        return seeds;
+    }
+
+    /**
+     * @brief Run independent adaptive-Metropolis chains from @p start in parallel.
+     * @details Chain c samples Target{metric_c}: chain 0 uses @p metric, the others a Clone()
+     * with the same bounds. Each has its own seeds, the full burn-in and spec.chainSteps(c) kept
+     * steps. on_step(c, value, moved, metric_c) runs on chain c's thread for every kept step
+     * (moved = false when the proposal was rejected, so value repeats the previous step;
+     * metric_c is the chain's own metric, whose LastSpectrum(value) is set on a moved step when
+     * spec.remember_spectrum) and may touch only chain c's own state. The output is per chain, so it does not depend on the thread count.
+     * @p pbar follows chain 0, which has the most kept steps.
+     */
+    template<class Target, class OnStep>
+        std::vector<MCMCChainOut> runMetropolisChains(PROmetric &metric, const Eigen::VectorXf &start, const MCMCChainSpec &spec, OnStep &&on_step, PROgressBar *pbar = nullptr) {
+            const size_t K = std::max<size_t>(1, spec.nchains());
+            if(spec.seeds.size() < 2 * K)
+                throw std::invalid_argument("runMetropolisChains: need two seeds per chain");
+            // A start outside a free parameter's sampling box freezes every chain: each proposal
+            // keeps that parameter near its start, so within_bound rejects all of them.
+            for(long i = 0; i < start.size(); ++i) {
+                if(std::find(spec.fixed.begin(), spec.fixed.end(), (int)i) != spec.fixed.end()) continue;
+                const auto [lo, hi] = mcmcParamBox(metric, i, start(i));
+                if(start(i) >= lo && start(i) <= hi) continue;
+                const long np = metric.GetModel().nparams;
+                const std::string name = i < np ? metric.GetModel().param_names[i] : metric.GetSysts().spline_names[i - np];
+                log<LOG_WARNING>(L"%1% || Start value %2% of parameter %3% lies outside its MCMC sampling box [%4%, %5%]; the chains will reject every proposal.")
+                    % __func__ % start(i) % name.c_str() % lo % hi;
+            }
+            // Clones are built up front, on this thread.
+            std::vector<std::unique_ptr<PROmetric>> clones;
+            std::vector<PROmetric*> metrics(K, &metric);
+            for(size_t c = 1; c < K; ++c) {
+                clones.emplace_back(metric.Clone());
+                if((size_t)metric.lb.size() == metric.nParams()) clones.back()->setBounds(metric.lb, metric.ub);
+                metrics[c] = clones.back().get();
+            }
+            std::vector<MCMCChainOut> out(K);
+            std::vector<std::exception_ptr> errors(K);
+            parallel_for(K, spec.nthreads, [&](size_t c) {
+                try {
+                    PROmetric &m = *metrics[c];
+                    adaptive_proposal proposal(m, spec.seeds[2 * c], spec.fixed);
+                    if(spec.seeded) proposal.seed_proposal(spec.seed_cov, start);
+                    Metropolis<Target, adaptive_proposal> met(Target{m}, proposal, start, spec.seeds[2 * c + 1], false);
+                    met.warn_frozen = false;
+                    const size_t steps = spec.chainSteps(c);
+                    MCMCChainOut &o = out[c];
+                    o.values.reserve(steps);
+                    std::function<void(const Eigen::VectorXf&)> action = [&](const Eigen::VectorXf &v) {
+                        const bool moved = o.values.empty() || v != o.values.back();
+                        o.values.push_back(v);
+                        on_step(c, v, moved, m);
+                    };
+                    // Switched off again on exit, also when a chain throws.
+                    struct RememberGuard {
+                        PROmetric &m; bool on;
+                        RememberGuard(PROmetric &m_, bool on_) : m(m_), on(on_) { if(on) m.setRememberSpectrum(true); }
+                        ~RememberGuard() { if(on) m.setRememberSpectrum(false); }
+                    } remember(m, spec.remember_spectrum);
+                    met.run(spec.burnin, steps, action, c == 0 ? pbar : nullptr);
+                    o.naccept = met.naccept;
+                    o.nsteps = spec.burnin + steps;
+                } catch(...) {
+                    errors[c] = std::current_exception();
+                }
+            });
+            for(const auto &e : errors)
+                if(e) std::rethrow_exception(e);
+            const size_t nfrozen = std::count_if(out.begin(), out.end(), [](const MCMCChainOut &o) { return o.naccept == 0; });
+            if(nfrozen)
+                log<LOG_WARNING>(L"%1% || %2% of %3% Metropolis chain(s) accepted none of their %4% proposals: frozen at the start point (check bounds vs start values and proposal widths); results from these chains are meaningless.")
+                    % __func__ % nfrozen % K % (spec.burnin + spec.chainSteps(0));
+            return out;
+        }
 
 class HMC {
     public:

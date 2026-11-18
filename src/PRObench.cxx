@@ -310,8 +310,9 @@ BenchResult time_pseudo_universe(const std::string &tag,
 
 // (m, n) Metropolis MCMC step — proposal + target eval + accept/reject.
 // Two flavours:
-//   burnin_mode=true  → tune_mode=true on the adaptive_proposal; every step()
-//                        recomputes the proposal Cholesky (sub_L) inside
+//   burnin_mode=true  → tune_mode=true on the adaptive_proposal; step()
+//                        refactorises the proposal (sub_L) at most every
+//                        adaptive_proposal::refresh_every steps inside
 //                        operator() and we call proposal.tune(accepted) which
 //                        updates running mean/cov + adapts the scale every
 //                        adapt_window steps. Mirrors lines 64–69 of PROMCMC.h.
@@ -361,7 +362,7 @@ BenchResult time_mcmc_step(const std::string &tag,
             bool acc = mh.step();
             mh.proposal.tune(acc);
         }
-        mh.proposal.tune_mode = false;
+        mh.proposal.finalize();
     }
 
     int naccept = 0;
