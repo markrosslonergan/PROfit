@@ -55,7 +55,9 @@ namespace PROfit{
         /// Per-spline factors at the cached "central" point, shape (nbins_var, nsplines).
         /// central_factors(k, i) = spline i's multiplicative contribution to systw at bin k.
         /// (PROsyst::GetSplineFactor: for a spline_cross_quad group the first member's column holds
-        /// the whole group response and the other members' columns are 1).
+        /// the whole group response and the other members' columns are 1; likewise the splines
+        /// binned in another variable than the filled one migrate together, so the first spline of
+        /// that binning holds their whole migrated product and the others' columns are 1).
         /// systw_central(k) = product over i of central_factors(k, i). Used by the Tier 1.3
         /// incremental update path (single-spline-shift gradient calls) so we can divide
         /// out the old contribution and multiply in the new one without rerunning the full
