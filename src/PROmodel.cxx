@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cmath>
 #include <map>
+#include <sstream>
 
 namespace PROfit {
 
@@ -80,9 +81,17 @@ std::vector<long int> PROmodel::build_phys_grid(const PROpeller &prop) {
         long n_out = 0, n_dropped = 0;
         double w_out = 0, w_dropped = 0;
         std::vector<double> w_out_block(nblocks, 0.0), w_dropped_block(nblocks, 0.0);
+        // The most extreme value beyond each side and its block's edge, for the warning's advice.
+        double x_below = std::numeric_limits<double>::infinity(), x_above = -x_below, edge_lo = 0, edge_hi = 0;
         for(size_t i = 0; i < nev; ++i) {
             if(prop.VariableBinIndex(ivars[k], i) >= 0) continue;
             const double w = std::fabs(prop.added_weights[i]);
+            const double xi = prop.VariableValue(ivars[k], i);
+            if(layout && std::isfinite(xi) && block[i] >= 0) {
+                const PROpeller::BlockLayout &b = prop.block_layout[ivars[k]];
+                if(xi < b.lo[block[i]] && xi < x_below) { x_below = xi; edge_lo = b.lo[block[i]]; }
+                if(xi >= b.hi[block[i]] && xi > x_above) { x_above = xi; edge_hi = b.hi[block[i]]; }
+            }
             CellKey key;
             if(!cells || !cell_key(k, i, key)) {
                 ++n_dropped; w_dropped += w;
@@ -113,14 +122,23 @@ std::vector<long int> PROmodel::build_phys_grid(const PROpeller &prop) {
         if(n_dropped > 0)
             log<LOG_INFO>(L"%1% || Kinematic variable %2%: %3% events outside its binning (up to %4%%% of the MC weight of %5%) are left out of the binned prediction: %6%.")
                 % __func__ % ivars[k] % n_dropped % pct_dropped % where_dropped.c_str() % drop_reason;
+        // What to change in the XML: the edge(s) to move and how far.
+        std::ostringstream fix;
+        if(std::isfinite(x_above))
+            fix << "raise the upper edge of variable " << ivars[k] << "'s <bins> from " << edge_hi << " to above " << x_above;
+        if(std::isfinite(x_below))
+            fix << (fix.tellp() > 0 ? " and lower its lower edge" : "lower the lower edge of variable " + std::to_string(ivars[k]) + "'s <bins>")
+                << " from " << edge_lo << " to below " << x_below;
+        if(fix.tellp() == 0) fix << "widen variable " << ivars[k] << "'s <bins> to cover every event";
+        fix << ", in every channel";
         // Model construction repeats per FC/AFC worker: warn once per process.
         static std::atomic<bool> warned_out{false}, warned_dropped{false};
-        if(pct_out > 1.0 && !warned_out.exchange(true))
-            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% lies outside the binning of kinematic variable %4%. The binned prediction oscillates those events at their cell's mean value (averaged over the cell's spread where the model bin-averages); widen that variable's <bins> to treat them exactly.")
-                % __func__ % pct_out % where_out.c_str() % ivars[k];
+        if(pct_out > 0.1 && !warned_out.exchange(true))
+            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% lies outside the binning of kinematic variable %4%. Binned predictions approximate those events with one underflow/overflow cell per subchannel, which can bias the lowest or highest reco bins by several percent. To fix: %5%.")
+                % __func__ % pct_out % where_out.c_str() % ivars[k] % fix.str().c_str();
         if(pct_dropped > 0.1 && !warned_dropped.exchange(true))
-            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% is outside the binning of kinematic variable %4% and missing from every binned prediction (%5%). Widen that variable's <bins> to cover every event.")
-                % __func__ % pct_dropped % where_dropped.c_str() % ivars[k] % drop_reason;
+            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% is outside the binning of kinematic variable %4% and missing from every binned prediction (%5%). To fix: %6%.")
+                % __func__ % pct_dropped % where_dropped.c_str() % ivars[k] % drop_reason % fix.str().c_str();
     }
 
     phys_grid_sizes.assign(N, 0);

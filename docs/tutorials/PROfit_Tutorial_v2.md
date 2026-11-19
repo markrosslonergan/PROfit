@@ -308,9 +308,12 @@ bin. Such events go into an **underflow or overflow cell** of their subchannel.
 These cells are internal to the model: they do not change the binning, plots or
 caches. A cell is evaluated at its events' weighted mean L/E. The sine-kernel
 SBL models and `LBL_3+1-vacuum_angles` also average it over the events' spread
-(see `bin_average=` in the model appendix). This is an approximation for a wide
-tail, so PROfit warns when more than 1% of a subchannel's MC weight lands in
-cells; widen the binning until it no longer does. The visible-decay models
+(see `bin_average=` in the model appendix). This is only a safety net: one cell
+cannot follow how the tail's oscillation varies across reco bins, so the lowest
+or highest reco bins can still be off by several percent. PROfit warns when more
+than 0.1% of a subchannel's MC weight lands in cells and says which edge to move
+and how far, e.g. `raise the upper edge of variable 1's <bins> from 2.5 to above
+5.249`. Follow it until the warning goes away. The visible-decay models
 (`SBL_3+1+decay_vis1/2`) need a uniform truth grid and get no cells: events
 outside their binning are left out, with a warning. Before 2026-11-19, every
 model dropped these events from binned predictions, though `--event-by-event`
