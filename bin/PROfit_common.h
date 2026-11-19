@@ -142,6 +142,7 @@ struct PROpt {
     bool lndet = false;        // --lndet: add ln det M to the covariance chi2
     bool frozen_cov = false;   // --frozen-cov: hold M at the --cov-reference prediction
     std::map<std::string, float> cov_reference;
+    std::string cov_reference_file; // --cov-reference-file: a global_fit.txt read as the reference
     bool ordering_octant_seeds = false;  // --ordering-octant-seeds (LBL models only)
     bool ordering_octant_polish = false; // --ordering-octant-polish (LBL models only)
     bool profile_nuisances = false;      // --profile-nuisances (-c poisson only so far)

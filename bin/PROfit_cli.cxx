@@ -107,6 +107,11 @@ PROpt::PROpt(int argc, char **argv) {
                 "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
                 "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
             ->expected(-1);
+        app.add_option("--cov-reference-file", cov_reference_file,
+                "Take the --frozen-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
+                "(values as written there: physics in the fit's own units, log10 where the model uses log10; splines by name or "
+                "plotname). --cov-reference pairs given alongside override single parameters.")
+            ->check(CLI::ExistingFile);
         app.add_flag("--ordering-octant-seeds", ordering_octant_seeds,
                 "LBL models only: start every fit (global, profile, surface, adaptive mesh, fc) also from the four mass-ordering x "
                 "theta23-octant variants of each of its start points (every seed and the best Latin/swarm point), and polish every "

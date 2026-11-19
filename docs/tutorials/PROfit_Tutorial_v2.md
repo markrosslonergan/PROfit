@@ -1234,6 +1234,21 @@ PROfit -x tutorial.xml -t TUT -o globfr --seed 405 -n 8 --frozen-cov --cov-refer
   model defaults and the splines at their prior centres. For the LBL models
   give a physical 3ν point here, because the model defaults (e.g. dmsq_31 =
   1e-3) are not physical.
+* **`--cov-reference-file <file>`** takes the reference from the
+  `_global_fit.txt` an earlier run wrote, e.g. to freeze M at a best fit. The
+  values are used as written there: physics in the fit's own units (log10 for
+  the log parameters), splines by plotname. Pairs from `--cov-reference`
+  override single parameters, so this keeps the splines at the best fit but
+  the physics at no oscillation:
+
+  ```bash
+  PROfit -x tutorial.xml -t TUT -o globfr2 --seed 405 -n 8 --frozen-cov \
+      --cov-reference-file TUT_glob1_global_fit.txt --cov-reference sinsq2thme 1e-10 global
+  ```
+
+  The file must come from the same config and systematics selection: a name
+  this run doesn't have is fatal, and a parameter the file doesn't list stays
+  at its default, with a warning.
 
 The options reach everything that builds a metric: profile, surface, fc,
 fc-adaptive and the pseudo-experiments (each toy measures ln det against

@@ -363,12 +363,89 @@ void make_param_vectors(Eigen::VectorXf &fakeDataParams, Eigen::VectorXf &CVPara
     }
 }
 
-// --lndet / --frozen-cov / --cov-reference become PROconfig::CovarianceOptions, which every
+// Fill `ref` from a <tag>_<out>_global_fit.txt as print_global_fit_results writes it: a header,
+// then one "name : value" line per parameter. Physics lines carry the param_name and the value in
+// the parameter vector's own units (log10 where is_log10); spline lines carry the plotname, which
+// need not be unique, so a repeated plotname takes the next spline that has it. Returns which
+// entries of `ref` the file set.
+static std::vector<bool> read_cov_reference_file(const std::string &path, const PROconfig &config, const PROmodel &model,
+                                                 const PROsyst &systs, std::vector<float> &ref) {
+    const size_t nphys = model.nparams, nsyst = systs.GetNSplines();
+    std::vector<bool> set(nphys + nsyst, false);
+    std::ifstream in(path);
+    if(!in) {
+        log<LOG_ERROR>(L"%1% || Cannot open --cov-reference-file %2%.") % __func__ % path.c_str();
+        exit(EXIT_FAILURE);
+    }
+    auto trim = [](const std::string &s) {
+        const size_t b = s.find_first_not_of(" \t\r"), e = s.find_last_not_of(" \t\r");
+        return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+    };
+    auto plotname = [&](size_t s) {
+        const auto it = config.m_mcgen_variation_plotname_map.find(systs.spline_names[s]);
+        return it == config.m_mcgen_variation_plotname_map.end() ? systs.spline_names[s] : it->second;
+    };
+    std::string line;
+    size_t lineno = 0;
+    while(std::getline(in, line)) {
+        ++lineno;
+        const size_t sep = line.rfind(" : "); // plotnames may contain spaces and colons
+        if(sep == std::string::npos) continue; // header, blank lines
+        const std::string name = trim(line.substr(0, sep)), text = trim(line.substr(sep + 3));
+        char *end = nullptr;
+        const double value = std::strtod(text.c_str(), &end);
+        if(text.empty() || *end != '\0' || std::isnan(value)) {
+            log<LOG_ERROR>(L"%1% || %2% line %3%: '%4%' is not a number.") % __func__ % path.c_str() % lineno % text.c_str();
+            exit(EXIT_FAILURE);
+        }
+        long idx = -1;
+        bool seen = false;
+        const auto pit = std::find(model.param_names.begin(), model.param_names.end(), name);
+        if(pit != model.param_names.end()) {
+            idx = std::distance(model.param_names.begin(), pit);
+            seen = set[idx];
+        } else {
+            for(size_t s = 0; s < nsyst && idx < 0; ++s) {
+                if(systs.spline_names[s] != name && plotname(s) != name) continue;
+                if(set[nphys + s]) seen = true;
+                else idx = nphys + s;
+            }
+        }
+        if(idx < 0 || (seen && (size_t)idx < nphys)) {
+            if(seen)
+                log<LOG_ERROR>(L"%1% || %2% line %3%: '%4%' is listed more often than this run has parameters of that name.")
+                    % __func__ % path.c_str() % lineno % name.c_str();
+            else
+                log<LOG_ERROR>(L"%1% || %2% line %3%: '%4%' is neither a physics parameter of model %5% %6% nor a spline "
+                               "(name or plotname) of this run. Was the file written with another config or systematics selection?")
+                    % __func__ % path.c_str() % lineno % name.c_str() % config.m_model_tag.c_str() % model.param_names;
+            exit(EXIT_FAILURE);
+        }
+        ref[idx] = value;
+        set[idx] = true;
+        if((size_t)idx < nphys && (value < model.lb(idx) || value > model.ub(idx)))
+            log<LOG_WARNING>(L"%1% || %2%: %3% = %4% lies outside the parameter's fit range.") % __func__ % path.c_str() % name.c_str() % value;
+    }
+    std::string missing;
+    size_t nset_phys = 0, nset_spline = 0;
+    for(size_t i = 0; i < nphys + nsyst; ++i) {
+        if(set[i]) { ++(i < nphys ? nset_phys : nset_spline); continue; }
+        missing += (missing.empty() ? "" : ", ") + (i < nphys ? model.param_names[i] : plotname(i - nphys));
+    }
+    log<LOG_INFO>(L"%1% || Covariance reference read from %2%: %3% physics and %4% spline values.")
+        % __func__ % path.c_str() % nset_phys % nset_spline;
+    if(!missing.empty())
+        log<LOG_WARNING>(L"%1% || %2% does not list: %3%. They stay at the model defaults / prior centres.")
+            % __func__ % path.c_str() % missing.c_str();
+    return set;
+}
+
+// --lndet / --frozen-cov / --cov-reference[-file] become PROconfig::CovarianceOptions, which every
 // PROcovariance reads at construction: install them before the first metric is built.
 void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs) {
     if(!options.lndet && !options.frozen_cov) {
-        if(!options.cov_reference.empty())
-            log<LOG_WARNING>(L"%1% || --cov-reference is only used with --lndet or --frozen-cov; ignoring it.") % __func__;
+        if(!options.cov_reference.empty() || !options.cov_reference_file.empty())
+            log<LOG_WARNING>(L"%1% || --cov-reference / --cov-reference-file are only used with --lndet or --frozen-cov; ignoring them.") % __func__;
         return;
     }
     if(options.chi2 == "poisson") {
@@ -382,6 +459,12 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
     std::vector<float> ref(nphys + nsyst, 0.0f);
     for(size_t i = 0; i < nphys; ++i) ref[i] = model.default_val(i);
     for(size_t i = 0; i < nsyst && i < (size_t)systs.spline_centers.size(); ++i) ref[nphys + i] = systs.spline_centers(i);
+    // The file first, then the pairs, so a pair overrides what the file says for that parameter.
+    std::vector<bool> from_file(nphys + nsyst, false);
+    if(!options.cov_reference_file.empty())
+        from_file = read_cov_reference_file(options.cov_reference_file, config, model, systs, ref);
+    bool splines_moved = std::find(from_file.begin() + nphys, from_file.end(), true) != from_file.end();
+    size_t overridden = 0;
     for(const auto &[name, value]: options.cov_reference) {
         const auto pit = std::find(model.param_names.begin(), model.param_names.end(), name);
         if(pit != model.param_names.end()) {
@@ -391,19 +474,25 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
                 exit(EXIT_FAILURE);
             }
             ref[i] = model.is_log10[i] ? std::log10(value) : value;
+            overridden += from_file[i];
             if(ref[i] < model.lb(i) || ref[i] > model.ub(i))
                 log<LOG_WARNING>(L"%1% || --cov-reference %2% = %3% lies outside the parameter's fit range.") % __func__ % name.c_str() % value;
             continue;
         }
         const auto sit = std::find(systs.spline_names.begin(), systs.spline_names.end(), name);
         if(sit != systs.spline_names.end()) {
-            ref[nphys + std::distance(systs.spline_names.begin(), sit)] = value;
+            const size_t i = nphys + std::distance(systs.spline_names.begin(), sit);
+            ref[i] = value;
+            overridden += from_file[i];
+            splines_moved = true;
             continue;
         }
         log<LOG_ERROR>(L"%1% || --cov-reference: '%2%' is neither a physics parameter of model %3% %4% nor a spline systematic.")
             % __func__ % name.c_str() % config.m_model_tag.c_str() % model.param_names;
         exit(EXIT_FAILURE);
     }
+    if(overridden)
+        log<LOG_INFO>(L"%1% || --cov-reference overrides %2% value(s) read from %3%.") % __func__ % overridden % options.cov_reference_file.c_str();
     config.m_covariance_options.lndet = options.lndet;
     config.m_covariance_options.frozen = options.frozen_cov;
     config.m_covariance_options.reference = ref;
@@ -411,6 +500,9 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
     for(size_t i = 0; i < nphys; ++i) phys(i) = model.is_log10[i] ? std::pow(10.0f, ref[i]) : ref[i];
     log<LOG_INFO>(L"%1% || Covariance options: ln det M %2%, frozen M %3%; reference physics (physical units) %4%")
         % __func__ % (options.lndet ? "on" : "off") % (options.frozen_cov ? "on" : "off") % phys;
+    if(splines_moved)
+        log<LOG_INFO>(L"%1% || Reference splines (sigma, in fit order): %2%")
+            % __func__ % Eigen::VectorXf(Eigen::Map<const Eigen::VectorXf>(ref.data() + nphys, nsyst));
 }
 
 // Decide which fitter presets this run actually gets, now that both the metric
