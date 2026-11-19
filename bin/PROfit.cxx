@@ -104,6 +104,9 @@ int main(int argc, char* argv[])
     // Fit region: same placement rules as PROjector (mask before any metric exists,
     // physics names into fixed_params before the bounds section). See inc/PROfitRegion.h.
     if(options.fit_region_config.active()) {
+        // Physics is fixed at CV only where the constraint is evaluated (global, plot); profile,
+        // surface, fc, ... scan or float their physics parameters as in any other fit.
+        if(!*options.global_command && !*options.proplot_command) options.fit_region_config.float_physics = true;
         if(!FitRegionSetup(options.fit_region_config, config, variable_data, data, options.fixed_params, *model))
             exit(1);
     }

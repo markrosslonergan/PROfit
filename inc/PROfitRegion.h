@@ -28,9 +28,13 @@
  * linear model this equals chi2_min(joint fit) - chi2_min(fit-region fit). No covariance is
  * promoted to splines: the covariance systematics are constrained analytically.
  *
- * Physics parameters are held at the fit point (fixed at CV by default). Splines that were
- * fixed, or have a uniform prior (no Gaussian prior to condition), are held at the fit point
- * and their uncertainty is not propagated (logged).
+ * Physics parameters and fixed splines are held at the fit point (physics is fixed at CV by
+ * default for the global and plot subcommands, which report the constraint; the others float
+ * it as usual). Uniform-prior (free) splines have no prior prediction: they stay at their fit
+ * values in the pre-constraint prediction and enter the constraint with the variance of their
+ * allowed box, W^2/12, i.e. constrained by the fit region alone. Data with statistical-overlap
+ * cells is not supported, and with --frozen-cov the covariance systematics are still evaluated
+ * at the fit point (as for the post-fit bands).
  */
 #ifndef PROFITREGION_H_
 #define PROFITREGION_H_
@@ -56,7 +60,7 @@ namespace PROfit {
         std::string fit_pattern;    ///< Non-empty => fit-region mode; unanchored regex on subchannel fullnames (whole channels).
         std::string eval_pattern;   ///< Channels to evaluate; empty => every channel outside the fit region.
         bool blind_eval = false;    ///< Zero the data outside the fit region (constrained prediction only, no chi2).
-        bool float_physics = false; ///< Float physics parameters in the fit-region fit (default: fixed at CV).
+        bool float_physics = false; ///< Float physics parameters in the fit-region fit (default: fixed at CV for global and plot).
 
         std::vector<size_t> fit_channels;  ///< Filled by FitRegionSetup: global channel indices in the fit.
         std::vector<size_t> eval_channels; ///< Filled by FitRegionSetup: global channel indices evaluated.
@@ -123,13 +127,14 @@ namespace PROfit {
         std::vector<Eigen::Index> fit_bins;   ///< Collapsed bins conditioned on (fit region, positive stat variance).
         Eigen::VectorXf data;                 ///< Observed data (zero when blinded).
         Eigen::VectorXf pre_mean, post_mean;  ///< Prediction before / after the fit-region constraint.
-        Eigen::MatrixXf pre_syst_cov, post_syst_cov; ///< Systematic covariance (covariance systs + propagated splines).
+        Eigen::MatrixXf pre_syst_cov, post_syst_cov; ///< Systematic covariance (covariance systs + propagated splines; post also the free splines).
         Eigen::VectorXf pre_stat, post_stat;  ///< Statistical variances (the metric's convention) at pre/post mean.
         float chi2_pre = 0, chi2_post = 0;
         long ndof = 0;
         float chi2_fit_linear = 0;            ///< Linearised fit-region chi2 (d_B - m_B)^T Sigma_BB^-1 (d_B - m_B); ~ the fit chi2 when the model is near linear.
         size_t n_splines_propagated = 0;      ///< Gaussian-prior splines whose uncertainty enters V.
-        size_t n_splines_held = 0;            ///< Fixed or uniform-prior splines held at the fit point.
+        size_t n_splines_free = 0;            ///< Uniform-prior splines, constrained by the fit region alone.
+        size_t n_splines_held = 0;            ///< Fixed splines held at the fit point.
         bool blind = false;
         bool shape_only = false;
         std::vector<FitRegionChannelGoF> channels;

@@ -37,7 +37,7 @@ namespace PROfit {
 
     bool PROjectorSelectChannels(const PROconfig &config, const std::string &pattern,
                                  std::vector<size_t> &matched_channels) {
-        if(!SelectChannelsByPattern(config, pattern, matched_channels, "PROjector channel pattern")) return false;
+        if(!SelectChannelsByPattern(config, pattern, matched_channels, "PROjector")) return false;
         const size_t n_unmatched_channels = ComplementChannels(config, matched_channels).size();
         if(n_unmatched_channels == 0) {
             log<LOG_ERROR>(L"%1% || PROjector pattern '%2%' matched EVERY channel; nothing left to project onto.")

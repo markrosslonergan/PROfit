@@ -2058,11 +2058,11 @@ PROfit -x tutorial.xml -t TUT -o fr --seed 405 -n 8 \
 
 What happens: the channels matching `_numu_` (same pattern rules as
 PROjector — unanchored regex, **whole channels** only) become the fit region,
-and every χ² is restricted to their bins. The other channels' data is kept,
-and physics parameters are fixed at CV (pass `--fit-region-float-physics` to
-float them). The mask is honored everywhere — `profile`, `surface`, `fc`,
-`fc-adaptive` all run as sideband-only fits — but only `global` and `plot`
-produce the constraint report below.
+and every χ² is restricted to their bins. The other channels' data is kept.
+The mask is honored everywhere — `profile`, `surface`, `fc`, `fc-adaptive` all
+run as sideband-only fits, their physics parameters floating as usual — but
+only `global` and `plot` produce the constraint report below, and for those
+two physics is fixed at CV (pass `--fit-region-float-physics` to float it).
 
 Here the injected νe appearance signal lives only in the νe channels, so the
 νμ sideband fit cannot see it; the νe channels are where it should show up.
@@ -2089,12 +2089,12 @@ degree of freedom per evaluated bin (minus one per channel with
 and per channel:
 
 ```
-Conditioned on 68 fit-region bins; 14 Gaussian-prior spline(s) propagated, 0 held at the fit point.
+Conditioned on 68 fit-region bins; 14 Gaussian-prior spline(s) propagated, 0 free (uniform-prior) spline(s) constrained by the fit region alone, 0 held fixed.
 Fit region, post-fit       : chi2 = 0 (ndf = 68 bins - 0 phys - 0 uniform - 0 shape = 68, p = 1)
 Fit region, linearised     : chi2 = 0 (matches the fit chi2 when the model is ~linear about the fit point)
-Eval region, pre-constraint : chi2 = 8.53389 / 32 (p = 0.999989)
-Eval region, post-constraint: chi2 = 8.98349 / 32 (p = 0.99998)
-  nu_ND_nue : pre 2.56499 / 16 (p = 0.999941)   post 2.82587 / 16 (p = 0.999887)
+Eval region, pre-constraint : chi2 = 8.53388 / 32 (p = 0.999989)
+Eval region, post-constraint: chi2 = 8.98348 / 32 (p = 0.99998)
+  nu_ND_nue : pre 2.56498 / 16 (p = 0.999941)   post 2.82586 / 16 (p = 0.999887)
   nu_FD_nue : pre 5.39055 / 16 (p = 0.993444)   post 5.84422 / 16 (p = 0.989693)
 ```
 
@@ -2130,7 +2130,8 @@ Two built-in checks:
 * `--eval-region "FD_nue"` — evaluate only these channels (must not overlap
   the fit region; the default is everything outside it).
 * `--blind-eval` — zero the data outside the fit region and report only the
-  constrained prediction, e.g. before unblinding:
+  constrained prediction, e.g. before unblinding (not with `--shapeonly`, which
+  normalises the prediction onto that data):
 
   ```
   nu_FD_nue : total events pre 58.4618 +/- 7.74117 (syst) -> post 58.4618 +/- 6.62346 (syst)
@@ -2143,11 +2144,17 @@ Two built-in checks:
 
 ### Rules and caveats
 
-* Patterns must select whole channels; a pattern matching every channel, or a
-  channel in both `--fit-region` and `--eval-region`, is refused.
-* Splines that are `--fix`ed or have a uniform prior are held at their fit
-  values; their uncertainty is not propagated into the evaluation region (a
-  warning lists them).
+* Patterns must select whole channels; an empty pattern, a pattern matching
+  every channel, or a channel in both `--fit-region` and `--eval-region`, is
+  refused.
+* `--fix`ed splines (and physics parameters) are held at their fit values.
+  Uniform-prior splines (`prior_type="uniform"`, `binned_unconstrained`) have
+  no prior prediction: the pre-constraint prediction takes them at their fit
+  values, and in the constraint the fit region alone determines them (they
+  enter with the variance of their allowed range, W²/12).
+* Data with statistical-overlap cells is not supported (no report is made).
+  With `--frozen-cov` the covariance systematics are still evaluated at the
+  fit point, as for the post-fit bands.
 * Bins with zero statistical variance (zero data under neyman) are drawn but
   left out of the χ², exactly as the fit metric does.
 * `-c poisson` has no covariance term, so the evaluation χ² is Gaussian with

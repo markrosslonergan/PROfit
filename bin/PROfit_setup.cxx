@@ -716,11 +716,16 @@ void empty_bin_check(const PROconfig &config, const PROpt &options, const PROpel
                                         cv_check_params, !options.eventbyevent, config.i_prime);
     Eigen::VectorXf collapsed_cv = CollapseMatrix(config, cv_check_spec.Spec(), config.i_prime);
 
+    // --fit-region evaluation bins are outside the fit but enter the constraint chi2 (unless blinded).
+    Eigen::VectorXf evaluated = Eigen::VectorXf::Zero(collapsed_cv.size());
+    if(!options.fit_region_config.blind_eval)
+        evaluated = CollapsedChannelMask(config, options.fit_region_config.eval_channels, config.i_prime);
+
     int n_zero = 0, n_tiny = 0;
     for(Eigen::Index b = 0; b < collapsed_cv.size(); ++b) {
-        // Bins outside the fit region (PROjector / future bin-off masks) never enter
+        // Other bins outside the fit region (PROjector / future bin-off masks) never enter
         // a chi2, so an empty CV there is not a problem.
-        if(!config.IsBinActive(config.i_prime, (size_t)b)) continue;
+        if(!config.IsBinActive(config.i_prime, (size_t)b) && evaluated(b) < 0.5f) continue;
         if(collapsed_cv(b) <= 0.0f) {
             log<LOG_ERROR>(L"%1% || Default-CV collapsed bin %2% has %3% expected events (<=0). Empty-bin would make CNP/stat covariance singular.") % __func__ % (long)b % collapsed_cv(b);
             ++n_zero;

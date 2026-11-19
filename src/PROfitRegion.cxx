@@ -33,7 +33,7 @@ namespace PROfit {
         size_t global_channel_index = 0;
         bool ok = true;
         // Unanchored regex (plain substrings work); see PROconfig.h.
-        std::regex re = CompilePattern(pattern, what);
+        std::regex re = CompilePattern(pattern, what + " pattern");
         for(size_t im = 0; im < config.m_num_modes; ++im) {
             for(size_t id = 0; id < config.m_num_detectors; ++id) {
                 for(size_t ic = 0; ic < config.m_num_channels; ++ic, ++global_channel_index) {
@@ -46,7 +46,7 @@ namespace PROfit {
                     if(n_match == nsub && nsub > 0) {
                         matched_channels.push_back(global_channel_index);
                     } else if(n_match != 0) {
-                        log<LOG_ERROR>(L"%1% || %2% '%3%' matches %4%/%5% subchannels of channel %6% (mode %7%, detector %8%). "
+                        log<LOG_ERROR>(L"%1% || %2% pattern '%3%' matches %4%/%5% subchannels of channel %6% (mode %7%, detector %8%). "
                                 L"A channel must be selected as a whole; refine the pattern.")
                             % __func__ % what.c_str() % pattern.c_str() % n_match % nsub
                             % config.m_channel_names[ic].c_str()
@@ -58,7 +58,7 @@ namespace PROfit {
         }
         if(!ok) return false;
         if(matched_channels.empty()) {
-            log<LOG_ERROR>(L"%1% || %2% '%3%' matched no channels.") % __func__ % what.c_str() % pattern.c_str();
+            log<LOG_ERROR>(L"%1% || %2% pattern '%3%' matched no channels.") % __func__ % what.c_str() % pattern.c_str();
             return false;
         }
         return true;
@@ -213,6 +213,10 @@ namespace PROfit {
             log<LOG_ERROR>(L"%1% || Parameter vector has %2% entries, expected %3%.") % __func__ % params.size() % (nphys + nspl);
             return false;
         }
+        if(data.has_overlap) {
+            log<LOG_ERROR>(L"%1% || The fit-region constraint takes the bins as statistically independent; data with shared-event (overlap) cells is not supported, so no constraint is reported.") % __func__;
+            return false;
+        }
 
         Eigen::VectorXf full_hat;
         const Eigen::VectorXf mu_hat = collapsedPrediction(config, prop, metric, params, d, &full_hat);
@@ -229,31 +233,38 @@ namespace PROfit {
             C = Cf.cast<double>();
         }
 
-        // Linear response of the prediction to every free Gaussian-prior spline. Fixed and
-        // uniform-prior splines stay at the fit point (a uniform prior has nothing to condition).
+        // Linear response of the prediction to every free spline; fixed splines stay at the fit
+        // point. A uniform-prior (free) spline has no prior to propagate: it is constrained by the
+        // fit region alone, so it enters about its fit value with the variance of its allowed box,
+        // W^2/12 (the PROpulls convention for flat priors).
         const Eigen::VectorXf lb = metric.LowerBound();
         const Eigen::VectorXf ub = metric.UpperBound();
-        std::vector<size_t> prop_splines;
+        const auto isUniform = [&](size_t s) {
+            return s < systs.spline_prior_types.size() && systs.spline_prior_types[s] == SplinePriorType::Uniform;
+        };
+        std::vector<size_t> prop_splines;              // every free spline, one column of J each
+        std::vector<Eigen::Index> gauss, gauss_cols;   // the Gaussian-prior ones: spline index, column of J
         for(size_t s = 0; s < nspl; ++s) {
             const size_t i = nphys + s;
             const bool is_fixed = (fixed.size() > i && fixed[i]) || std::abs(ub(i) - lb(i)) < 1e-10f;
-            const bool uniform = s < systs.spline_prior_types.size() && systs.spline_prior_types[s] == SplinePriorType::Uniform;
-            if(is_fixed || uniform) {
+            if(is_fixed) {
                 ++out.n_splines_held;
-                if(uniform && !is_fixed)
-                    log<LOG_WARNING>(L"%1% || Spline %2% has a uniform prior: held at its fit value %3%, its uncertainty is NOT propagated to the evaluation region.")
-                        % __func__ % systs.spline_names[s].c_str() % params(i);
                 continue;
+            }
+            if(isUniform(s)) {
+                ++out.n_splines_free;
+            } else {
+                gauss.push_back((Eigen::Index)s);
+                gauss_cols.push_back((Eigen::Index)prop_splines.size());
             }
             prop_splines.push_back(s);
         }
-        out.n_splines_propagated = prop_splines.size();
+        out.n_splines_propagated = gauss.size();
 
         const Eigen::Index np = (Eigen::Index)prop_splines.size();
         Eigen::MatrixXd J(nbins, np);
-        Eigen::VectorXd dtheta(np); // theta_0 - theta_hat
-        Eigen::MatrixXd P(np, np);
-        const Eigen::MatrixXf prior_full = metric.GetPriorCovariance();
+        Eigen::VectorXd dtheta = Eigen::VectorXd::Zero(np); // theta_0 - theta_hat
+        Eigen::MatrixXd P = Eigen::MatrixXd::Zero(np, np), P_free = Eigen::MatrixXd::Zero(np, np);
         for(Eigen::Index k = 0; k < np; ++k) {
             const size_t s = prop_splines[k];
             const size_t i = nphys + s;
@@ -268,13 +279,21 @@ namespace PROfit {
             const Eigen::VectorXf mu_lo = collapsedPrediction(config, prop, metric, p, d);
             J.col(k).setZero();
             if(hi - lo > 1e-6f) J.col(k) = ((mu_hi - mu_lo) / (hi - lo)).cast<double>();
-            dtheta(k) = (double)systs.spline_centers(s) - (double)params(i);
-            for(Eigen::Index l = 0; l < np; ++l)
-                P(k, l) = prior_full(s, prop_splines[l]);
+            if(isUniform(s)) P_free(k, k) = std::pow((double)ub(i) - (double)lb(i), 2) / 12.0;
+            else dtheta(k) = (double)systs.spline_centers(s) - (double)params(i);
+        }
+        // Gaussian priors exactly as Pull() applies them with the other splines held: the inverse of
+        // the free splines' block of the prior precision (diag(sigma^2) without prior correlations).
+        if(!gauss.empty()) {
+            const Eigen::MatrixXd precision = metric.SplinePriorPrecision().cast<double>()(gauss, gauss);
+            const Eigen::MatrixXd covariance = precision.inverse();
+            P(gauss_cols, gauss_cols) = covariance;
         }
 
-        // Prior-predictive about the linearisation point.
-        const Eigen::MatrixXd V = C + J * P * J.transpose();
+        // Prior-predictive about the linearisation point. The free splines have no prior
+        // prediction: they widen the covariance only for the constraint.
+        const Eigen::MatrixXd V_pre = C + J * P * J.transpose();
+        const Eigen::MatrixXd V = V_pre + J * P_free * J.transpose();
         const Eigen::VectorXd m = mu_hat.cast<double>() + J * dtheta;
 
         const Eigen::VectorXf stat_hat = metric.GetStatVariances(mu_hat, d, params);
@@ -309,18 +328,20 @@ namespace PROfit {
         const Eigen::MatrixXd V_SB = V(S, B);
         const Eigen::VectorXd post_mean = m(S) + V_SB * ldlt.solve(u);
         const Eigen::MatrixXd post_V = V(S, S) - V_SB * ldlt.solve(V_SB.transpose());
+        if((post_mean.array() <= 0).any())
+            log<LOG_WARNING>(L"%1% || The constrained prediction is <= 0 in %2% evaluation bin(s): the linearised constraint is not reliable there.")
+                % __func__ % (post_mean.array() <= 0).count();
 
-        // Pre-constraint: the actual (non-linearised) prediction at the prior centers.
+        // Pre-constraint: the actual (non-linearised) prediction at the prior centers (free
+        // splines, which have none, at their fit values).
         Eigen::VectorXf params_pre = params;
-        for(size_t s = 0; s < nspl; ++s)
-            if(std::find(prop_splines.begin(), prop_splines.end(), s) != prop_splines.end())
-                params_pre(nphys + s) = systs.spline_centers(s);
+        for(Eigen::Index s : gauss) params_pre((Eigen::Index)nphys + s) = systs.spline_centers(s);
         const Eigen::VectorXf mu_pre = collapsedPrediction(config, prop, metric, params_pre, d);
 
         out.data = d(S);
         out.pre_mean = mu_pre(S);
         out.post_mean = post_mean.cast<float>();
-        out.pre_syst_cov = V(S, S).cast<float>();
+        out.pre_syst_cov = V_pre(S, S).cast<float>();
         out.post_syst_cov = post_V.cast<float>();
 
         // Statistical variances in the metric's convention, evaluated about the mean under test.
@@ -375,8 +396,8 @@ namespace PROfit {
     void PrintFitRegionConstraint(const FitRegionConstraint &res, float fit_chi2, const PROndof *fit_ndof) {
         auto pval = [](float chi2, long ndof) { return ndof > 0 ? TMath::Prob(chi2, (int)ndof) : 1.0; };
         log<LOG_INFO>(L"%1% || ==================== Fit-region constraint ====================") % __func__;
-        log<LOG_INFO>(L"%1% || Conditioned on %2% fit-region bins; %3% Gaussian-prior spline(s) propagated, %4% held at the fit point.")
-            % __func__ % res.fit_bins.size() % res.n_splines_propagated % res.n_splines_held;
+        log<LOG_INFO>(L"%1% || Conditioned on %2% fit-region bins; %3% Gaussian-prior spline(s) propagated, %4% free (uniform-prior) spline(s) constrained by the fit region alone, %5% held fixed.")
+            % __func__ % res.fit_bins.size() % res.n_splines_propagated % res.n_splines_free % res.n_splines_held;
         if(fit_chi2 >= 0 && fit_ndof)
             log<LOG_INFO>(L"%1% || Fit region, post-fit       : chi2 = %2% (%3%, p = %4%)")
                 % __func__ % fit_chi2 % fit_ndof->describe().c_str() % pval(fit_chi2, fit_ndof->value());
