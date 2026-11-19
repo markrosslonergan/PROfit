@@ -139,6 +139,9 @@ int PROletariat::Stage() {
     const std::vector<std::string> auto_artifacts = {
         opts_.analysis_tag + "_prop.bin",
         opts_.analysis_tag + "_syst.bin",
+        opts_.analysis_tag + "_data.bin",
+        opts_.analysis_tag + "_overlap_mc.bin",
+        opts_.analysis_tag + "_overlap_data.bin",
         opts_.final_output_tag + "_mesh.bin",
         opts_.final_output_tag + "_bank.bin",
     };

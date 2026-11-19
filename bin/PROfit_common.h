@@ -58,6 +58,7 @@
 #include <stdexcept>
 #include <string>
 #include <set>
+#include <optional>
 
 #include <glob.h>
 #include <vector>
@@ -69,7 +70,13 @@ using namespace PROfit;
 
 struct GlobalFitResult {
     PROfitter fitter;
-    std::optional<Metropolis<simple_target, adaptive_proposal>> mh;
+    /// Kept steps of each post-fit Correlations chain (physics free), in chain order.
+    std::vector<std::vector<Eigen::VectorXf>> mcmc_chains;
+    size_t mcmc_naccept = 0, mcmc_nsteps = 0; ///< Accepted proposals / steps (burn-in included) over those chains.
+    /// Kept steps of the post-fit band chains, reduced to the parameters they move
+    /// (band_chain_params: indices into the full parameter vector).
+    std::vector<std::vector<Eigen::VectorXf>> band_chains;
+    std::vector<int> band_chain_params;
 
     std::vector<TH1D> priors, posteriors;
     Eigen::VectorXf prior_param_lo, prior_param_hi, post_param_lo, post_param_hi;
@@ -133,6 +140,13 @@ struct PROpt {
     bool show_fit_help = false;
     bool eventbyevent=false;
     bool shapeonly = false;
+    bool lndet = false;        // --lndet: add ln det M to the covariance chi2
+    bool frozen_cov = false;   // --frozen-cov: hold M at the --cov-reference prediction
+    std::map<std::string, float> cov_reference;
+    std::string cov_reference_file; // --cov-reference-file: a global_fit.txt read as the reference
+    bool ordering_octant_seeds = false;  // --ordering-octant-seeds (LBL models only)
+    bool ordering_octant_polish = false; // --ordering-octant-polish (LBL models only)
+    bool profile_nuisances = false;      // --profile-nuisances (-c poisson only so far)
     bool rateonly = false;
     int fit_variable = -1; // -1 => take the fitting variable from the XML (fit="true", else var0)
     bool force = false;
@@ -159,6 +173,7 @@ struct PROpt {
     int band_throws = 2500;
     size_t syst_throws = 500;
     std::map<std::string, float> fake_data_osc_params;
+    std::map<std::string, float> inject_data_osc_params; ///< --inject-data: reweight real data (needs a data <model>).
     std::map<std::string, float> cv_osc_params;
     std::map<std::string, float> injected_systs;
     std::map<std::string, float> cv_injected_systs;
@@ -166,6 +181,7 @@ struct PROpt {
     std::vector<std::string> syst_list, systs_excluded;
     bool MCMC_prefit_errors = false;
     bool legacy_postfit_errors = false;
+    bool mcmc_correlations = false;
     bool systs_only = false;
     PROjectorRunConfig projector_config; // Two-stage pre-fit / projected fit (PROjector).
     FitRegionRunConfig fit_region_config; // Fit only some channels, evaluate the constrained prediction in the rest.
@@ -277,12 +293,15 @@ void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel
 void include_or_exclude_systs(std::vector<PROsyst> &variable_systs, const PROconfig &config, const PROpt &options);
 // Fatal if -c poisson would silently ignore a covariance-type systematic (incl. mcstat).
 void poisson_covariance_check(const PROpt &options, const PROconfig &config, const PROsyst &systs);
+// Statistical overlap (PROoverlap.h): metric and data/MC/toy consistency, fatal on misuse.
+void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROdata &data, bool use_real_data);
 // Re-lay the spline part of a [physics, splines] vector from old_names' order onto new_names'
 // by name; splines absent from old_names get 0.
 Eigen::VectorXf remap_spline_params(const Eigen::VectorXf &params, size_t nphys, const std::vector<std::string> &old_names, const std::vector<std::string> &new_names);
 void empty_bin_check(const PROconfig &config, const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROsyst &systs, const PROdata data, bool use_real_data);
 void set_global_bounds(Eigen::VectorXf &lb, Eigen::VectorXf &ub, std::vector<int> &fixed, const PROconfig &config, const PROpt &options, PROmodel &model, PROsyst &systs, const Eigen::VectorXf &CVParams);
-void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, const PROmetric &metric);
+void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &global_fit_result, const PROconfig &config, const PROpt &options, PROmetric &metric);
+void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs);
 
 // Per-subcommand entry points (one PROfit_<name>.cxx each).
 void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstructs, const PROconfig &config, PROpt &options);

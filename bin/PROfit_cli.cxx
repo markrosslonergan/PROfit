@@ -12,14 +12,15 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--required-version", required_version, "Refuse to run unless this is exactly this PROfit version, e.g. v3.0.5 or 3.0.5-dev (leading v optional). A -dev build only matches its full -dev string. Useful in --config run cards.");
         app.add_option("-n, --nthread", nthread, "Number of threads to parallelize over.")->default_val(1);
         app.add_option("-m,--max", maxevents, "Max number of events to run over.");
-        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Default 500.")->check(CLI::PositiveNumber);
+        app.add_option("--syst-throws", syst_throws, "Number of random throws per spline when converting splines to covariance matrices (spline_to_covariance systematics, and the plot fractional-systematics/covariance breakdowns). Only used where the conversion has no closed form (visible-decay models, quadratic spline groups); every other spline is converted exactly. Default 500.")->check(CLI::PositiveNumber);
         app.add_option("-c, --chi2", chi2, "Which chi2 function to use. Options: neyman (default; stat cov = diag(data)), pearson (stat cov = diag(prediction)), CNP, poisson. Legacy aliases PROchi, PROCNP, Poisson accepted.")->default_str("neyman");
         app.add_option("-d, --data", data_xml, "Load from a seperate data xml/data file instead of signal injection. Only used with plot subcommand.")->default_str("");
         app.add_option("-i, --inject", fake_data_osc_params, "Physics parameters to inject as fake-data true signal. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
+        app.add_option("--inject-data", inject_data_osc_params, "Physics parameters to inject into real data by reweighting it with the data config's own <model> (a <model> inside <data>, or <data inherit_model=\"true\">). Requires real data (-d/--data or an embedded <data> section) and cannot be used with fc or fc-adaptive. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
-        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c pearson / -c CNP / -c poisson, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
+        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c CNP, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
         app.add_option("--fit-options", global_fit_options, "Parameters for single, detailed global best fit LBFGSB. See PROfitter.h or run --fit-help for available settings.");
         app.add_option("--scan-fit-options", scan_fit_options, "Parameters for simpier, multiple best fits in PROfile/surface LBFGSB.");
         app.add_flag("--fit-help", show_fit_help, "Show detailed help for all fitting parameters (L-BFGS-B, PSO, MCMC, etc.)");
@@ -30,8 +31,8 @@ PROpt::PROpt(int argc, char **argv) {
                        "central-lin (central FD on delta only, M frozen at base; Gauss-Newton, ~5-10x), "
                        "one-sided-lin (forward FD on delta only, M frozen at base; ~10-20x), "
                        "analytic (DEFAULT; exact closed-form gradient incl. the dM/dtheta term; no FD truncation, "
-                       "no extra spectrum fills; neyman (PROchi) binned strategies only — CNP, poisson and the "
-                       "event-by-event strategy fall back to central-lin, pearson to one-sided-full, with a warning). "
+                       "no extra spectrum fills; neyman, pearson and poisson binned strategies only — CNP and the "
+                       "event-by-event strategy fall back to central-lin (pearson event-by-event to one-sided-full), with a warning). "
                        "Applies to every fit (global, scan, FC).")
             ->default_str("");
 
@@ -116,6 +117,37 @@ PROpt::PROpt(int argc, char **argv) {
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
                 "Implies --area-norm for the plots. fc / brazil / fc-adaptive inherit the flag.");
+        app.add_flag("--lndet", lndet,
+                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries when its covariance M "
+                "is rebuilt from the prediction at every tested point (without it fits lean towards larger predictions). "
+                "Reported relative to ln det M at --cov-reference.");
+        app.add_flag("--frozen-cov", frozen_cov,
+                "Hold the whole covariance M (statistical + systematic) at its value at the --cov-reference prediction instead "
+                "of rebuilding it at every tested point (neyman / pearson / CNP).");
+        app.add_option("--cov-reference", cov_reference,
+                "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
+                "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
+            ->expected(-1);
+        app.add_option("--cov-reference-file", cov_reference_file,
+                "Take the --frozen-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
+                "(values as written there: physics in the fit's own units, log10 where the model uses log10; splines by name or "
+                "plotname). --cov-reference pairs given alongside override single parameters.")
+            ->check(CLI::ExistingFile);
+        app.add_flag("--ordering-octant-seeds", ordering_octant_seeds,
+                "LBL models only: start every fit (global, profile, surface, adaptive mesh, fc) also from the four mass-ordering x "
+                "theta23-octant variants of each of its start points (every seed and the best Latin/swarm point), and polish every "
+                "harmonic-scan minimum from its variants. No effect on other models. Same as --fit-options/--scan-fit-options "
+                "ordering_octant_seeds 1.");
+        app.add_flag("--ordering-octant-polish", ordering_octant_polish,
+                "LBL models only: after its usual descents, every fit (global, profile, surface, adaptive mesh, fc) refines once "
+                "more from the three mass-ordering x theta23-octant variants of its best point (3 extra descents per fit). "
+                "Independent of --ordering-octant-seeds: use either or both. No effect on other models. Same as "
+                "--fit-options/--scan-fit-options ordering_octant_polish 1.");
+        app.add_flag("--profile-nuisances", profile_nuisances,
+                "-c poisson only (so far): every local descent runs L-BFGS-B over the free physics parameters only and, at "
+                "each physics point, solves the nuisances by damped Gauss-Newton steps on the full Hessian. For many "
+                "nuisances whose data constraints mix them. Default off. Same as --fit-options/--scan-fit-options "
+                "profile_nuisances 1.");
         auto* rate_flag = app.add_flag("--rateonly", rateonly, "Run a rate only analysis");
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");
@@ -155,6 +187,12 @@ PROpt::PROpt(int argc, char **argv) {
         //PROfile, make N profile'd chi^2 for each physics and nuisence parameters
         profile_command = app.add_subcommand("profile", "Make a 1D profiled chi2 for each physics and nuisence parameter.");
         profile_command->add_flag("--mcmc-prefit", MCMC_prefit_errors, "Use MCMC to sample the systematic priors for the pre-fit error band.");
+        profile_command->add_flag("--mcmc-correlations", mcmc_correlations,
+            "Also run the post-fit MCMC over every free parameter, physics included, for the "
+            "post-fit correlation matrix (_postfit_correlation_matrix.pdf), its autocorrelation PDF "
+            "and the _mcmc_chain TTree. Off by default: it is about half the post-fit MCMC time. The "
+            "post-fit band, spline posteriors and nuisance-only correlations come from the band chain "
+            "and are always made.");
         profile_command->add_flag("--legacy-postfit-error", legacy_postfit_errors,
             "Legacy (pre-v3.0) post-fit error band: posterior MCMC throws of the spline nuisances "
             "around the best fit, but with PRIOR (unconstrained) throws of the covariance-type "
@@ -321,6 +359,12 @@ PROpt::PROpt(int argc, char **argv) {
 
         //PROglobal
         global_command = app.add_subcommand("global", "Just do a single global fit.");
+        global_command->add_flag("--mcmc-correlations", mcmc_correlations,
+            "Also run the post-fit MCMC over every free parameter, physics included, for the "
+            "post-fit correlation matrix (_postfit_correlation_matrix.pdf), its autocorrelation PDF "
+            "and the _mcmc_chain TTree. Off by default: it is about half the post-fit MCMC time. The "
+            "post-fit band, spline posteriors and nuisance-only correlations come from the band chain "
+            "and are always made.");
         global_command->add_flag("--legacy-postfit-error", legacy_postfit_errors,
             "Legacy (pre-v3.0) post-fit error band: posterior MCMC throws of the spline nuisances "
             "around the best fit, but with PRIOR (unconstrained) throws of the covariance-type "
@@ -356,7 +400,7 @@ PROpt::PROpt(int argc, char **argv) {
         proletariat_command->add_option("--memory", grid_opts.memory_mb, "Requested memory in MB.")->default_val(4000);
         proletariat_command->add_option("--disk", grid_opts.disk_mb, "Requested scratch disk in MB.")->default_val(10000);
         proletariat_command->add_option("--input", grid_opts.extra_inputs,
-            "Extra file(s) to bundle into the tarball (repeatable). A missing file is a hard error. The XML and any <tag>_prop.bin/_syst.bin and <tag>_<output>_mesh.bin/_bank.bin in the current directory are bundled automatically.");
+            "Extra file(s) to bundle into the tarball (repeatable). A missing file is a hard error. The XML and any <tag>_prop.bin/_syst.bin/_data.bin/_overlap_mc.bin/_overlap_data.bin and <tag>_<output>_mesh.bin/_bank.bin in the current directory are bundled automatically.");
         proletariat_command->add_flag("--dry-run", grid_opts.dry_run,
             "Stage and build the tarball, print the exact jobsub_submit command, do not submit.");
         proletariat_command->add_option("--backend", grid_backend_str, "Scheduler backend: jobsub or slurm (slurm not yet implemented).")->default_str("jobsub");
@@ -429,6 +473,13 @@ PROpt::PROpt(int argc, char **argv) {
         // here, so the decision is made in resolve_fit_presets() once it does. All this
         // records is whether the user chose a preset themselves (which is always honoured).
         preset_user_set = preset_opt->count() > 0;
+
+        // FC throws its toys around the -i/--inject truth point; data reweighted by
+        // --inject-data is not that ensemble, so the two cannot be combined.
+        if(!inject_data_osc_params.empty() && (*profc_command || *afc_command)) {
+            log<LOG_ERROR>(L"%1% || --inject-data cannot be used with the Feldman-Cousins subcommands (%2%). Terminating.") % __func__ % (*profc_command ? "fc" : "fc-adaptive");
+            exit(1);
+        }
 
         if(shapeonly) area_normalized = true;
 

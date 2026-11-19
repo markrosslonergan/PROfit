@@ -78,6 +78,7 @@ Appendices:
 * [Appendix D: shape-only fits (`--shapeonly`), in full](#appendix-d-shape-only-fits---shapeonly-in-full)
 * [Appendix E: counting degrees of freedom (ndf)](#appendix-e-counting-degrees-of-freedom-ndf)
 * [Appendix F: post-fit pull distributions, in full](#appendix-f-post-fit-pull-distributions-in-full)
+* [Appendix G: combining analyses that share events (statistical overlap)](#appendix-g-combining-analyses-that-share-events-statistical-overlap)
 
 ---
 
@@ -243,6 +244,17 @@ energy here); the rest are extra binnings that PROfit tracks and plots for you
 true-L/E binning that only exists for the oscillation model). Subchannel
 `plotname` and `color` control the stacked histograms in `plot`.
 
+A `plot="false"` variable that is neither the fitting variable nor any
+systematic's `binning=` is **carried along only**: PROfit keeps each event's
+value and bin index (all an oscillation model needs from it) but builds no
+binned spectra in it. `process` stores no pre-binned migration matrices with
+it, and models build no response matrix for it. For a fine kinematic binning
+these dominate both `_prop.bin` and memory: an 8209-bin true L/E with six
+oscillation components costs ~1.6 GB per model, and `fc -n 8` builds one model
+per thread. Flipping such a variable to `plot="true"` later needs a fresh
+`process` (PROfit refuses an older cache that lacks its matrices; plot flags
+are not part of the cache hash).
+
 To fit a different variable, put `fit="true"` on its `<bins>` entry:
 
 ```xml
@@ -330,6 +342,11 @@ detector `pot` declared at the top of the XML. One wildcard caveat: the config
 hash sees only the pattern string, so new files appearing in a globbed
 directory do not invalidate the `_prop.bin`/`_syst.bin` caches — re-`process`
 with `--force`.
+
+Combining two analyses whose selections share events? Two more `<MCFile>`
+attributes, `overlap_matching_vars` and `overlap_common`, make the statistical
+covariance carry the shared events. They are opt-in and described in
+[Appendix G](#appendix-g-combining-analyses-that-share-events-statistical-overlap).
 
 ### Systematics: the `<variation_list>`
 
@@ -671,6 +688,7 @@ dataset from the command line:
 | Option | What it does |
 |---|---|
 | `-i/--inject dmsq 1 sinsq2thme 0.01` | inject an oscillation signal as truth (**name value pairs** in v2.X, in linear units) |
+| `--inject-data dmsq 1 sinsq2thme 0.01` | reweight *real* data to an oscillation signal using the data's own `<model>` (a `<model>` inside `<data>`, or `<data inherit_model="true">`); errors if the data has no model, and not allowed with `fc`/`fc-adaptive` |
 | `--inject-systs Flux1 1.0 DetSys2 -2.0` | shift spline systematics (in σ) into the fake data |
 | `--inject-cv` / `--inject-systs-cv` | same, but shift the *prediction* CV instead of the data |
 | `--poisson-throw` | Poisson-fluctuate the fake data |
@@ -707,11 +725,13 @@ through the oscillation models and splines, *plus* the exact
 covariance-scaling term the old Gauss-Newton `-lin` modes dropped): as
 accurate as `central-full` at the cost of roughly one evaluation, so it is
 the right choice for scans *and* publication runs. It applies to the
-`neyman` (PROchi) binned strategies; `CNP`, `poisson`, and
+`neyman`, `pearson` and `poisson` binned strategies (for `pearson` it also
+differentiates the prediction-valued statistical variance); `CNP` and
 `--eventbyevent` automatically
-fall back to `central-lin`, and `pearson` to `one-sided-full` (its
-statistical variance IS the prediction, so the term Gauss-Newton drops is
-first-order and the lin modes can stall), each with a one-time warning. `central-full` remains
+fall back to `central-lin` (`pearson` with `--eventbyevent` to
+`one-sided-full`: its statistical variance IS the prediction, so the term
+Gauss-Newton drops is first-order and the lin modes can stall), each with
+a one-time warning. `central-full` remains
 the finite-difference gold standard for cross-checks (and `scale-test
 --tests gradcheck` validates every mode against it). Note the default change
 (from `central-lin`) means fits are **not bit-reproducible against
@@ -961,9 +981,11 @@ PROfit -x tutorial.xml -t TUT -o glob1 --seed 405 -n 8 \
 
 Outputs:
 
-* `TUT_glob1_global_fit.txt` — best-fit χ² and every parameter value in a plain-text table
+* `TUT_glob1_global_fit.txt` — the best-fit χ² on its first line (`Global best fit: chi2 = …`, at full float precision; with `--lndet` also the ln det part), then every parameter value in a plain-text table
 * `TUT_glob1_PROglobal_hists.pdf` — pre-fit (blue/gray) vs post-fit (red) spectra + error bands, with a data/fit ratio panel
-* `TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` (+ `_nuisance_only` version) — post-fit parameter correlations
+* `TUT_glob1_PROglobal_postfit_correlation_matrix_nuisance_only.pdf` — post-fit correlations of the spline nuisances (from the band chain, always made)
+* `TUT_glob1_PROglobal_postfit_band_mcmc_autocorrelation.pdf` — how well the band chain mixed: autocorrelation per spline, pooled over chains; the log gives each spline's autocorrelation time τ and effective sample size (20,000 kept steps / τ — a few hundred is enough for the band; much less means raise `--fit-options MCMC-Iterations`)
+* `TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit correlations of every parameter, physics included, plus `_corrmat_mcmc_autocorrelation.pdf` and the `_mcmc_chain` TTree: only with `global --mcmc-correlations`, which runs a second MCMC with physics free (about half the post-fit MCMC time, so off by default)
 * `TUT_glob1_PROglobal_postfit_posteriors.pdf` — post-fit parameter constraints
 * `TUT_glob1_PROglobal_postfit_pull_distributions.pdf` — histograms of all nuisance pulls, which should look like N(0,1) when the model describes the data (all 0 for this Asimov fit). See [Are the pulls healthy?](#are-the-pulls-healthy-pull-distributions) below.
 * `TUT_glob1_PROglobal.root` — all of the above as ROOT objects
@@ -979,7 +1001,7 @@ prints the breakdown. See Appendix D for what each term counts.
 
 <img src="figures/TUT_glob1_PROglobal_postfit_correlation_matrix.png" width="600"/>
 
-*`TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit parameter correlations.*
+*`TUT_glob1_PROglobal_postfit_correlation_matrix.pdf` — post-fit parameter correlations (`--mcmc-correlations`).*
 
 <img src="figures/TUT_glob1_PROglobal_postfit_posteriors.png" width="700"/>
 
@@ -1007,8 +1029,11 @@ The minimization itself is usually the *fast* part of `global`. The **pre-fit
 error band** is built by throwing a few thousand spectra from the priors and
 covariances (random — fix `--seed`, and bump the sample count for
 publication-quality plots, since sparsely-filled bins jitter). The **post-fit
-error band, correlation matrix, and posteriors** come from an MCMC sampled
-around the best fit (tens of thousands of samples after burn-in): post-fit
+error band and posteriors** come from MCMC chains sampled around the best fit
+with physics held there (20,000 kept samples, split over one chain per `-n`
+thread, so `-n` speeds them up and changes their random stream); the full
+correlation matrix with physics floating is a second, opt-in MCMC
+(`--mcmc-correlations`). Post-fit
 pulls can be strongly correlated, so marginal errors must be sampled
 simultaneously rather than read off one parameter at a time. This MCMC
 covariance is also the *trusted* post-fit covariance — the L-BFGS internal
@@ -1090,6 +1115,7 @@ highlights:
   n_localfit              : Total number of L-BFGS-B fits after PSO
   localfit_warm_nuisance  : 1 = warm-start nuisances at each multistart (grad-deep/overkill)
   n_max_local_retries     : Retries if L-BFGS-B throws
+  precondition            : -1 auto (on for LBL models), 1 on, 0 off — scale each descent (below)
 ------ Particle Swarm Optimization ------
   n_swarm_particles, n_swarm_iterations, n_swarm_max_stagnent_iterations,
   swarm_inertia_start/end, swarm_cognitive_score, swarm_social_score, ...
@@ -1106,6 +1132,40 @@ One benign scary-looking thing you WILL see in logs: L-BFGS-B throwing
 `"line search step became smaller than minimum"` on near-optimal starting
 points. This is routine (the seed's own χ² is kept as a candidate), not a
 failure.
+
+**Preconditioning (`precondition`).** L-BFGS-B starts from a Hessian guess
+that treats every parameter alike and stops a descent once an iteration
+improves χ² by less than ~10⁻⁶·χ². That is fine when the parameters have
+similar χ² curvature — log10 mixing and Δm² and σ-unit splines, as in the SBN
+models — but the LBL models fit Δm² in eV² and sin² linearly, so curvatures
+span ~10 orders of magnitude (MINOS-like 3+1: about 10⁻³ for log10 sin²θ₃₄,
+2×10³ for sin²θ₂₃, 4×10⁸ for Δm²₃₁). An unscaled descent then stops early,
+partway down a narrow valley. With preconditioning each descent instead runs
+in z = (x − x₀)/s, where sᵢ = 1/√Fᵢᵢ comes from the Gauss-Newton curvature
+of the χ² at the descent's start (data term plus prior pulls). Every free
+parameter then has curvature ≈ 1, and the descent reaches the minimum in a
+few iterations. Flat directions, such as a CP phase at zero mixing, fall back
+to 10⁻³ of the parameter's range. A descent that moves far from its start is
+rescaled once and continued, because a log10 mixing angle's curvature
+changes by orders of magnitude between small and large mixing. The default,
+`-1`, turns it on for the LBL models only. `--fit-options precondition 1`
+(and/or `--scan-fit-options precondition 1`) turns it on for any model;
+`precondition 0` turns it off. The Gauss-Newton scales need a binned
+covariance metric (neyman, pearson or CNP). With `poisson` or
+`--event-by-event` every parameter uses the range-based scale.
+
+**Profiling the nuisances (`--profile-nuisances`, `-c poisson` only so
+far).** With ~10² nuisance parameters whose data constraints mix them (e.g.
+covariance eigenmodes against bins spanning 10–10⁶ events), the nuisance
+block alone can have a Hessian condition number around 10⁵. L-BFGS then needs
+thousands of iterations. With this flag each local descent splits the
+problem in two. L-BFGS-B runs over the free physics parameters only. At every
+physics point it tries, the nuisances are solved directly by damped
+Gauss-Newton steps on their full Hessian, computed in double: 2Jᵀdiag(n/μ²)J
+plus the prior. That solve is exact in a few steps when the nuisance response
+is linear, as for eigenmode knobs. With all physics fixed (`--syst-only`) it
+is pure Gauss-Newton. It is off by default. With any other metric the flag
+warns and the normal descent is used.
 
 ### Metric choice matters
 
@@ -1131,11 +1191,74 @@ PROjector every covariance must be promoted (`--projector-knobs -1`, no
 `--projector-keep-cov`). The legacy
 spellings `PROchi`, `PROCNP`, and `Poisson` still work as deprecated
 aliases (mapping to `neyman`/`CNP`/`poisson` with a one-time warning).
-Only `neyman` has the closed-form analytic gradient — `CNP`/`poisson`
-fall back to `central-lin`, `pearson` to `one-sided-full`, and all three
-use the legacy `good`/`fast` presets. Adding a
+`neyman`, `pearson` and `poisson` have the closed-form analytic gradient
+(and the `grad-*` preset defaults); `CNP` falls back to `central-lin` and
+uses the legacy `good`/`fast` presets (with `--frozen-cov` it has the
+analytic gradient too). Adding a
 new metric
 is deliberately easy — they all implement the same `PROmetric` interface.
+
+### ln det M and a frozen covariance (`--lndet`, `--frozen-cov`)
+
+For Gaussian data, −2 ln L = rᵀM⁻¹r + ln det M + const. The covariance
+metrics (`neyman`, `pearson`, `CNP`) minimise only the first term, which is
+exact when M is the same for every hypothesis. But PROfit rebuilds M at every
+tested point: the systematic part is always F∘(μμᵀ), and pearson's
+statistical part is diag(μ). So ln det M changes with θ, and dropping it
+biases fits toward larger predictions. A one-bin example: with a 10%
+uncertainty, μ = 110 is preferred to μ = 90 for an observation of 100. For a
+disappearance search this makes exclusions artificially strong. Two options
+address it:
+
+```bash
+# keep the dynamic M, add ln det M (reported relative to M at the reference)
+PROfit -x tutorial.xml -t TUT -o globld --seed 405 -n 8 --lndet global
+# hold M fixed at a reference prediction instead
+PROfit -x tutorial.xml -t TUT -o globfr --seed 405 -n 8 --frozen-cov --cov-reference dmsq 1 sinsq2thme 0.01 global
+```
+
+* **`--lndet`** adds ln det M − ln det M(reference) to χ². Subtracting the
+  reference keeps χ² and Δχ² readable; it is a constant, so fits and Δχ² are
+  unchanged by the choice of reference. The global-fit log reports how much of
+  the best-fit χ² is the ln det part. The analytic gradient includes
+  tr(M⁻¹ ∂M/∂θ) in closed form for neyman and pearson, shape-only included.
+  The linearised gradient modes would drop it (it does not vanish at the
+  minimum), so with `--lndet` they run as their full finite-difference
+  versions instead.
+* **`--frozen-cov`** evaluates the whole M once, statistical part (by the
+  metric's own convention) and systematic part, at the reference prediction,
+  and keeps it for every tested point. Every metric, CNP included, then has
+  the analytic gradient, and fits are faster, because M is factorised only
+  once.
+* **`--cov-reference name value …`** sets the reference point for both: physics
+  in physical units (like `-i`), splines in σ. Unlisted parameters sit at the
+  model defaults and the splines at their prior centres. For the LBL models
+  give a physical 3ν point here, because the model defaults (e.g. dmsq_31 =
+  1e-3) are not physical.
+* **`--cov-reference-file <file>`** takes the reference from the
+  `_global_fit.txt` an earlier run wrote, e.g. to freeze M at a best fit. The
+  values are used as written there: physics in the fit's own units (log10 for
+  the log parameters), splines by plotname. Pairs from `--cov-reference`
+  override single parameters, so this keeps the splines at the best fit but
+  the physics at no oscillation:
+
+  ```bash
+  PROfit -x tutorial.xml -t TUT -o globfr2 --seed 405 -n 8 --frozen-cov \
+      --cov-reference-file TUT_glob1_global_fit.txt --cov-reference sinsq2thme 1e-10 global
+  ```
+
+  The file must come from the same config and systematics selection: a name
+  this run doesn't have is fatal, and a parameter the file doesn't list stays
+  at its default, with a warning.
+
+The options reach everything that builds a metric: profile, surface, fc,
+fc-adaptive and the pseudo-experiments (each toy measures ln det against
+its own reference). `fc` records them in its `fc_meta` and `--reuse` refuses a
+mismatch, and a PROjector constraint records them too. Two things stay
+physical on purpose. Toy data are still generated with the covariance at the
+toy's truth. The post-fit error bands still condition on the dynamic
+covariance at the best fit. `poisson` has no covariance matrix, so the options
+are refused with it.
 
 ### Are the pulls healthy? Pull distributions
 
@@ -1275,7 +1398,7 @@ Outputs:
 * `TUT_prof1_PROfile.pdf` — the Δχ² curve for every parameter (physics first, then all nuisances with the prior in dashed red)
 * `TUT_prof1_PROfile_1sigma.pdf` (+ `_1sigma_detailed.pdf`) — post-fit ±1σ summary for all nuisance parameters at a glance (red star = injected truth, blue = global best fit, black = the per-profile minima on the scan grid)
 * `TUT_prof1_PROfile_hists.pdf` — pre-fit vs post-fit spectra (same as global's)
-* `TUT_prof1_PROfile_postfit_correlation_matrix.pdf`, `_postfit_posteriors.pdf`, `_postfit_pull_distributions.pdf` (as for `global`; redrawn at the new minimum if the scan finds a lower one)
+* `TUT_prof1_PROfile_postfit_correlation_matrix_nuisance_only.pdf`, `_postfit_posteriors.pdf`, `_postfit_pull_distributions.pdf` (as for `global`, incl. `_postfit_correlation_matrix.pdf` with `profile --mcmc-correlations`; redrawn at the new minimum if the scan finds a lower one)
 * `TUT_prof1_PROfile.root` — every profile as a TGraph, plus the 1σ summary
 * `TUT_prof1_global_fit.txt` — the global best fit table
 
@@ -2612,6 +2735,126 @@ Notes:
   `_mesh/_bank/_brazil.bin` or PROjector constraint made with the old values
   (the same artifact class as gotcha 12 in CLAUDE.md) — regenerate those.
 
+### `LBL_3+1-vacuum_angles` — 3+1 sterile oscillations for long-baseline configs (vacuum)
+
+Exact four-flavour vacuum oscillations, for long-baseline (or any
+multi-baseline) analyses that need a sterile state *together with* the full
+3ν picture: atmospheric/solar oscillations, CP violation and the mass
+ordering. NuFast is three-flavour only, but vacuum 3+1 is closed form, so
+this model computes the 4×4 mixing matrix
+
+U = R₃₄ R̃₂₄ R̃₁₄ R₂₃ R̃₁₃ R₁₂
+
+directly. The phases use the PDG placement: δ_CP on R̃₁₃, δ₁₄ on R̃₁₄ and δ₂₄
+on R̃₂₄. Hence |Ue4|² = sin²θ₁₄, |Uμ4|² = cos²θ₁₄ sin²θ₂₄ and
+|Uτ4|² = cos²θ₁₄ cos²θ₂₄ sin²θ₃₄, the same relations as `SBL_3+1_angles`. At
+θ₁₄ = θ₂₄ = θ₃₄ = 0, U is the PDG PMNS matrix and the model reproduces
+`LBL_3nu-vacuum_angles` exactly.
+
+| # | name | meaning | fit space | bounds | default |
+|---|---|---|---|---|---|
+| 0 | `dmsq_41` | Δm²₄₁ [eV²] | log10 | 10⁻⁴ – 10³ | 1 |
+| 1 | `sinsqt14` | sin²θ₁₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 2 | `sinsqt24` | sin²θ₂₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 3 | `sinsqt34` | sin²θ₃₄ | log10 | 0 – ~1 | 10⁻⁸ |
+| 4 | `delta_14` | δ₁₄ [rad] | linear | −π – π | 0 |
+| 5 | `delta_24` | δ₂₄ [rad] | linear | −π – π | 0 |
+| 6–11 | `dmsq_21` … `delta_CP` | the six `LBL_3nu-*` parameters | linear | as `LBL_3nu-*`, except `dmsq_31` ±6×10⁻³ and `sinsqt23` 10⁻⁴ – 1−10⁻⁴ | as `LBL_3nu-*` |
+
+The 3ν ranges are wider than for `LBL_3nu-*`. With large sterile mixing the
+minima move to θ₂₃ ≈ θ₃₄ ≈ π/2, with |Δm²₃₂| up to about 4.8×10⁻³ eV². The
+θ₂₃ range is symmetric about maximal mixing, so the octant mirror of every
+point is also in range. It stops 10⁻⁴ short of 0 and 1, where the derivative
+of a linear sin² diverges.
+
+The sterile block comes first because the harmonic seed scan of the global fit
+runs over physics parameter 0. Here that is Δm²₄₁, the parameter whose fast
+oscillation makes the χ² multimodal. The 3ν parameters keep their `LBL_3nu-*`
+names, so `--fix`/`-i` lines carry over. In practice you will usually `--fix`
+(or constrain) most of them, and θ₃₄ and the sterile phases only matter with
+NC samples or very long baselines.
+
+**Ordering × octant seeding (`--ordering-octant-seeds`).** With θ₂₃ and Δm²₃₁
+profiled, the χ² has four separate minima: normal or inverted ordering, each
+with a lower and an upper θ₂₃ octant. A scan fit warm-started in one of them
+can stay there when another is lower. In a MINOS-like 3+1 grid this happened
+at about 2% of points and cost up to 1.9 in χ². The flag starts every fit
+from all four variants of each of its start points: the passed-in seeds
+(warm starts, harmonic seeds) and the best Latin-hypercube point. It also
+polishes every harmonic-scan minimum from its variants. The flips are
+Δm²₃₁ → 2Δm²₂₁ − Δm²₃₁ (the sign of Δm²₃₂ flips, its size is kept) and
+sin²θ₂₃ → 1 − sin²θ₂₃. A variant that would move a scanned (pinned)
+parameter, such as Δm²₃₁ on a profile axis, is skipped. It applies to every
+fit PROfit runs (global, profile, surface, every level of the adaptive
+mesh, fc) and is off by default. The cost grows with the number of seeds a
+fit carries; scan fits carry the most.
+
+`--ordering-octant-polish` is the complementary option. After its usual
+descents, every fit refines once more from the three variants of its best
+point, a fixed three extra descents per fit. The seeds option varies where a
+fit starts, the polish option varies where it ended. On a test sample they
+recovered different stuck fits, so use either one or both together. Both
+flags work for both LBL models. For any other model they do nothing and
+warn.
+
+Rules: **0** = no osc; **1–9** = the full active 3×3 matrix in the
+`LBL_3nu-*` layout (**1** = Pee, **2** = Peμ, **3** = Peτ, **4** = Pμe,
+**5** = Pμμ, **6** = Pμτ, **7** = Pτe, **8** = Pτμ, **9** = Pττ), so a 3ν LBL
+config switches to 3+1 by changing only the tag; **10/11/12** = the NC
+weight 1 − P(α→s) for α = e, μ, τ. NC rates are flavour-blind, so only the
+sterile fraction is lost; give an NC sample from a νμ beam rule 11.
+
+Kinematic inputs and `baseline=` are exactly as for `LBL_3nu-vacuum_angles`
+(per-event `L`+`E`, `E` with `baseline=`, or one signed `L/E`). One extra
+warning applies: with several detectors at different baselines (a near
+detector at ~0.5 km sees the sterile oscillation, the far detector only its
+average), `baseline=` applies one number to every detector, and PROfit warns.
+Use per-event `L`+`E` there:
+
+```xml
+<model tag="LBL_3+1-vacuum_angles">
+    <parameter name="L" variable_index="1"/>   <!-- true baseline [km], per event -->
+    <parameter name="E" variable_index="2"/>   <!-- signed true energy [GeV] -->
+    ...
+</model>
+```
+
+**Truth-bin averaging (`bin_average=`, default `1`).** Binned fits evaluate
+the oscillation probability once per *truth* bin, at its midpoint. With
+Δm²₄₁ ~ 1 eV² at a 1300 km far detector the phase changes by hundreds of
+radians across one truth-E bin, so the midpoint value is effectively a random
+number and can fake a signal. This model therefore low-pass filters every
+oscillating term over its bin:
+
+⟨sin²X⟩ = ½ (1 − cos 2X · sinc h),  ⟨sin 2X⟩ = sin 2X · sinc h,
+
+where h is half the range of the phase 2X across the bin and the midpoint
+phase is kept. Slow oscillations are untouched (sinc → 1); fast ones average
+(sinc → 0). The filter is the exact bin average for an `L/E` variable (events
+uniform in L/E) and first order for E bins (the `L`+`E` pair multiplies the
+L-bin and E-bin factors). `--event-by-event` fits use each event's own
+energy, so they are exact and never filtered.
+
+⚠ *Averaging also applies to the 3ν terms*, and on coarse low-energy truth
+bins that matters. On 0.15 GeV truth-E bins at 1300 km, midpoint sampling
+(what `LBL_3nu-*` does) is badly wrong below ~0.9 GeV: for example Pμμ = 0.01
+at a bin midpoint against a true bin average of 0.55. The averaged value
+tracks the bin mean to within ~0.03. A pinned χ² comparison on such bins
+therefore differs strongly between `bin_average="1"` and `"0"`. Use
+`bin_average="0"` only to reproduce `LBL_3nu-vacuum_angles` numbers;
+otherwise keep the default. Where a truth bin spans more than about one
+cycle of a slow oscillation, refine that binning.
+
+| attribute | meaning | allowed | default |
+|---|---|---|---|
+| `baseline=` | fixed baseline L [km] (E-only mode) | > 0 | — (required with E-only) |
+| `bin_average=` | truth-bin averaging of oscillating terms | 0 or 1 | 1 |
+
+`density=`, `electron_fraction=` and `n_newton=` are ignored with a warning.
+Matter effects for 3+1 (which need the neutral-current potential seen by ν_s)
+are not implemented. The `LBL_3nu-*` models ignore `bin_average=` with a
+warning.
+
 ### `template` *(legacy alias: `template_fit`)* — per-subchannel normalization fit
 
 Not an oscillation model: each `<parameter>` in the model block is one
@@ -2654,6 +2897,55 @@ name, a `default=` outside `[min, max]`, and `subchannels=`/`default=` on
 any model other than `template`. As with every model setting the `<model>`
 block is not part of the `_prop/_syst.bin` hash, so editing it reuses those
 caches.
+
+### Gaussian priors on physics parameters: `<prior>`
+
+Any model can carry external constraints on its physics parameters, one
+`<prior>` element per constrained quantity inside `<model>`:
+
+```xml
+<model tag="LBL_3nu-vacuum_angles" baseline="1300">
+    <parameter name="E" variable_index="2"/>
+    <!-- |dm^2_32| = 2.5e-3 +- 0.5e-3 eV^2, whatever the mass ordering -->
+    <prior name="dmsq_32" center="0.0025" sigma="0.0005" abs="true"/>
+    <prior name="sinsqt13" center="0.0220" sigma="0.0007"/>
+</model>
+```
+
+Each adds ((q − center)/sigma)² to the χ² of every metric (neyman, pearson,
+CNP, poisson), and its exact derivative to every gradient mode:
+
+* `q` is the **physical** value of the parameter (10^x for log10
+  parameters such as the SBL `dmsq`), so `center` and `sigma` are always in
+  physical units.
+* `abs="true"` constrains |q|. A |Δm²| measurement then holds both mass
+  orderings equally.
+* `name` is a physics parameter of the model, or a **derived quantity** the
+  model defines. Both LBL models (`LBL_3nu-*`, `LBL_3+1-vacuum_angles`)
+  define `dmsq_32` = `dmsq_31` − `dmsq_21`. That is the right target for a
+  |Δm²₃₂| constraint: a prior on `dmsq_31` would be off by Δm²₂₁ ≈ 7.5·10⁻⁵ eV²
+  (0.15σ at σ = 5·10⁻⁴), in opposite directions for the two orderings.
+* An unknown name, a non-positive or non-numeric `sigma`, a second prior on
+  the same name, or `abs=` other than true/false is refused.
+
+A free parameter with a prior counts zero degrees of freedom, like a
+Gaussian-prior spline: the prior is one pseudo-measurement. Real data and
+fake (Asimov) data use the XML `center`. Inject a truth consistent with it,
+or the prior pulls the fit away from the injected point.
+
+**Pseudo-experiments re-measure the prior.** A prior is an external
+measurement, so every toy draws its own centre from N(q(truth), sigma)
+about that toy's truth. This covers `fc` toys, `fc-adaptive` bank PEs,
+prepass and brazil throws, surface brazil throws and `--pseudo-experiment`.
+In stat-only throw modes the centre is q(truth) exactly, the analogue of
+unthrown splines sitting at their centres. Holding the XML centre fixed
+instead would cancel the prior in the Neyman construction: at a tested point
+away from the centre, the toys would pay the same prior penalty as the data,
+so the critical value would absorb it. `fc` records the priors in `fc_meta`,
+and `--reuse` refuses a file thrown with different ones. `fc-adaptive`
+artifacts (`_mesh/_bank/_brazil.bin`) do not record them: like every
+`<model>` setting they are not hashed, so regenerate those after changing a
+prior.
 
 ---
 
@@ -2806,8 +3098,16 @@ frozen `L` of C.0 is only a band-reconstruction approximation, never a fit
 approximation), and the spline pull terms including any configured
 correlations. In plain words: the chain wanders through spline space visiting
 each point in proportion to how well it describes the data, given everything
-else the fit knew. Defaults: 25,000 burn-in + 20,000 kept steps
-(`--fit-options MCMCburn/MCMCiter`). Each kept step `i` gives a spectrum
+else the fit knew. Defaults: 20,000 kept steps in total, split over
+independent chains run in parallel (one per `-n` thread), each with 5,000
+burn-in steps (`--fit-options MCMC-Iterations`, `MCMC-Chains`,
+`MCMC-Burnin`). A short burn-in suffices because each chain's proposal starts
+from the linearised (Gauss-Newton) posterior covariance of the splines at the
+best fit, the same system the pull distributions use (Appendix F); physics
+parameters start at their box variance, since oscillation posteriors are often
+flat or multimodal around a narrow best-fit dip. The seed only changes how fast
+a chain adapts: the kept steps run with a frozen proposal, i.e. plain
+Metropolis on the unchanged target. Each kept step `i` gives a spectrum
 
 ```
 S⁽ⁱ⁾ = P(φ̂, s⁽ⁱ⁾)        (collapsed; NO prior covariance throw here)
@@ -3637,6 +3937,155 @@ variance W²/12.
 * **An Asimov fit gives z ≡ 0** for everything: nothing fluctuated, so
   nothing moved.
 * **One fit is one draw.** Pool pseudo-experiments for precision (section 6).
+
+---
+
+# Appendix G: combining analyses that share events (statistical overlap)
+
+When two analyses go into one XML, as different channels, and some
+interactions pass both selections, their spectra are not independent. A
+default fit treats them as independent, counts the shared events twice and
+overstates the sensitivity. This appendix describes the opt-in that fixes
+the statistical covariance. The systematic covariance needs nothing new:
+universes and spline knobs are coherent per event, so the cross-analysis
+systematic correlation is already there.
+
+### G.1 The statistics
+
+Every interaction is one Poisson count in one *cell*: the set S of collapsed
+bins it fills. An event only one analysis selects is a one-bin cell, and a
+shared event is a cell with one bin in each analysis. With N_S the count in
+cell S,
+
+```
+n_i = Σ_{S∋i} N_S,        Cov(n_i, n_j) = Σ_{S∋i,j} λ_S
+```
+
+The off-diagonal statistical covariance between bin a of one analysis and bin
+b of the other is the number of events in **both** (λ_ab). Within one
+analysis the bins stay uncorrelated. The two analyses may use different, even
+2D, variables: a shared event simply adds one to (its A bin, its B bin). The
+matrix is a sum of PSD rank-one terms, so it is positive semi-definite for
+observed and expected counts alike.
+
+### G.2 Switching it on
+
+The overlap is never detected automatically. You switch it on per
+`<MCFile>`, with the expressions that identify one interaction:
+
+```xml
+<data>
+  <MCFile treename="selected" filename="dataA.root" pot="..." overlap_matching_vars="run,subrun,evt,slc">
+    ...
+  </MCFile>
+  <MCFile treename="selected" filename="dataB.root" pot="..." overlap_matching_vars="run,subrun,evt,slc">
+    ...
+  </MCFile>
+</data>
+
+<MCFile treename="events" filename="mcA_*.root" pot="..." overlap_matching_vars="run,subrun,evt,nu_id"
+        overlap_common="run &lt; 5000">
+  ...
+</MCFile>
+```
+
+* **On data MCFiles** the attribute records the *observed* shared cells. The
+  neyman metric uses them: V = diag(n) + the shared counts off the diagonal.
+  The data events must have unit weight, which is fatal otherwise.
+* **On MC MCFiles** it records which MC entries are the same interaction.
+  Every toy (fc, fc-adaptive, surface `--brazil-band`, `--pseudo-experiment`,
+  `--poisson-throw`) and the Asimov fake data take their *expected* cells
+  from the MC at the toy's own truth. Toys never use the data's overlap,
+  because the toy distribution must depend on the hypothesis only.
+* **The key must identify one interaction**, not one trigger: include a
+  slice or neutrino ID. A key that fills the same channel twice is fatal.
+  Keys only match inside one (mode, detector) block, since one interaction
+  never reaches two detectors. The expression count must agree across the
+  flagged data files, and separately across the flagged MC files.
+* **`overlap_common`** (MC only, default: every entry) marks the MC entries
+  that *both* analyses processed. Use it when the two MC samples only partly
+  coincide (different file subsets or exposures). The expected overlap is
+  built from fractions measured on that common sample:
+
+  ```
+  F_S^(i) = (shared in S, bin i / common in bin i) × (flagged in bin i / all in bin i)
+  λ_S     = geomean_{i∈S}( F_S^(i) μ_i )       (= ρ √(μ_a μ_b) for a pair)
+  ```
+
+  Each analysis's own normalisation cancels in these ratios. Physics is exact,
+  because every MC entry carries its own true L/E. Systematics enter through
+  the marginals μ_i, which is consistent with PROfit's per-bin spline and
+  covariance model.
+* **Fatal combinations:**
+  * Real data fitted with MC overlap but no data overlap (the toys would be
+    correlated and the fit would not).
+  * Toy subcommands on real data with data overlap but no MC overlap.
+  * Any metric other than neyman. Poisson cannot carry a covariance at all;
+    pearson and CNP are not implemented.
+  * scale-test.
+  * Visible-decay models.
+
+`process` writes `<tag>_overlap_mc.bin` and `<tag>_overlap_data.bin` next to
+the usual caches. `_prop.bin`, `_syst.bin` and `_data.bin` are unchanged, and
+without the attributes nothing changes at all. The attributes enter the
+config hash. Toy artifacts record the MC overlap: FC.root's `fc_meta` gets
+`stat_overlap`, and `fc --reuse` refuses a mismatch. AFC banks and brazil
+archives carry its fingerprint (bank v4, archive v3), so merge-bank,
+merge-brazil, top-up and the classifying stages refuse to mix overlap and
+non-overlap toys. `proletariat` stages `_data.bin` and both overlap files.
+
+### G.3 What to expect
+
+* **Asimov sensitivity is exact.** In a closure test on the fake SBN sample,
+  channel B is a copy of channel A at half weight, so B carries no new
+  information. The A+B Asimov surface then reproduces A alone to 4–5
+  significant figures, stat-only and with systematics profiled. Treating the
+  two as independent overstates every Δχ² by about 1.5×. With B a random half
+  of A's events, the agreement is 1.0000–1.0001 (1.0001–1.0003 with only half
+  the MC declared common).
+* **Neyman is noisier on fluctuated data.** It builds the B-given-A part of the
+  covariance from *observed* counts. That adds a small θ-dependent term per
+  shared bin (the same family as Neyman's usual small-count bias). On
+  fluctuated data, A+B therefore tracks A alone only approximately: within
+  2–17% on the closure test's fake dataset, against 43–76% too high when the
+  overlap is ignored. In the closure test, the FC 90% critical value at one point
+  moved from 7.5 (A) to 9.0 (A+B). FC stays calibrated, because toys and data
+  use the same statistic; the combined statistic is just not optimal. Any
+  Gaussian χ² has this; only an exact Poisson likelihood over the cells would
+  not.
+* **Singular pairs are floored.** A sparse bin pair holding only shared
+  events (n_a = n_b = n_ab) gives Neyman a singular block. Only then, and
+  only for that group of bins, the zero-exclusive bins get half an event of
+  exclusive variance, with a one-time warning.
+* **Post-fit plots use the same correlated term.** The post-fit error band,
+  the Constrained Best-Fit, the covariance-mode pulls and the pull
+  distributions condition the systematics on the data with the V the fit
+  uses (Appendix C with C → V). On the closure test, the A channels' post-fit
+  band, the covariance bin pulls and every spline's posterior width equal the
+  A-only fit's to float precision. Ignoring the overlap narrows the νe band by
+  up to 17%. With no free splines, the band's logged uᵀ(V+Σ)⁻¹u still equals
+  the fit χ².
+* **FC toys match nature.** The check uses a harder closure: B keeps 60% of
+  A's νe events in a smeared energy variable, plus 20% of low-energy νμ CC as
+  a mis-ID sample, so cells cross bins and channels. Here "nature" throws each
+  MC interaction once as a Poisson count in every bin it fills. The thrower's
+  expected shared rates equal nature's to 1e-5. With only half the MC
+  declared common, they agree within MC noise. With a stat-only Δχ² over a
+  40×40 physics grid and 3000 toys at a signal point and at the null, the
+  thrower's Δχ² distribution is
+  indistinguishable from nature's (KS p = 0.93 and 0.61). The FC 90%
+  coverage on nature toys is 0.902 and 0.897 (nominal 0.900 ± 0.006).
+  Ignoring the overlap gives 0.890 and 0.859.
+
+### G.4 Not yet covered
+
+* **PROjector.** Each stage uses the overlap among its own channels, but
+  events shared between the pre-fit channels and the fitted channels count
+  as exclusive in stage 2. PROfit warns.
+* **MC-stat.** Off-diagonals of the MC-stat covariance for MC entries shared
+  between the analyses are not included.
+* **Exposure.** The MC fractions assume both analyses' data cover the same
+  exposure. That holds when their channels share one `<detector>`.
 
 ---
 

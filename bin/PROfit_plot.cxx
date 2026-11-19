@@ -46,6 +46,12 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
     std::vector<PROspec> variable_cvs;
     std::vector<std::map<std::string, TObject *>> cv_objs;
     for(size_t io = 0; io < config.m_num_variables; ++io) {
+        // plot="false" variables are carried along only (no binned response is built for them).
+        if(!config.m_channel_variable_plot_bool.at(io) && io != config.i_prime) {
+            variable_cvs.push_back(PROspec(config.m_num_variable_bins_total[io]));
+            cv_objs.push_back({});
+            continue;
+        }
 
         variable_cvs.push_back(FillSpectra(config, prop, variable_systs[config.i_prime], model, CVParams, !options.eventbyevent, io));
 
@@ -84,6 +90,7 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
 
     std::vector<std::map<std::string, std::unique_ptr<TH1D>>> other_hists;
     for(size_t io = 0; io < config.m_num_variables; ++io) {
+        if(!config.m_channel_variable_plot_bool.at(io) && io != config.i_prime) { other_hists.emplace_back(); continue; }
         other_hists.push_back(getCV1DHists(variable_cvs[io], config, options.binwidth_scale, io));
     }
     
@@ -832,7 +839,7 @@ void run_plot(const PROconfig &config, const PROpeller &prop, const PROmetric &m
     std::vector<PROerrorbar> other_err_bands;
     std::vector<std::map<std::string, TObject*>> errband_objs;
     for(size_t io = 0; io < config.m_num_variables; ++io) {
-        if(!config.m_channel_variable_plot_bool.at(io)) { errband_objs.push_back({}); continue; } // For now skip the L/E 250 bin.
+        if(!config.m_channel_variable_plot_bool.at(io)) { errband_objs.push_back({}); continue; }
         PROspec cv_plot   = variable_cvs[io];
         PROdata data_plot = variable_data[io];
         if (do_bkg_subtract) {
