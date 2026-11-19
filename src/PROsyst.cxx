@@ -730,7 +730,17 @@ namespace PROfit {
         const size_t nb = config.m_num_variable_bins_total[other_index];
         const size_t sb = (size_t)spline_binnings[spline];
         Eigen::VectorXf unweighted;
-        if(exact && sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
+        // FillSpectra migrates the splines of another binning together, their factors multiplied per
+        // bin first, so there the other splines of this binning (held at params) weight this one's bins.
+        Eigen::VectorXf others;
+        if(exact && sb != (size_t)other_index) {
+            unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
+            others = Eigen::VectorXf::Ones(config.m_num_variable_bins_total[sb]);
+            const Eigen::VectorXf shifts = params.tail(params.size() - model.nparams);
+            for(int m = 0; m < (int)GetNSplines(); ++m)
+                if(m != spline && (size_t)spline_binnings[m] == sb)
+                    for(Eigen::Index j = 0; j < others.size(); ++j) others(j) *= GetSplineFactor(m, shifts, (int)j);
+        }
         // This spline's per-bin factor at knob value t, built as in FillSpectra.
         auto factor = [&](float t) {
             Eigen::VectorXf f = Eigen::VectorXf::Ones(nb);
@@ -739,7 +749,7 @@ namespace PROfit {
             } else {
                 const size_t ns = config.m_num_variable_bins_total[sb];
                 Eigen::VectorXf sh(ns);
-                for(size_t j = 0; j < ns; ++j) sh(j) = GetSplineShift(spline, t, j);
+                for(size_t j = 0; j < ns; ++j) sh(j) = GetSplineShift(spline, t, j) * others(j);
                 const Eigen::VectorXf w = prop.variable_hist_storage.WeightedColSum(sb, other_index, sh);
                 for(size_t k = 0; k < nb; ++k) if(unweighted(k) > 0) f(k) = w(k) / unweighted(k);
             }
@@ -800,7 +810,7 @@ namespace PROfit {
                     if(sb == (size_t)other_index) {
                         G = P;
                     } else {
-                        G = H.transpose() * P;
+                        G = H.transpose() * (others.cast<double>().asDiagonal() * P);
                         for(size_t k = 0; k < nb; ++k) {
                             if(unweighted(k) > 0) G.row(k) /= Hsum(k);
                             else G.row(k) << 1.0, 0.0, 0.0, 0.0;
