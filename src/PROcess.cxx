@@ -82,7 +82,6 @@ namespace PROfit {
                                   cache.last_model_ptr != &inmodel);
         if(ctx_changed) {
             RequireBinnedVariable(inconfig, inmodel, var_index);
-            cache.phys_grid_valid = false;
             cache.unweighted_sums.clear();
         }
 
@@ -216,27 +215,7 @@ namespace PROfit {
             if(inmodel.is_trivial) {
                 result = inmodel.H_combined[var_index].col(0);
             } else {
-                // Flat physics grid: constant across the whole fit (depends only
-                // on the model's ivars and the propagator's midbins) — build it
-                // once and reuse from the cache.
-                if(!cache.phys_grid_valid) {
-                    const size_t N_ivars = inmodel.ivars.size();
-                    std::vector<size_t> ivar_sizes(N_ivars);
-                    for(size_t k = 0; k < N_ivars; ++k)
-                        ivar_sizes[k] = inprop.variable_midbin[inmodel.ivars[k]].size();
-
-                    cache.phys_grid.assign(N_ivars, std::vector<float>(inmodel.n_phys_bins));
-                    for(long int flat = 0; flat < inmodel.n_phys_bins; ++flat) {
-                        long int rem = flat;
-                        for(int k = (int)N_ivars - 1; k >= 0; --k) {
-                            cache.phys_grid[k][flat] = inprop.variable_midbin[inmodel.ivars[k]][rem % ivar_sizes[k]];
-                            rem /= (long int)ivar_sizes[k];
-                        }
-                    }
-                    cache.phys_grid_valid = true;
-                }
-
-                auto probs = inmodel.get_probs(phys, cache.phys_grid);
+                auto probs = inmodel.get_probs(phys, inmodel.phys_grid);
                 Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
                 result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             }
@@ -307,26 +286,10 @@ namespace PROfit {
         if(inmodel.is_trivial) {
             result = inmodel.H_combined[var_index].col(0);
         } else {
-            // Reuse (or build) the constant flat physics grid exactly as FillSpectra does.
-            if(!cache.phys_grid_valid) {
-                const size_t N_ivars = inmodel.ivars.size();
-                std::vector<size_t> ivar_sizes(N_ivars);
-                for(size_t k = 0; k < N_ivars; ++k)
-                    ivar_sizes[k] = inprop.variable_midbin[inmodel.ivars[k]].size();
-                cache.phys_grid.assign(N_ivars, std::vector<float>(inmodel.n_phys_bins));
-                for(long int flat = 0; flat < inmodel.n_phys_bins; ++flat) {
-                    long int rem = flat;
-                    for(int k = (int)N_ivars - 1; k >= 0; --k) {
-                        cache.phys_grid[k][flat] = inprop.variable_midbin[inmodel.ivars[k]][rem % ivar_sizes[k]];
-                        rem /= (long int)ivar_sizes[k];
-                    }
-                }
-                cache.phys_grid_valid = true;
-            }
-            auto probs = inmodel.get_probs(phys, cache.phys_grid);
+            auto probs = inmodel.get_probs(phys, inmodel.phys_grid);
             Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
             result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
-            pgrads = inmodel.get_probs_grad(phys, cache.phys_grid);
+            pgrads = inmodel.get_probs_grad(phys, inmodel.phys_grid);
         }
 
         // ---- Assemble d(spec)/d(param) columns; spec = systw .* result ----
@@ -456,22 +419,9 @@ namespace PROfit {
                 // already contains the per-reco-bin event-weight sum, with no physics-grid coupling.
                 result = inmodel.H_combined[var_index].col(0);
             } else {
-                // Build var_arrs: one entry per ivar, each of length n_phys_bins (flat grid).
-                // For 1-var: var_arrs[0] = midbin values of that var (n_phys_bins = n_ivar_bins).
-                // For N-var: row-major product grid — var_arrs[k][flat] = midbin of ivar[k] at flat index.
-                const size_t N_ivars = inmodel.ivars.size();
-                std::vector<size_t> ivar_sizes(N_ivars);
-                for(size_t k = 0; k < N_ivars; ++k)
-                    ivar_sizes[k] = inprop.variable_midbin[inmodel.ivars[k]].size();
-
-                std::vector<std::vector<float>> var_arrs(N_ivars, std::vector<float>(inmodel.n_phys_bins));
-                for(long int flat = 0; flat < inmodel.n_phys_bins; ++flat) {
-                    long int rem = flat;
-                    for(int k = (int)N_ivars - 1; k >= 0; --k) {
-                        var_arrs[k][flat] = inprop.variable_midbin[inmodel.ivars[k]][rem % ivar_sizes[k]];
-                        rem /= (long int)ivar_sizes[k];
-                    }
-                }
+                // The model's flat physics grid: one vector per ivar, length n_phys_bins
+                // (truth-bin midpoints, then underflow/overflow cells; see PROmodel::phys_axes).
+                const std::vector<std::vector<float>> &var_arrs = inmodel.phys_grid;
 
                 // Effective per-physics-bin oscillation probabilities.  Two paths:
                 //   - Visible-decay models (uses_get_counts): pre-scale N_truth rows by

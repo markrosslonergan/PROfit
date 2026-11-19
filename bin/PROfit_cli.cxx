@@ -96,19 +96,25 @@ PROpt::PROpt(int argc, char **argv) {
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
                 "Implies --area-norm for the plots. fc / brazil / fc-adaptive inherit the flag.");
+        const bool variable_default = PROconfig::kDefaultCovarianceMode == PROconfig::CovarianceMode::Variable;
+        auto *variable_cov_flag = app.add_flag("--variable-cov", variable_cov,
+                std::string("Covariance mode (neyman / pearson / CNP): rebuild the covariance M from the prediction at every tested "
+                "point")+(variable_default ? " (the default)." : ".")+" Exclusive with --fixed-cov.");
+        app.add_flag("--fixed-cov,--frozen-cov", fixed_cov,
+                std::string("Covariance mode (neyman / pearson / CNP): hold the whole covariance M (statistical + systematic) at its "
+                "value at the --cov-reference prediction for every tested point")+(variable_default ? "." : " (the default).")
+                +" Exclusive with --variable-cov.")
+            ->excludes(variable_cov_flag);
         app.add_flag("--lndet", lndet,
-                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries when its covariance M "
-                "is rebuilt from the prediction at every tested point (without it fits lean towards larger predictions). "
+                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries; in either covariance mode, "
+                "though with --fixed-cov it is a constant. Without it a variable M leans the fit towards larger predictions. "
                 "Reported relative to ln det M at --cov-reference.");
-        app.add_flag("--frozen-cov", frozen_cov,
-                "Hold the whole covariance M (statistical + systematic) at its value at the --cov-reference prediction instead "
-                "of rebuilding it at every tested point (neyman / pearson / CNP).");
         app.add_option("--cov-reference", cov_reference,
-                "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
+                "Reference point for --fixed-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
                 "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
             ->expected(-1);
         app.add_option("--cov-reference-file", cov_reference_file,
-                "Take the --frozen-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
+                "Take the --fixed-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
                 "(values as written there: physics in the fit's own units, log10 where the model uses log10; splines by name or "
                 "plotname). --cov-reference pairs given alongside override single parameters.")
             ->check(CLI::ExistingFile);
@@ -461,6 +467,9 @@ PROpt::PROpt(int argc, char **argv) {
         }
 
         if(shapeonly) area_normalized = true;
+
+        if(fixed_cov) cov_mode = PROconfig::CovarianceMode::Fixed;
+        else if(variable_cov) cov_mode = PROconfig::CovarianceMode::Variable;
 
         pbounds.Load(bound_list);
         final_output_tag = analysis_tag +"_"+ output_tag;

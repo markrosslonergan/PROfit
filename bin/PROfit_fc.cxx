@@ -177,11 +177,11 @@ static FCMeta makeFCMeta(const PROconfig &config, const PROpeller &prop, const P
     m.strs.push_back({"version", PROJECT_VERSION_STR});
     // Toys thrown with the MC statistical overlap (PROoverlap.h) are a different distribution.
     if(prop.overlap) m.strs.push_back({"stat_overlap", std::to_string(OverlapFingerprint(*prop.overlap))});
-    // ln det M / a frozen M change the statistic of every toy and of the data.
+    // ln det M / a fixed M change the statistic of every toy and of the data.
     const PROconfig::CovarianceOptions &co = config.m_covariance_options;
     if(co.lndet) m.nums.push_back({"cov_lndet", 1.0f});
-    if(co.frozen) m.nums.push_back({"cov_frozen", 1.0f});
-    if((co.lndet || co.frozen) && co.reference.size() >= model.nparams) {
+    if(co.fixed()) m.nums.push_back({"cov_frozen", 1.0f});
+    if((co.lndet || co.fixed()) && co.reference.size() >= model.nparams) {
         for(size_t i = 0; i < model.nparams; ++i)
             m.nums.push_back({"covref_" + model.param_names[i], model.is_log10[i] ? std::pow(10.0f, co.reference[i]) : co.reference[i]});
         for(size_t i = model.nparams; i < co.reference.size(); ++i)

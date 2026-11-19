@@ -89,9 +89,24 @@ public:
 
     std::vector<size_t> prob_types; ///< Probability-type indices, matching model_functions indices.
 
-    /// Per-ivar bin counts; phys_grid_sizes[k] = number of bins for ivars[k].
+    /// Per-ivar grid sizes; phys_grid_sizes[k] = phys_axes[k].size().
     /// Filled by build_hists_and_combined; used by decay models for the flat-grid decomposition.
     std::vector<size_t> phys_grid_sizes;
+
+    /// Per-ivar axis of the physics grid: the variable's global truth-bin midpoints
+    /// (PROpeller::variable_midbin), then one underflow/overflow CELL per (subchannel block,
+    /// side, sign) that holds events outside the variable's binning, at their |weight|-weighted
+    /// mean. Without cells those events would be missing from every binned prediction. Built by
+    /// build_hists_and_combined.
+    std::vector<std::vector<float>> phys_axes;
+    /// Same shape as phys_axes: 0 for truth bins (each model keeps its own convention there),
+    /// sqrt(3)*sigma for a cell, the half-width of the uniform distribution with the cell's
+    /// variance, for models that average fast oscillations over a grid point (bin_average).
+    std::vector<std::vector<float>> phys_axes_hw;
+    /// The flat row-major product of phys_axes (last ivar fastest), one vector per ivar of length
+    /// n_phys_bins: what the binned FillSpectra passes to get_probs. A model can recognise the
+    /// binned grid by address (&var_arrs == &phys_grid) and look up phys_axes_hw.
+    std::vector<std::vector<float>> phys_grid;
 
     std::vector<bool> is_log10; ///< True for each parameter stored in log10 space; false for linear.
 
@@ -134,7 +149,10 @@ public:
      * events in @p prop, distributes them onto the flat physics grid, and constructs the
      * concatenated H_combined matrices used by FillSpectra. Variables the propeller only
      * carries along (!prop.IsBinnedVariable(v), see PROconfig::IsFilledVariable) get an empty
-     * matrix: FillSpectra refuses a binned fill of them.
+     * matrix: FillSpectra refuses a binned fill of them. Also builds phys_axes, phys_axes_hw,
+     * phys_grid, phys_grid_sizes and n_phys_bins. An event whose kinematic variable lies outside
+     * that variable's binning goes to its block's underflow/overflow cell (needs
+     * prop.block_layout; see truth_overflow_cells); one with a non-finite value is dropped.
      * @param prop                 The MC event store.
      * @param filter_by_model_rule If true (default), each event is placed in the histogram
      *                             matrix corresponding to its model_rule; if false, all events
@@ -311,7 +329,28 @@ public:
 
     virtual ~PROmodel(){}
 
+protected:
+    /// Give events outside a kinematic variable's binning underflow/overflow cells (phys_axes).
+    /// The visible-decay models set it false before build_hists_and_combined: their get_counts
+    /// needs a uniform truth grid, so they keep dropping those events (with a warning).
+    bool truth_overflow_cells = true;
+
+private:
+    /// Flat physics-grid index of every event (-1 = in no grid cell); builds the grid members.
+    std::vector<long int> build_phys_grid(const PROpeller &prop);
 };
+
+/// sinc(h) = sin(h)/h and, if @p dS is given, its derivative; series below |h| = 1e-4. The bin
+/// average of a fast phase: <cos(phi)> over phi uniform in [c-h, c+h] is cos(c) sinc(h).
+inline double osc_sinc(double h, double *dS = nullptr) {
+    if(std::fabs(h) < 1e-4) {
+        if(dS) *dS = -h / 3;
+        return 1 - h * h / 6;
+    }
+    const double S = std::sin(h) / h;
+    if(dS) *dS = (std::cos(h) - S) / h;
+    return S;
+}
 
 /**
  * @brief Factory function: construct a PROmodel subclass by name.

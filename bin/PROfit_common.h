@@ -139,8 +139,10 @@ struct PROpt {
     bool show_fit_help = false;
     bool eventbyevent=false;
     bool shapeonly = false;
-    bool lndet = false;        // --lndet: add ln det M to the covariance chi2
-    bool frozen_cov = false;   // --frozen-cov: hold M at the --cov-reference prediction
+    bool lndet = false;        // --lndet: add ln det M to the covariance chi2, in either covariance mode
+    bool variable_cov = false; // --variable-cov: rebuild M from the prediction at every tested point
+    bool fixed_cov = false;    // --fixed-cov (alias --frozen-cov): hold M at the --cov-reference prediction
+    PROconfig::CovarianceMode cov_mode = PROconfig::kDefaultCovarianceMode; // the two flags, resolved in PROpt
     std::map<std::string, float> cov_reference;
     std::string cov_reference_file; // --cov-reference-file: a global_fit.txt read as the reference
     bool ordering_octant_seeds = false;  // --ordering-octant-seeds (LBL models only)

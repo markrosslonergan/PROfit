@@ -1338,6 +1338,7 @@ namespace PROfit {
 
         //ensure hash is correctly assigned
         inprop.hash=inconfig.hash;
+        inprop.SetBlockLayout(inconfig);
         if(record_overlap)
             *overlap_out = BuildOverlapMC(overlap_records, inprop.NEvent(), inconfig.hash);
         // Convert the accumulated per-bin sum of squared weights into the sqrt of the

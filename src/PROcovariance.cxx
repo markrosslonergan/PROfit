@@ -77,7 +77,7 @@ PROcovariance::PROcovariance(const std::string tag, const PROconfig &conin, cons
     }
 
     cov_lndet = conin.m_covariance_options.lndet;
-    cov_frozen = conin.m_covariance_options.frozen;
+    cov_frozen = conin.m_covariance_options.fixed();
     cov_reference_in = conin.m_covariance_options.reference;
 }
 

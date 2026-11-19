@@ -67,13 +67,6 @@ namespace PROfit{
         const PROsyst *last_syst_ptr = nullptr;
         const PROmodel *last_model_ptr = nullptr;
 
-        /// Flat physics grid passed to get_probs — depends only on the model's
-        /// ivars and the propagator's midbin vectors, i.e. constant across an
-        /// entire fit. Built once on first use and reused (it used to be
-        /// reallocated and refilled on every physics-changed call).
-        std::vector<std::vector<float>> phys_grid;
-        bool phys_grid_valid = false;
-
         /// Per-cross-binning column sums of the migration histograms
         /// (constant per (binning, var_index)); keyed by binning index.
         std::map<size_t, Eigen::VectorXf> unweighted_sums;
@@ -83,7 +76,6 @@ namespace PROfit{
             last_var_index = -1;
             last_syst_ptr = nullptr;
             last_model_ptr = nullptr;
-            phys_grid_valid = false;
             unweighted_sums.clear();
         }
     };
@@ -102,8 +94,8 @@ namespace PROfit{
      * j = nphys..nphys+nsplines-1 (spline nuisances, via PROsyst::GetSplineShiftDeriv).
      * Self-contained: recomputes the per-spline factors and physics result it needs rather
      * than trusting the cache's pinned state (the Tier 1.3 incremental path deliberately
-     * leaves the cache at an older central point). Only the constant cache members
-     * (unweighted_sums, phys_grid) are reused/populated.
+     * leaves the cache at an older central point). Only the constant cache member
+     * unweighted_sums is reused/populated.
      * @return Matrix (nbins_var_full, nphys + nsplines).
      */
     Eigen::MatrixXf FillSpectraGradient(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, size_t var_index = 0);

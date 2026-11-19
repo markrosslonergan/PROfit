@@ -87,17 +87,6 @@ void fill_coefs(const Mat4c &U, const Mat4c *dU, Coef &C) {
     }
 }
 
-// sinc(h) = sin(h)/h and, if wanted, its derivative; series below |h| = 1e-4.
-inline double sinc(double h, double *dS) {
-    if(std::fabs(h) < 1e-4) {
-        if(dS) *dS = -h / 3;
-        return 1 - h * h / 6;
-    }
-    const double S = std::sin(h) / h;
-    if(dS) *dS = (std::cos(h) - S) / h;
-    return S;
-}
-
 }
 
 PROLBL3p1::PROLBL3p1(const PROconfig &config, const PROpeller &prop) : baseline_km(0) {
@@ -178,11 +167,12 @@ double PROLBL3p1::signed_le(double v0, double v1) const {
 }
 
 void PROLBL3p1::build_grid(const PROconfig &config, const PROpeller &prop) {
-    // Half-width of every global truth bin of each ivar, in the [mode][detector][channel]
-    // [subchannel][bin] order PROcreate gives variable_midbin.
+    // Half-width of every entry of each ivar's grid axis: the global truth bins, in the
+    // [mode][detector][channel][subchannel][bin] order PROcreate gives variable_midbin, then
+    // the underflow/overflow cells (PROmodel::phys_axes_hw: the uniform width with the cell's
+    // variance).
     const size_t N = ivars.size();
     std::vector<std::vector<double>> half(N);
-    std::vector<size_t> sizes(N);
     for(size_t k = 0; k < N; ++k) {
         for(size_t im = 0; im < config.m_num_modes; ++im)
             for(size_t id = 0; id < config.m_num_detectors; ++id)
@@ -192,17 +182,17 @@ void PROLBL3p1::build_grid(const PROconfig &config, const PROpeller &prop) {
                         for(size_t j = 0; j + 1 < edges.size(); ++j)
                             half[k].push_back(0.5 * std::fabs((double)edges[j + 1] - edges[j]));
                 }
-        sizes[k] = prop.variable_midbin[ivars[k]].size();
-        if(half[k].size() != sizes[k]) {
+        const size_t n_bins = prop.variable_midbin[ivars[k]].size();
+        if(half[k].size() != n_bins) {
             log<LOG_ERROR>(L"%1% || Truth binning of variable %2% has %3% global bins in the config but %4% in the MC store.")
-                % __func__ % ivars[k] % half[k].size() % sizes[k];
+                % __func__ % ivars[k] % half[k].size() % n_bins;
             throw std::runtime_error("LBL 3+1: config / PROpeller truth-binning mismatch");
         }
+        for(size_t j = n_bins; j < phys_grid_sizes[k]; ++j) half[k].push_back(phys_axes_hw[k][j]);
     }
 
-    // The flat grid exactly as FillSpectra builds it (row-major, last ivar fastest), so
-    // get_probs recognises it by value; identical points are evaluated once.
-    grid_.assign(N, std::vector<float>(n_phys_bins));
+    // One OscPoint per flat point of phys_grid (row-major, last ivar fastest); identical
+    // points are evaluated once.
     grid_index_.resize(n_phys_bins);
     grid_points_.clear();
     std::map<std::array<double, 3>, int> seen;
@@ -210,12 +200,11 @@ void PROLBL3p1::build_grid(const PROconfig &config, const PROpeller &prop) {
         std::array<size_t, 2> bin{};
         long int rem = flat;
         for(int k = (int)N - 1; k >= 0; --k) {
-            bin[k] = rem % (long int)sizes[k];
-            grid_[k][flat] = prop.variable_midbin[ivars[k]][bin[k]];
-            rem /= (long int)sizes[k];
+            bin[k] = rem % (long int)phys_grid_sizes[k];
+            rem /= (long int)phys_grid_sizes[k];
         }
-        const double v0 = grid_[0][flat], w0 = half[0][bin[0]];
-        const double v1 = N > 1 ? grid_[1][flat] : 0, w1 = N > 1 ? half[1][bin[1]] : 0;
+        const double v0 = phys_grid[0][flat], w0 = half[0][bin[0]];
+        const double v1 = N > 1 ? phys_grid[1][flat] : 0, w1 = N > 1 ? half[1][bin[1]] : 0;
         OscPoint pt{signed_le(v0, v1), {0, 0}};
         if(bin_average && pt.le != 0) {
             switch(input_mode) {
@@ -312,7 +301,7 @@ void PROLBL3p1::evaluate(const Eigen::VectorXf &phys, const std::vector<OscPoint
                 if(hw == 0) continue;
                 const double k = 2 * kPhase * hw;
                 double ds = 0;
-                const double sa = sinc(k * dmsq[q], dP ? &ds : nullptr);
+                const double sa = osc_sinc(k * dmsq[q], dP ? &ds : nullptr);
                 dS = dS * sa + S * ds * k;
                 S *= sa;
             }
@@ -342,7 +331,7 @@ Eigen::MatrixXf PROLBL3p1::expand(const Eigen::MatrixXf &P, bool on_grid) const 
 }
 
 Eigen::MatrixXf PROLBL3p1::get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
-    const bool on_grid = var_arrs == grid_;
+    const bool on_grid = &var_arrs == &phys_grid || var_arrs == phys_grid;
     std::vector<OscPoint> exact;
     if(!on_grid) exact = exact_points(var_arrs);
     Eigen::MatrixXf P;
@@ -351,7 +340,7 @@ Eigen::MatrixXf PROLBL3p1::get_probs(const Eigen::VectorXf &phys, const std::vec
 }
 
 std::vector<Eigen::MatrixXf> PROLBL3p1::get_probs_grad(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
-    const bool on_grid = var_arrs == grid_;
+    const bool on_grid = &var_arrs == &phys_grid || var_arrs == phys_grid;
     std::vector<OscPoint> exact;
     if(!on_grid) exact = exact_points(var_arrs);
     Eigen::MatrixXf P;

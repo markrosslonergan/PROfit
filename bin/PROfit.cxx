@@ -94,7 +94,7 @@ int main(int argc, char* argv[])
     options.projector_config.force = options.force;
     options.projector_config.shape_only = options.shapeonly;
     options.projector_config.lndet = options.lndet;
-    options.projector_config.frozen_cov = options.frozen_cov;
+    options.projector_config.frozen_cov = options.cov_mode == PROconfig::CovarianceMode::Fixed;
     if(options.projector_config.active()) {
         if(!PROjectorSetup(options.projector_config, config, variable_systs[config.i_prime],
                     variable_data, data, fakedataparams, options.fixed_params, *model, options.chi2))

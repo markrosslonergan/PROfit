@@ -15,19 +15,152 @@
 #include <stdexcept>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
+#include <map>
 
 namespace PROfit {
 
+std::vector<long int> PROmodel::build_phys_grid(const PROpeller &prop) {
+    const size_t N = ivars.size();
+    const size_t nev = prop.NEvent();
+    const bool layout = !prop.block_layout.empty();
+    const bool cells = truth_overflow_cells && layout;
+
+    // Each event's block and every block's |weight|, for the cells and for the log: a tail can
+    // be a negligible share of the whole MC yet a large share of one subchannel.
+    const size_t nblocks = layout ? prop.block_names.size() : 0;
+    std::vector<int> block(N > 0 && layout ? nev : 0, -1);
+    std::vector<double> w_block(nblocks, 0.0);
+    double w_all = 0;
+    for(size_t i = 0; i < nev; ++i) {
+        const double w = std::fabs(prop.added_weights[i]);
+        w_all += w;
+        if(block.empty()) continue;
+        block[i] = prop.EventBlock(i);
+        if(block[i] >= 0) w_block[block[i]] += w;
+    }
+
+    // A cell: (block, 0 = underflow / 1 = overflow, 1 = negative value). The sign keeps signed
+    // inputs (antineutrino E or L/E < 0) from sharing a mean with positive ones.
+    using CellKey = std::array<int, 3>;
+    auto cell_key = [&](size_t k, size_t i, CellKey &key) {
+        const float x = prop.VariableValue(ivars[k], i);
+        if(!std::isfinite(x) || block[i] < 0) return false;
+        const PROpeller::BlockLayout &b = prop.block_layout[ivars[k]];
+        if(!(b.lo[block[i]] <= b.hi[block[i]])) return false;  // no 1D binning in this block (NaN)
+        key = {block[i], x < b.lo[block[i]] ? 0 : 1, x < 0 ? 1 : 0};
+        return true;
+    };
+
+    // Largest share of one subchannel's weight, in percent, and its name (whole MC without layout).
+    auto worst = [&](const std::vector<double> &w_tail, double w_tail_all) {
+        std::pair<double, std::string> res{w_all > 0 ? 100.0 * w_tail_all / w_all : 0.0, "the whole MC"};
+        if(!layout) return res;
+        res.first = 0;
+        for(size_t s = 0; s < nblocks; ++s)
+            if(w_block[s] > 0 && 100.0 * w_tail[s] / w_block[s] > res.first)
+                res = {100.0 * w_tail[s] / w_block[s], prop.block_names[s]};
+        return res;
+    };
+    const char *drop_reason = !truth_overflow_cells ? "this model needs them inside its truth binning"
+                            : !layout ? "the PROpeller has no block layout" : "non-finite value or no binning in the block";
+
+    phys_axes.assign(N, {});
+    phys_axes_hw.assign(N, {});
+    std::vector<std::map<CellKey, int>> cell_index(N);
+    for(size_t k = 0; k < N; ++k) {
+        const Eigen::VectorXf &mid = prop.variable_midbin[ivars[k]];
+        phys_axes[k].assign(mid.data(), mid.data() + mid.size());
+        phys_axes_hw[k].assign(mid.size(), 0.0f);
+
+        struct Moments { double w = 0, wx = 0, wxx = 0, x = 0, xx = 0; long n = 0; };
+        std::map<CellKey, Moments> moments;
+        long n_out = 0, n_dropped = 0;
+        double w_out = 0, w_dropped = 0;
+        std::vector<double> w_out_block(nblocks, 0.0), w_dropped_block(nblocks, 0.0);
+        for(size_t i = 0; i < nev; ++i) {
+            if(prop.VariableBinIndex(ivars[k], i) >= 0) continue;
+            const double w = std::fabs(prop.added_weights[i]);
+            CellKey key;
+            if(!cells || !cell_key(k, i, key)) {
+                ++n_dropped; w_dropped += w;
+                if(!block.empty() && block[i] >= 0) w_dropped_block[block[i]] += w;
+                continue;
+            }
+            const double x = prop.VariableValue(ivars[k], i);
+            Moments &m = moments[key];
+            m.w += w; m.wx += w * x; m.wxx += w * x * x;
+            m.x += x; m.xx += x * x; ++m.n;
+            ++n_out; w_out += w; w_out_block[block[i]] += w;
+        }
+        for(const auto &[key, m] : moments) {
+            // Unweighted moments if every weight in the cell is zero.
+            const double sw = m.w > 0 ? m.w : (double)m.n;
+            const double mean = (m.w > 0 ? m.wx : m.x) / sw;
+            const double var = std::max(0.0, (m.w > 0 ? m.wxx : m.xx) / sw - mean * mean);
+            cell_index[k][key] = (int)phys_axes[k].size();
+            phys_axes[k].push_back((float)mean);
+            phys_axes_hw[k].push_back((float)std::sqrt(3.0 * var));
+        }
+
+        const auto [pct_out, where_out] = worst(w_out_block, w_out);
+        const auto [pct_dropped, where_dropped] = worst(w_dropped_block, w_dropped);
+        if(n_out > 0)
+            log<LOG_INFO>(L"%1% || Kinematic variable %2%: %3% events lie outside its binning (up to %4%%% of the MC weight of %5%); placed in %6% underflow/overflow cells of the physics grid.")
+                % __func__ % ivars[k] % n_out % pct_out % where_out.c_str() % moments.size();
+        if(n_dropped > 0)
+            log<LOG_INFO>(L"%1% || Kinematic variable %2%: %3% events outside its binning (up to %4%%% of the MC weight of %5%) are left out of the binned prediction: %6%.")
+                % __func__ % ivars[k] % n_dropped % pct_dropped % where_dropped.c_str() % drop_reason;
+        // Model construction repeats per FC/AFC worker: warn once per process.
+        static std::atomic<bool> warned_out{false}, warned_dropped{false};
+        if(pct_out > 1.0 && !warned_out.exchange(true))
+            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% lies outside the binning of kinematic variable %4%. The binned prediction oscillates those events at their cell's mean value (averaged over the cell's spread where the model bin-averages); widen that variable's <bins> to treat them exactly.")
+                % __func__ % pct_out % where_out.c_str() % ivars[k];
+        if(pct_dropped > 0.1 && !warned_dropped.exchange(true))
+            log<LOG_WARNING>(L"%1% || %2%%% of the MC weight of %3% is outside the binning of kinematic variable %4% and missing from every binned prediction (%5%). Widen that variable's <bins> to cover every event.")
+                % __func__ % pct_dropped % where_dropped.c_str() % ivars[k] % drop_reason;
+    }
+
+    phys_grid_sizes.assign(N, 0);
+    n_phys_bins = 1;
+    for(size_t k = 0; k < N; ++k) {
+        phys_grid_sizes[k] = phys_axes[k].size();
+        n_phys_bins *= (long int)phys_grid_sizes[k];
+    }
+
+    // Row-major over the axes, last ivar fastest.
+    phys_grid.assign(N, std::vector<float>(n_phys_bins));
+    for(long int flat = 0; flat < n_phys_bins; ++flat) {
+        long int rem = flat;
+        for(int k = (int)N - 1; k >= 0; --k) {
+            phys_grid[k][flat] = phys_axes[k][rem % (long int)phys_grid_sizes[k]];
+            rem /= (long int)phys_grid_sizes[k];
+        }
+    }
+
+    std::vector<long int> flat(nev, 0);
+    for(size_t i = 0; i < nev; ++i) {
+        long int f = 0;
+        for(size_t k = 0; k < N; ++k) {
+            int idx = prop.VariableBinIndex(ivars[k], i);
+            if(idx < 0) {
+                CellKey key;
+                auto it = cells && cell_key(k, i, key) ? cell_index[k].find(key) : cell_index[k].end();
+                if(it == cell_index[k].end()) { f = -1; break; }
+                idx = it->second;
+            }
+            f = f * (long int)phys_grid_sizes[k] + idx;
+        }
+        flat[i] = f;
+    }
+    return flat;
+}
+
 void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_model_rule,
                                         const std::function<int(size_t, size_t, int)> &block_fn) {
-    // Compute flat physics grid size and per-ivar bin counts
-    std::vector<size_t> ivar_sizes(ivars.size());
-    n_phys_bins = 1;
-    for(size_t k = 0; k < ivars.size(); ++k) {
-        ivar_sizes[k] = prop.variable_midbin[ivars[k]].size();
-        n_phys_bins *= (long int)ivar_sizes[k];
-    }
+    const std::vector<long int> event_flat = build_phys_grid(prop);
 
     size_t nvar = prop.variable_mc_stat_err.size();
     // Decay models compute counts directly in get_counts and leave model_functions empty;
@@ -62,7 +195,7 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
         trips.clear();
         for(size_t i = 0; i < prop.NEvent(); ++i) {
             int rbin = prop.VariableBinIndex(v, i);
-            if(rbin < 0) continue;
+            if(rbin < 0 || event_flat[i] < 0) continue;
 
             // Determine the destination column for this event.
             int col;
@@ -73,17 +206,7 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
             }
             if(col < 0 || col >= (int)J) continue;
 
-            // Compute row-major flat index over ivars
-            long int flat_phys = 0;
-            bool valid = true;
-            for(size_t k = 0; k < ivars.size(); ++k) {
-                int tbin = prop.VariableBinIndex(ivars[k], i);
-                if(tbin < 0) { valid = false; break; }
-                flat_phys = flat_phys * (long int)ivar_sizes[k] + tbin;
-            }
-            if(!valid) continue;
-
-            trips.emplace_back(rbin, (long int)col * n_phys_bins + flat_phys, prop.added_weights[i]);
+            trips.emplace_back(rbin, (long int)col * n_phys_bins + event_flat[i], prop.added_weights[i]);
         }
         H_combined[v] = HMatrix(n_reco_v, n_phys_bins * J);
         H_combined[v].setFromTriplets(trips.begin(), trips.end());
@@ -95,16 +218,17 @@ void PROmodel::build_hists_and_combined(const PROpeller &prop, bool filter_by_mo
             % (total > 0 ? 100.0 * H_combined[v].nonZeros() / total : 0.0)
             % (H_combined[v].nonZeros() * (sizeof(float) + sizeof(HMatrix::StorageIndex)) / (1024.0 * 1024.0));
     }
-
-    // Store per-ivar bin counts for downstream use (e.g. decay redistribution).
-    phys_grid_sizes.assign(ivar_sizes.begin(), ivar_sizes.end());
 }
 
 Eigen::MatrixXf PROmodel::compute_N_truth(const PROpeller &prop, bool filter_by_model_rule) const {
     size_t J = model_functions.empty() ? prob_types.size() : model_functions.size();
     std::vector<size_t> ivar_sizes(ivars.size());
-    for(size_t k = 0; k < ivars.size(); ++k)
+    for(size_t k = 0; k < ivars.size(); ++k) {
         ivar_sizes[k] = prop.variable_midbin[ivars[k]].size();
+        // Truth-bin indexing only: the grid must carry no underflow/overflow cells.
+        if(ivar_sizes[k] != phys_grid_sizes.at(k))
+            throw std::logic_error("compute_N_truth on a physics grid with underflow/overflow cells; set truth_overflow_cells = false");
+    }
 
     Eigen::MatrixXf N = Eigen::MatrixXf::Zero(n_phys_bins, J);
     for(size_t i = 0; i < prop.NEvent(); ++i) {

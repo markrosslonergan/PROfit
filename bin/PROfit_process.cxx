@@ -157,6 +157,7 @@ void run_process(PROpeller &prop, std::vector<std::vector<SystStruct>> &systsstr
     }else{
         log<LOG_INFO>(L"%1% || Loading PROpeller and PROsysts from precalc binary input: %2%") % __func__ % propBinName.c_str();
         prop.load(propBinName);
+        prop.SetBlockLayout(config);
         loadSystStructVector(systsstructs, systBinName);
 
         //is hash right for PROpeller first?

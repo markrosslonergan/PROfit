@@ -100,6 +100,16 @@ float PROsineModel::channel_prob(size_t c, const Eigen::VectorXf &phys, float le
                                              : 1.0f - amp.A[c] * sinterm * sinterm;
 }
 
+float PROsineModel::cell_sin2(float freq, float le, float hw, float *ds2_dfreq) {
+    // <sin^2 x> = (1 - cos 2x sinc u)/2 over a uniform window of half-width hw in L/E
+    // (u = 2 freq hw), in double: x is large at high dmsq.
+    const double x2 = 2.0 * (double)freq * le;
+    double dS;
+    const double S = osc_sinc(2.0 * (double)freq * hw, ds2_dfreq ? &dS : nullptr);
+    if(ds2_dfreq) *ds2_dfreq = (float)(le * std::sin(x2) * S - std::cos(x2) * hw * dS);
+    return (float)(0.5 * (1.0 - std::cos(x2) * S));
+}
+
 Eigen::MatrixXf PROsineModel::get_probs(const Eigen::VectorXf &phys, const std::vector<std::vector<float>> &var_arrs) const {
     const auto &le_arr = var_arrs[0];
 
@@ -112,7 +122,17 @@ Eigen::MatrixXf PROsineModel::get_probs(const Eigen::VectorXf &phys, const std::
     // as [col0|col1|...] against H_combined (see FillSpectra, src/PROcess.cxx).
     Eigen::MatrixXf probs(le_arr.size(), J_);
 
+    // Underflow/overflow cells of the binned grid (hw > 0) are averaged over their spread.
+    const std::vector<float> *hw = &var_arrs == &phys_grid ? &phys_axes_hw[0] : nullptr;
+
     for(size_t i = 0; i < le_arr.size(); ++i) {
+        if(hw && (*hw)[i] > 0) {
+            const float s2 = cell_sin2(freq, le_arr[i], (*hw)[i], nullptr);
+            for(size_t c = 0; c < J_; ++c)
+                probs(i, c) = forms_[c] == ProbForm::Null ? 1.0f
+                            : forms_[c] == ProbForm::Appearance ? amp.A[c] * s2 : 1.0f - amp.A[c] * s2;
+            continue;
+        }
         const float sinterm = std::sin(freq * le_arr[i]);
         for(size_t c = 0; c < J_; ++c) {
             switch(forms_[c]) {
@@ -142,8 +162,18 @@ std::vector<Eigen::MatrixXf> PROsineModel::get_probs_grad(const Eigen::VectorXf 
     const bool hoisted = (recipe_.grad_style == GradStyle::HoistedPhase);
 
     std::vector<Eigen::MatrixXf> grads(nparams, Eigen::MatrixXf::Zero(le_arr.size(), J_));
+    const std::vector<float> *hw = &var_arrs == &phys_grid ? &phys_axes_hw[0] : nullptr;
     for(size_t i = 0; i < le_arr.size(); ++i) {
         const float le = le_arr[i];
+        if(hw && (*hw)[i] > 0) {
+            float ds2;
+            const float s2 = cell_sin2(freq, le, (*hw)[i], &ds2);
+            for(uint8_t c : osc_channels_)
+                grads[0](i, c) = jac.Cdm[c] * ds2 * k * jac.ddm;
+            for(const SineGradEntry &e : recipe_.grad_entries)
+                grads[e.param](i, e.channel) = jac.pre[e.param][e.channel] * s2 * jac.post[e.param][e.channel];
+            continue;
+        }
         const float x = freq * le;
         const float sinterm = std::sin(x);
         const float s2 = sinterm * sinterm;

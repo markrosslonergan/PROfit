@@ -218,6 +218,14 @@ private:
 
     /** @brief Scalar per-event probability backing model_functions (base FD / pybind only). */
     float channel_prob(size_t c, const Eigen::VectorXf &phys, float le) const;
+
+    /**
+     * @brief sin^2(freq * L/E) averaged over an underflow/overflow cell of the binned grid
+     * (centre @p le, half-width @p hw, see PROmodel::phys_axes_hw); truth bins keep the
+     * midpoint sin^2 of the legacy expressions.
+     * @param ds2_dfreq If non-null, out: the derivative with respect to freq.
+     */
+    static float cell_sin2(float freq, float le, float hw, float *ds2_dfreq);
 };
 
 }

@@ -512,15 +512,26 @@ namespace PROfit{
              *  studies), not part of the analysis definition. */
             std::vector<std::vector<char>> m_variable_active_bins_collapsed;
 
+            /** @brief How the Gaussian metrics build the covariance M at each tested point.
+             *  @details Variable: M is rebuilt from the prediction at every tested point.
+             *  Fixed: the whole M (stat + syst) is held at its value at the reference
+             *  prediction. --lndet is independent of the mode (and a constant under Fixed). */
+            enum class CovarianceMode { Variable, Fixed };
+            /// The mode when neither --variable-cov nor --fixed-cov is given. The one place the
+            /// default lives, so a configurable default (XML, site config) only has to set this.
+            static constexpr CovarianceMode kDefaultCovarianceMode = CovarianceMode::Variable;
+
             /** @brief Runtime-only covariance options of the Gaussian metrics (neyman, pearson, CNP).
              *  @details Like the active-bins mask: set BEFORE any PROmetric is constructed (main
-             *  does it from --lndet / --frozen-cov / --cov-reference); every PROcovariance reads
-             *  it at construction, so Clone(), the fc/fc-adaptive/brazil workers and their toys
-             *  all carry it with no extra plumbing. Not hashed, not serialized. */
+             *  does it from --variable-cov / --fixed-cov / --lndet / --cov-reference[-file]); every
+             *  PROcovariance reads it at construction, so Clone(), the fc/fc-adaptive/brazil
+             *  workers and their toys all carry it with no extra plumbing. Not hashed, not
+             *  serialized (PROjector constraints and fc_meta store fixed() as a flag). */
             struct CovarianceOptions {
                 bool lndet = false;            ///< Add ln det M − ln det M(reference) to χ² (−2 ln L of a Gaussian with θ-dependent M).
-                bool frozen = false;           ///< Hold the whole M (stat + syst) at its value at the reference prediction.
+                CovarianceMode mode = kDefaultCovarianceMode;
                 std::vector<float> reference;  ///< Reference parameter vector (physics in internal units, then splines); empty = model defaults with splines at their prior centres.
+                bool fixed() const { return mode == CovarianceMode::Fixed; }
             };
             CovarianceOptions m_covariance_options;
 
