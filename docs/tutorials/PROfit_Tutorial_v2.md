@@ -980,7 +980,7 @@ PROfit -x tutorial.xml -t TUT -o glob1 --seed 405 -n 8 \
 
 Outputs:
 
-* `TUT_glob1_global_fit.txt` — best-fit χ² and every parameter value in a plain-text table
+* `TUT_glob1_global_fit.txt` — the best-fit χ² on its first line (`Global best fit: chi2 = …`, at full float precision; with `--lndet` also the ln det part), then every parameter value in a plain-text table
 * `TUT_glob1_PROglobal_hists.pdf` — pre-fit (blue/gray) vs post-fit (red) spectra + error bands, with a data/fit ratio panel
 * `TUT_glob1_PROglobal_postfit_correlation_matrix_nuisance_only.pdf` — post-fit correlations of the spline nuisances (from the band chain, always made)
 * `TUT_glob1_PROglobal_postfit_band_mcmc_autocorrelation.pdf` — how well the band chain mixed: autocorrelation per spline, pooled over chains; the log gives each spline's autocorrelation time τ and effective sample size (20,000 kept steps / τ — a few hundred is enough for the band; much less means raise `--fit-options MCMC-Iterations`)

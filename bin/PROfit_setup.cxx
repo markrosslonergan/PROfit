@@ -808,11 +808,19 @@ void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &glob
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % global_fit_chi2;
-        if(config.m_covariance_options.lndet && !config.m_covariance_options.frozen)
-            log<LOG_INFO>(L"%1% || of which ln det M - ln det M(reference): %2%") % __func__ % metric.CovarianceLnDetTerm(global_fit_result);
+        const bool lndet_part = config.m_covariance_options.lndet && !config.m_covariance_options.frozen;
+        const float lndet_term = lndet_part ? metric.CovarianceLnDetTerm(global_fit_result) : 0.0f;
+        if(lndet_part)
+            log<LOG_INFO>(L"%1% || of which ln det M - ln det M(reference): %2%") % __func__ % lndet_term;
         log<LOG_INFO>(L"%1% || at paramters: ") % __func__;
 
-        global_fit_out << "Global best fit:\n";
+        // chi2 at full float precision: Δχ² is taken against it, and large-χ² fits would lose
+        // the decimals at the stream's default 6 significant digits. The header has no " : ",
+        // so --cov-reference-file skips it.
+        global_fit_out << "Global best fit: chi2 = " << std::setprecision(std::numeric_limits<float>::max_digits10)
+                       << global_fit_chi2 << std::setprecision(6);
+        if(lndet_part) global_fit_out << " (ln det M - ln det M(reference) = " << lndet_term << ")";
+        global_fit_out << "\n";
 
         bool use_phys = (size_t)global_fit_result.size() == metric.GetModel().nparams + metric.GetSysts().GetNSplines();
         for(long i = 0; i < global_fit_result.size(); i++){
