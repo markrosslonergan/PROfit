@@ -118,6 +118,9 @@ page TUT_afc_brazil_band
 page TUT_pjprof_PROfile_1sigma
 page TUT_pjsurf_surface
 
+# --- Section 11: fit regions --------------------------------------------------
+page TUT_fr_PROglobal_FitRegion 2
+
 echo "----------------------------------------------------------------------"
 echo "Done: $DONE figures written to $FIGDIR, $MISS missing/failed."
 exit "$MISS"

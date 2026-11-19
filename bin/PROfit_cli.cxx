@@ -92,6 +92,33 @@ PROpt::PROpt(int argc, char **argv) {
             "PROjector pre-fit: float the physics parameters instead of fixing them at CV; the "
             "saved posterior is then the physics-marginalized nuisance covariance.");
 
+        // Fit region: fit only some channels (e.g. sidebands) and test the constrained
+        // prediction in the others (see inc/PROfitRegion.h).
+        // An empty pattern (say, an unset shell variable) must not silently switch the mode off.
+        const std::function<std::string(const std::string &)> nonempty_pattern =
+            [](const std::string &pattern) { return pattern.empty() ? std::string("the pattern is empty") : std::string(); };
+        CLI::Option *fit_region_opt = app.add_option("--fit-region", fit_region_config.fit_pattern,
+            "Fit ONLY the channels whose subchannel fullnames match this pattern (unanchored regex; "
+            "plain substrings work, whole channels only, quote it in the shell). Every chi2 (global, "
+            "profile, surface, fc, ...) is restricted to these channels; the other channels' data is "
+            "kept. global (after the fit) and plot (at the CV) then report the fit-region-constrained "
+            "prediction and its chi2 in the evaluation channels, constraining spline AND covariance "
+            "systematics analytically, and draw <tag>_<output>_PROglobal_FitRegion.pdf / "
+            "_PROplot_FitRegion.pdf. For those two, physics parameters are fixed at CV unless "
+            "--fit-region-float-physics; the other subcommands float them as usual.")
+            ->check(nonempty_pattern)->excludes("--projector-prefit")->excludes("--projector");
+        app.add_option("--eval-region", fit_region_config.eval_pattern,
+            "Channels (same pattern rules) to evaluate the constrained prediction in. Must not "
+            "overlap --fit-region. Default: every channel outside the fit region.")
+            ->check(nonempty_pattern)->needs(fit_region_opt);
+        app.add_flag("--blind-eval", fit_region_config.blind_eval,
+            "With --fit-region: zero the data outside the fit region; only the constrained "
+            "prediction is reported (no evaluation chi2). Not with --shapeonly, which normalises "
+            "the prediction onto that data.")->needs(fit_region_opt);
+        app.add_flag("--fit-region-float-physics", fit_region_config.float_physics,
+            "With --fit-region and global: float the physics parameters in the fit-region fit instead "
+            "of fixing them at CV. The constraint is then evaluated at the fitted physics point.")->needs(fit_region_opt);
+
         auto* shape_flag = app.add_flag("--shapeonly,--shape-only", shapeonly,
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
@@ -131,6 +158,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--fit-variable", fit_variable,
                 "Index of the variable to fit, overriding the XML's fit=\"true\" binning. Variables are numbered from 0 within a channel, <bins2D> first then <bins>. No re-`process` is needed: all variables are already in the cached binaries.");
         shape_flag->excludes(rate_flag);
+        shape_flag->excludes("--blind-eval");
 
         //PROcess, into binary data [Do this once first!]
         process_command = app.add_subcommand("process", "PROcess the MC and systematics in root files into binary data for future rapid loading.");

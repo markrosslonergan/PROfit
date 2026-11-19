@@ -159,6 +159,11 @@ else
     FAIL=$((FAIL+3))
 fi
 
+# --- Section 11: fit regions ----------------------------------------------------
+run_step fr      "${INJECT[@]}" --fit-region "_numu_" global
+run_step frblind "${INJECT[@]}" --fit-region "_numu_" --blind-eval global
+run_step frplot  "${INJECT[@]}" --fit-region "_numu_" plot
+
 note "----------------------------------------------------------------------"
 note "Done: $PASS passed, $FAIL failed. Outputs in $RUNDIR"
 note "Tutorial placeholders map to: ${TAG}_<step>_*.pdf"
