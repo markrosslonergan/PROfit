@@ -111,6 +111,9 @@ namespace PROfit{
       class Formula {
         public:
           virtual Value EvalInstance() = 0;
+          /// EvalInstance().first() and EvalInstance() without the per-call allocation (hot loop).
+          virtual float EvalFirst() { return EvalInstance().first(); }
+          virtual void EvalInto(Value &out) { out = EvalInstance(); }
           virtual void LoadEvent(unsigned evtno) = 0;
           virtual std::string FormulaName() const = 0;
           virtual std::set<std::string> GetNeededBranchNames() const { return {}; }
@@ -154,7 +157,7 @@ namespace PROfit{
       inline
       float GetWeight(int i) const{
         if(i >= 0 && i < (int)branch_weight_formulas.size() && branch_weight_formulas[i]){
-          return branch_weight_formulas[i]->EvalInstance().first();
+          return branch_weight_formulas[i]->EvalFirst();
         }
         return 1.0;
       }
@@ -164,7 +167,7 @@ namespace PROfit{
       float GetTotalWeight() const{
         float product = 1.0;
         for(const auto& f : branch_weight_formulas){
-          if(f) product *= f->EvalInstance().first();
+          if(f) product *= f->EvalFirst();
         }
         return product;
       }
@@ -196,6 +199,13 @@ namespace PROfit{
           return ret;
       }
 
+      /// GetVariables into a reused vector (no allocation once its sizes settle).
+      void GetVariablesInto(std::vector<BranchVariable::Value> &out) const {
+          out.resize(branch_variable_formulas.size());
+          for(size_t i = 0; i < branch_variable_formulas.size(); ++i)
+              branch_variable_formulas[i]->EvalInto(out[i]);
+      }
+
 
     };
 
@@ -209,6 +219,8 @@ namespace PROfit{
       public:
         ROOTFormula(const std::string &name, const std::string &formula, TTree *t);
         BranchVariable::Value EvalInstance() override;
+        float EvalFirst() override;
+        void EvalInto(BranchVariable::Value &out) override;
         void LoadEvent(unsigned eventno) override;
         std::string FormulaName() const override;
         // Returns the names of all TBranches referenced by this formula.
@@ -224,7 +236,20 @@ namespace PROfit{
         std::vector<std::unique_ptr<TTreeFormula>> fs;
         int treeNumber;
     };
- 
+
+    /**
+     * @brief A Gaussian prior on one physics parameter: <model><prior name= center= sigma= [abs=]/>.
+     * @details Adds ((q - center)/sigma)^2 to every metric, where q is the parameter's PHYSICAL
+     * value (10^x for a log10 parameter), |value| when abs. The name is checked against the model
+     * in get_model_from_string, which stores the resolved PROmodel::PhysicsPrior.
+     */
+    struct PhysicsPriorSpec {
+        std::string name;   ///< Physics parameter name.
+        double center = 0;  ///< Mean, in the parameter's physical units.
+        double sigma = 1;   ///< Width (> 0), same units.
+        bool abs = false;   ///< Constrain |value| (e.g. |dm^2_32| whatever the mass ordering).
+    };
+
 
     /**
      * @brief Primary configuration class: parses the analysis XML and stores the full
@@ -487,6 +512,18 @@ namespace PROfit{
              *  studies), not part of the analysis definition. */
             std::vector<std::vector<char>> m_variable_active_bins_collapsed;
 
+            /** @brief Runtime-only covariance options of the Gaussian metrics (neyman, pearson, CNP).
+             *  @details Like the active-bins mask: set BEFORE any PROmetric is constructed (main
+             *  does it from --lndet / --frozen-cov / --cov-reference); every PROcovariance reads
+             *  it at construction, so Clone(), the fc/fc-adaptive/brazil workers and their toys
+             *  all carry it with no extra plumbing. Not hashed, not serialized. */
+            struct CovarianceOptions {
+                bool lndet = false;            ///< Add ln det M − ln det M(reference) to χ² (−2 ln L of a Gaussian with θ-dependent M).
+                bool frozen = false;           ///< Hold the whole M (stat + syst) at its value at the reference prediction.
+                std::vector<float> reference;  ///< Reference parameter vector (physics in internal units, then splines); empty = model defaults with splines at their prior centres.
+            };
+            CovarianceOptions m_covariance_options;
+
             std::vector<Eigen::MatrixXf> variable_collapsing_matrices;
             // Sparse companions to variable_collapsing_matrices (one nonzero per row).
             // Used by CollapseMatrix in the chi^2 inner loop; built once in construct_variable_collapsing_matrices.
@@ -520,6 +557,15 @@ namespace PROfit{
             std::vector<int> m_mcgen_numfriends;	
             std::vector<bool> m_mcgen_fake;
             std::vector<float> m_mcgen_partial_load_frac;
+            // Statistical overlap (PROoverlap.h), per MCFile: the overlap_matching_vars
+            // expressions (empty = not flagged) and the overlap_common cut (empty = all common).
+            std::vector<std::vector<std::string>> m_mcgen_overlap_matching_vars;
+            std::vector<std::string> m_mcgen_overlap_common;
+            /** @brief True if any MCFile carries overlap_matching_vars. */
+            bool HasOverlapMatching() const {
+                for(const auto &v : m_mcgen_overlap_matching_vars) if(!v.empty()) return true;
+                return false;
+            }
             // Friend trees, per MCFile (file × friend_index). Indexed by file id, NOT
             // keyed by filename: several <MCFile> blocks may legitimately share one
             // filename= string (e.g. the same TChain wildcard), and the old
@@ -582,6 +628,7 @@ namespace PROfit{
 
             //Some model infomation
             std::string m_model_tag;
+            bool m_has_model = false; ///< A <model> was parsed; lets --inject-data reweight a data config.
             std::vector<int> m_model_rule_index;
             std::vector<std::string> m_model_rule_names;
             std::vector<int> m_model_parameter_index;
@@ -598,9 +645,11 @@ namespace PROfit{
             /// Template model only: the <parameter>'s default= value (CV, bkg-only seed and --fix
             /// point); nullopt = attribute absent, the model's own default applies.
             std::vector<std::optional<float>> m_model_parameter_default;
-            /// Numeric <model> attributes (density=, electron_fraction=, n_newton=);
-            /// consumed by PROLBL, fatal on non-LBL tags, not hashed.
+            /// Numeric <model> attributes (baseline=, density=, electron_fraction=, n_newton=,
+            /// bin_average=); consumed by PROLBL/PROLBL3p1, fatal on non-LBL tags, not hashed.
             std::map<std::string, double> m_model_options;
+            /// <prior> children of <model>, in XML order (one per parameter at most); not hashed.
+            std::vector<PhysicsPriorSpec> m_model_physics_priors;
 
             bool m_bool_rate_only;
             //----- PUBLIC FUNCTIONS ------
@@ -690,6 +739,17 @@ namespace PROfit{
 
             /** @brief Number of active collapsed bins for this variable (= total bins when no mask is set). Use for dof counting. */
             size_t NActiveBins(size_t var_index) const;
+
+            /**
+             * @brief True when FillSpectra may fill variable @p v in binned mode: the fitting
+             * variable, a plot="true" variable, or a systematic's binning variable.
+             * @details Every other variable (e.g. a fine true-L/E kept only as a model kinematic
+             * input) is carried along for its per-event values and bin indices alone: process
+             * stores no pre-binned migration matrices with it and models build no H_combined for
+             * it, which for a fine kinematic variable is most of both. Plot flags and binnings are
+             * not hashed, so run_process re-checks a loaded _prop.bin against this.
+             */
+            bool IsFilledVariable(size_t v) const;
 
             /* Function: return the unit string for a channel's variable
              * (e.g. "MeV"), preferring the per-variable <bins unit="..."> entry

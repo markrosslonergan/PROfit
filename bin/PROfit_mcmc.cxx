@@ -29,13 +29,13 @@ void run_mcmc(const PROconfig &config, PROmetric &metric, const Eigen::VectorXf 
             chains.emplace_back();
             threads.emplace_back(
                     [&, i](){
-                        nuts_worker(chains[i], samples_eigen[i], metric.Clone(), myseed.getThreadSeeds()->at(i), chains_per_thread + (i >= addone), fitConfig.MCMCburn, fitConfig.MCMCiter, lb, ub);
+                        nuts_worker(chains[i], samples_eigen[i], metric.Clone(), myseed.getThreadSeeds()->at(i), chains_per_thread + (i >= addone), fitConfig.burnin(false), fitConfig.MCMCiter, lb, ub);
                     });
         } else {
             mets.emplace_back();
             threads.emplace_back(
                     [&, i](){
-                        mcmc_worker(mets[i], samples_eigen[i], metric.Clone(), myseed.getThreadSeeds()->at(i), chains_per_thread + (i >= addone), fitConfig.MCMCburn, fitConfig.MCMCiter);
+                        mcmc_worker(mets[i], samples_eigen[i], metric.Clone(), myseed.getThreadSeeds()->at(i), chains_per_thread + (i >= addone), fitConfig.burnin(false), fitConfig.MCMCiter);
                     });
         }
     }

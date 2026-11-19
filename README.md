@@ -5,9 +5,9 @@
 <h3 align="center">A PROfessional, PROductive, PROficient and PROfound<br>neutrino-oscillation and BSM fitting framework.</h3>
 
 <p align="center">
-<a href="https://github.com/markrosslonergan/Elephant_Vanishes/actions/workflows/cmake-single-platform.yml"><img src="https://github.com/markrosslonergan/Elephant_Vanishes/actions/workflows/cmake-single-platform.yml/badge.svg" alt="Build"></a>
-<a href="https://markrosslonergan.github.io/Elephant_Vanishes/"><img src="https://github.com/markrosslonergan/Elephant_Vanishes/actions/workflows/doxygen-pages.yml/badge.svg" alt="Docs"></a>
-<a href="https://github.com/markrosslonergan/Elephant_Vanishes/tags"><img src="https://img.shields.io/github/v/tag/markrosslonergan/Elephant_Vanishes?label=release" alt="Latest release"></a>
+<a href="https://github.com/markrosslonergan/PROfit/actions/workflows/cmake-single-platform.yml"><img src="https://github.com/markrosslonergan/PROfit/actions/workflows/cmake-single-platform.yml/badge.svg" alt="Build"></a>
+<a href="https://markrosslonergan.github.io/PROfit/"><img src="https://github.com/markrosslonergan/PROfit/actions/workflows/doxygen-pages.yml/badge.svg" alt="Docs"></a>
+<a href="https://github.com/markrosslonergan/PROfit/tags"><img src="https://img.shields.io/github/v/tag/markrosslonergan/PROfit?label=release" alt="Latest release"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
@@ -68,12 +68,12 @@ probabilities use the vendored
 | Resource | What it covers |
 |---|---|
 | [**Walk-through tutorial**](docs/tutorials/PROfit_Tutorial_v2.md) | The place to start. A complete v2.X walk-through: concepts, the XML format, every subcommand, Feldman-Cousins, and PROjector — with regenerable plots. |
-| [**API reference (Doxygen)**](https://markrosslonergan.github.io/Elephant_Vanishes/) | Auto-generated class documentation, rebuilt on every push. Build locally with `make docs` (requires Doxygen). |
+| [**API reference (Doxygen)**](https://markrosslonergan.github.io/PROfit/) | Auto-generated class documentation, rebuilt on every push. Build locally with `make docs` (requires Doxygen). |
 | [**Test suite guide**](tests/README.md) | Deterministic regression tests for before/after comparisons of physics-touching changes. |
 
 Questions? Join **#profit** on the SBN Slack, mail
 `profit@listserv.fnal.gov`, or open an
-[issue](https://github.com/markrosslonergan/Elephant_Vanishes/issues).
+[issue](https://github.com/markrosslonergan/PROfit/issues).
 
 ## Installation
 
@@ -83,8 +83,8 @@ stack). Smaller dependencies (Eigen, LBFGSpp, CLI11, TinyXML2, …) are fetched
 and built automatically by CMake.
 
 ```bash
-git clone https://github.com/markrosslonergan/Elephant_Vanishes.git
-cd Elephant_Vanishes/build
+git clone https://github.com/markrosslonergan/PROfit.git
+cd PROfit/build
 cmake ..
 make -j4                     # → build/bin/PROfit
 export PATH=$PATH:$PWD/bin   # optional
@@ -129,7 +129,7 @@ With ROOT, HDF5, and Boost available globally:
 python -m venv env && . env/bin/activate
 pip install --upgrade pip
 pip install wheel setuptools pybind11 numpy==2.0.2
-pip install git+https://github.com/markrosslonergan/Elephant_Vanishes
+pip install git+https://github.com/markrosslonergan/PROfit
 ```
 
 Then `import profit` in a Python shell, use the Python executables

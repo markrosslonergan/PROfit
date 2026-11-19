@@ -1,3 +1,4 @@
+#include "CSRDoubleProduct.h"
 #include "PROcess.h"
 #include "PROlog.h"
 #include "PROspec.h"
@@ -12,6 +13,16 @@
 
 
 namespace PROfit {
+
+    // A binned fill reads the model's response matrix for var_index, which is not built for a
+    // variable the propeller only carries along (PROconfig::IsFilledVariable).
+    static void RequireBinnedVariable(const PROconfig &config, const PROmodel &model, size_t var_index) {
+        if(var_index < model.H_combined.size()
+           && (size_t)model.H_combined[var_index].rows() == config.m_num_variable_bins_total[var_index]) return;
+        log<LOG_ERROR>(L"%1% || Binned fill of variable %2%, which is carried along only (not the fitting variable, plot=\"false\", and no systematic is binned in it), so no response matrix was built. Mark it plot=\"true\" to fill it.")
+            % __func__ % var_index;
+        throw std::runtime_error("Binned FillSpectra of a carried-only variable " + std::to_string(var_index));
+    }
 
     // Splines binned in another variable than the one being filled are migrated to it through the
     // (spline bin, filled bin) event histogram. All splines of one binning depend only on the event's
@@ -94,6 +105,7 @@ namespace PROfit {
                                   cache.last_syst_ptr != &insyst ||
                                   cache.last_model_ptr != &inmodel);
         if(ctx_changed) {
+            RequireBinnedVariable(inconfig, inmodel, var_index);
             cache.phys_grid_valid = false;
             cache.unweighted_sums.clear();
         }
@@ -253,7 +265,7 @@ namespace PROfit {
 
                 auto probs = inmodel.get_probs(phys, cache.phys_grid);
                 Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-                result = inmodel.H_combined[var_index] * probs_flat;
+                result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             }
             cache.last_result = std::move(result);
             cache.last_phys = phys;
@@ -273,6 +285,7 @@ namespace PROfit {
 
 
     Eigen::MatrixXf FillSpectraGradient(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &inmodel, const Eigen::VectorXf &params, FillSpectraCache &cache, size_t var_index) {
+        RequireBinnedVariable(inconfig, inmodel, var_index);
         const size_t nbins_var = inconfig.m_num_variable_bins_total[var_index];
         const size_t nsplines  = insyst.GetNSplines();
         const size_t nphys     = inmodel.nparams;
@@ -340,7 +353,7 @@ namespace PROfit {
             }
             auto probs = inmodel.get_probs(phys, cache.phys_grid);
             Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-            result = inmodel.H_combined[var_index] * probs_flat;
+            result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             pgrads = inmodel.get_probs_grad(phys, cache.phys_grid);
         }
 
@@ -349,7 +362,7 @@ namespace PROfit {
         if(!inmodel.is_trivial) {
             for(size_t p = 0; p < nphys; ++p) {
                 Eigen::Map<const Eigen::VectorXf> dprobs_flat(pgrads[p].data(), pgrads[p].size());
-                G.col(p) = systw.cwiseProduct(inmodel.H_combined[var_index] * dprobs_flat);
+                G.col(p) = systw.cwiseProduct(CSRDoubleProduct::multiply(inmodel.H_combined[var_index], dprobs_flat));
             }
         }
         constexpr float kTiny = 1e-30f;
@@ -380,6 +393,7 @@ namespace PROfit {
         Eigen::VectorXf shifts = params.segment(inmodel.nparams, params.size() - inmodel.nparams);
 
         if(binned) {
+            RequireBinnedVariable(inconfig, inmodel, var_index);
             //log<LOG_INFO>(L"%1% || Starting systw calculation %2%") % __func__ % var_index;
             //auto start_systw = std::chrono::high_resolution_clock::now();
 
@@ -515,7 +529,7 @@ namespace PROfit {
                 // Single GEMV: H_combined[var_index] has shape (n_reco, n_phys*J).
                 // probs is (n_phys, J) in column-major, so probs.data() = [col0 | col1 | ...] = probs_flat.
                 Eigen::Map<const Eigen::VectorXf> probs_flat(probs.data(), probs.size());
-                result = inmodel.H_combined[var_index] * probs_flat;
+                result = CSRDoubleProduct::multiply(inmodel.H_combined[var_index], probs_flat);
             }
 
             // Apply post-migration systematic weights (cross-section, detector) at reco level.

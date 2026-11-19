@@ -60,6 +60,12 @@ void run_bench(const PROconfig &config, const PROpeller &prop, PROmetric &metric
     bopts.grad_presets = options.bench_grad_presets;
     bopts.throw_systs = options.bench_throw_systs;
     bopts.throw_phys  = options.bench_throw_phys;
+    bopts.chi2        = options.chi2;
+    bopts.shape_only  = options.shapeonly;
+    bopts.precondition = fitConfig.precondition;
+    bopts.ordering_octant_seeds = fitConfig.ordering_octant_seeds;
+    bopts.ordering_octant_polish = fitConfig.ordering_octant_polish;
+    bopts.profile_nuisances = fitConfig.profile_nuisances;
 
     PROfit::PRObench::run_scale_test(config, prop, metric, data, fitConfig, bopts);
 }

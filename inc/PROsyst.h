@@ -171,7 +171,11 @@ namespace PROfit {
             PROsyst allsplines2cov(const PROconfig &config, const PROpeller &prop,const PROmodel &model, const Eigen::VectorXf &params,  uint32_t seed) const;
 
             /**
-             * @brief Convert a single spline systematic to a covariance matrix via random throws.
+             * @brief Fractional covariance of a single spline systematic thrown N(centre, prior).
+             * @details Computed exactly (closed-form Gaussian expectation over the piecewise-cubic
+             * spline) whenever the binned prediction factorises in this spline: every model except
+             * get_counts ones, and splines outside quadratic groups. Otherwise estimated from
+             * spline2cov_throws random throws seeded seed, seed+1, ...
              * @param spline  0-based index of the spline to convert.
              * @param config  Analysis configuration.
              * @param prop    MC event store.
@@ -182,9 +186,10 @@ namespace PROfit {
              */
             Eigen::MatrixXf spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const ;
 
-            /// Number of random throws spline2cov draws per spline (--syst-throws; default 500).
+            /// Random throws per spline where spline2cov has no closed form (--syst-throws; default 500).
             inline static size_t spline2cov_throws = 500;
-            /// Worker threads spline2cov spreads its throws over (-n; result is thread-count independent).
+            /// Worker threads (-n) for the ctor's per-systematic work, spline2cov's throws and the
+            /// error-band throws; results do not depend on the count.
             inline static size_t spline2cov_nthreads = 1;
 
             /// smooth= kernel width (bins) for syst from the XML; 0 = off (always for norm/explicit_spline).
@@ -466,6 +471,22 @@ namespace PROfit {
             Eigen::MatrixXf external_prior_cov;      ///< Absolute prior covariance over the spline nuisance parameters (used with spline_centers).
             std::map<std::string, Cov2SplineDebugInfo> cov2spline_debug_info; ///< Debug info per "covariance_to_spline" systematic, keyed by parent systname.
         private:
+            /// The numerical half of FillSplinesFromCovarianceMatrix, split off so the ctor can run it
+            /// for several systematics at once; RegisterCovarianceSplines does the bookkeeping.
+            struct CovSplineDecomp {
+                Eigen::MatrixXf frac_cov;            ///< After the shape-only projection and symmetrisation.
+                float pre_symm_asymmetry = 0.0f;
+                Eigen::VectorXf eigvals;             ///< Ascending.
+                Eigen::MatrixXf eigvecs;
+                std::vector<int> kept, residual;     ///< Positive modes, descending eigenvalue.
+                Eigen::MatrixXf residual_cov, residual_corr;  ///< Only when the residual is registered here.
+            };
+            CovSplineDecomp DecomposeCovarianceForSplines(Eigen::MatrixXf frac_cov, const SystStruct& syst) const;
+            void RegisterCovarianceSplines(CovSplineDecomp &&d, const SystStruct& syst, SplinePriorType prior, float knob_lo, float knob_hi);
+            /// CreateMatrix / LoadExternalCovarianceMatrix without the (possibly precomputed) matrix work.
+            void RegisterMatrix(const SystStruct& syst, std::pair<Eigen::MatrixXf, Eigen::MatrixXf> &&matrices);
+            void RegisterExternalCovariance(const SystStruct& syst, Eigen::MatrixXf frac);
+
             /* Carry quadratic_groups into a subset/excluding copy; new_index[old spline] = new index or -1.
              * A group with a removed member is dropped (its survivors revert to the plain product). */
             void CopyQuadraticGroups(PROsyst& ret, const std::vector<int>& new_index) const;

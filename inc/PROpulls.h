@@ -15,7 +15,8 @@
  * fit over every free parameter at once: physics, spline nuisances, and the eigenmodes alpha
  * of the summed covariance (Sigma = L L^T, prior N(0,1), the same modes as
  * plotCovariancePosteriorPulls), with the spline Jacobian from finite differences of the
- * collapsed prediction and C the metric's own statistical variance. Each sigma_post is
+ * collapsed prediction and C the metric's own statistical variance (its full matrix for
+ * overlapping analyses, PROmetric::GetStatCovariance). Each sigma_post is
  * therefore marginal over everything else that floats, which is what the variance identity
  * needs. Shape-only fits linearise the per-channel rescaled prediction and project L,
  * exactly as the metric does.
@@ -106,6 +107,55 @@ namespace PROfit {
         double min_var_reduction = 0.05;
         bool shape_only = false;
     };
+
+    /**
+     * @brief Linearised (Gauss-Newton) posterior at a best fit.
+     * @details One system over every free parameter, [physics | splines | covariance modes]:
+     * J is the finite-difference Jacobian of the collapsed prediction (per-channel rescaled onto
+     * the data under shape-only) on the bins that enter the fit (active, C > 0), with C the
+     * metric's own statistical variance. H = J^T C^-1 J plus the prior precision: the spline
+     * priors as Pull() applies them, N(0,1) on the modes, and the box variance W^2/12 for physics
+     * and uniform-prior splines. A parameter is free when its bounds have non-zero width. Shared by
+     * computePostfitPulls and the proposal seeds of the post-fit MCMC chains.
+     */
+    struct LinearizedPosterior {
+        enum class Status { Ok, BadInput, NoBins, NothingFree };
+        Status status = Status::BadInput;
+        size_t nphys = 0, nparams = 0;
+        std::vector<int> bins;                   ///< Collapsed bins entering the fit.
+        Eigen::VectorXf pred;                    ///< Collapsed prediction at the best fit, all bins.
+        Eigen::MatrixXf L;                       ///< Collapsed covariance root (all bins x all modes).
+        std::vector<int> modes;                  ///< Columns of L with non-zero norm.
+        double total_var = 0;                    ///< Sum of the squared column norms of L.
+        std::vector<size_t> free_phys, free_spl; ///< Free physics / spline indices.
+        Eigen::MatrixXd J;                       ///< bins x [free physics | free splines | modes].
+        Eigen::VectorXd cinv, u;                 ///< 1/C and data - prediction on the bins.
+        Eigen::MatrixXd Cinv;                    ///< Full C^-1 on the bins for overlapping analyses; empty = diag(cinv).
+        Eigen::MatrixXd H;                       ///< Posterior precision over the columns of J.
+    };
+
+    /** @brief Build the LinearizedPosterior at @p best_fit (Status::BadInput on a size mismatch). */
+    LinearizedPosterior buildLinearizedPosterior(const PROconfig &config, const PROpeller &prop, const PROmetric &metric,
+            const Eigen::VectorXf &best_fit, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub,
+            const Eigen::VectorXf &data_spec);
+
+    /**
+     * @brief Proposal covariance for a Metropolis chain started at the best fit.
+     * @details The linearised posterior covariance of the parameters the chain moves: the inverse
+     * of H restricted to them and the covariance modes, whose parameter block marginalises the
+     * modes as the chi^2 does. nparams x nparams; zero rows and columns for parameters in
+     * @p chain_fixed or held by zero-width bounds. Empty when @p lin is not usable.
+     */
+    Eigen::MatrixXf LaplaceProposalCovariance(const LinearizedPosterior &lin, const std::vector<int> &chain_fixed);
+
+    /**
+     * @brief Prior covariance of the free spline nuisances, the proposal seed of a prior-only chain.
+     * @details Inverse of PROmetric::SplinePriorPrecision over the free splines, uniform-prior
+     * splines at their box variance W^2/12. nparams x nparams, zero for physics and for parameters
+     * in @p chain_fixed. Empty when no spline is free.
+     */
+    Eigen::MatrixXf PriorProposalCovariance(const PROmetric &metric, const Eigen::VectorXf &lb, const Eigen::VectorXf &ub,
+            const std::vector<int> &chain_fixed);
 
     /**
      * @brief Compute the normalised pulls of every nuisance at a best fit.

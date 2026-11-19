@@ -10,6 +10,7 @@
 #include <sstream>
 #include <fstream>
 #include <filesystem>
+#include <atomic>
 #include "TFile.h"
 #include "TH1.h"
 #include "TTree.h"
@@ -844,7 +845,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
         {
 
 
-            std::vector<std::string> expected_attrs = {"treename","filename","maxevents","scale","pot","fake","partial_load_frac"};
+            std::vector<std::string> expected_attrs = {"treename","filename","maxevents","scale","pot","fake","partial_load_frac","overlap_matching_vars","overlap_common"};
             for (const tinyxml2::XMLAttribute* attr = pMC->FirstAttribute(); attr; attr = attr->Next()) {
                 std::string name = attr->Name();
                 if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
@@ -909,6 +910,30 @@ int PROconfig::LoadFromXML(const std::string &filename){
             }else{
                 m_mcgen_partial_load_frac.push_back(strtod(partial_load_frac,&end));
             }
+
+            // Statistical overlap with another analysis (opt-in, see PROoverlap.h): the
+            // expressions identifying one interaction, and which entries both analyses processed.
+            std::vector<std::string> overlap_vars;
+            if(const char* ov = pMC->Attribute("overlap_matching_vars")) {
+                std::istringstream ov_ss(ov);
+                std::string tok;
+                while(std::getline(ov_ss, tok, ',')) {
+                    tok.erase(0, tok.find_first_not_of(" \t"));
+                    if(!tok.empty()) tok.erase(tok.find_last_not_of(" \t") + 1);
+                    if(!tok.empty()) overlap_vars.push_back(tok);
+                }
+                if(overlap_vars.empty()) {
+                    log<LOG_ERROR>(L"%1% || ERROR: overlap_matching_vars on <MCFile filename='%2%'> lists no expressions.") % __func__ % m_mcgen_file_name.back().c_str();
+                    throw std::invalid_argument("empty overlap_matching_vars");
+                }
+            }
+            const char* ov_common = pMC->Attribute("overlap_common");
+            if(ov_common && overlap_vars.empty()) {
+                log<LOG_ERROR>(L"%1% || ERROR: overlap_common on <MCFile filename='%2%'> needs overlap_matching_vars on the same MCFile.") % __func__ % m_mcgen_file_name.back().c_str();
+                throw std::invalid_argument("overlap_common without overlap_matching_vars");
+            }
+            m_mcgen_overlap_matching_vars.push_back(overlap_vars);
+            m_mcgen_overlap_common.push_back(ov_common ? ov_common : "");
 
             log<LOG_DEBUG>(L"%1% || MultisimFile %2%, treename: %3%  ") % __func__ % m_mcgen_file_name.back().c_str() % m_mcgen_tree_name.back().c_str();
 
@@ -2184,6 +2209,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     pModel   = doc.FirstChildElement("model");
 
     if(pModel){
+        m_has_model = true;
         // Read in how many bins this channel uses
 
         const std::vector<std::string> expected_attrs = {"tag","name","index"};
@@ -2194,6 +2220,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
             {"density",           0.0,                      std::numeric_limits<double>::max(), false, "a number >= 0 (g/cm^3)"},
             {"electron_fraction", std::nextafter(0.0, 1.0), 1.0,                                false, "a number in (0, 1]"},
             {"n_newton",          0.0,                      10.0,                               true,  "an integer in [0, 10]"},
+            {"bin_average",       0.0,                      1.0,                                true,  "0 or 1"},
         };
         for (const tinyxml2::XMLAttribute* attr = pModel->FirstAttribute(); attr; attr = attr->Next()) {
             std::string name = attr->Name();
@@ -2215,7 +2242,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
             }
             if (std::find(expected_attrs.begin(), expected_attrs.end(), name) == expected_attrs.end()) {
                 log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in the <model> element is not expected.") % __func__ % name.c_str()  ;
-                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2% plus the model options baseline, density, electron_fraction, n_newton") % __func__ % expected_attrs ;
+                log<LOG_ERROR>(L"%1% || -- Check spelling: allowed attributes are %2% plus the model options baseline, density, electron_fraction, n_newton, bin_average") % __func__ % expected_attrs ;
                 throw std::invalid_argument(std::string("<model> attribute not allowed : ") + name);
             }
         }
@@ -2315,6 +2342,57 @@ int PROconfig::LoadFromXML(const std::string &filename){
             log<LOG_DEBUG>(L"%1% || Model Param Name :  %2% and index %3% (min %4%, max %5%) ") % __func__ % m_model_parameter_names.back().c_str() % m_model_parameter_index.back() % m_model_parameter_min.back() % m_model_parameter_max.back()  ;
             m_model_parameter_map[m_model_parameter_names.back()]=m_model_parameter_index.back();
             pModelParam = pModelParam->NextSiblingElement("parameter");
+        }
+
+        // Gaussian priors on physics parameters, e.g.
+        //   <prior name="dmsq_31" center="0.0025" sigma="0.0005" abs="true"/>
+        // center/sigma are in physical units (not log10). Names are resolved against the model
+        // in get_model_from_string, once its parameter list exists.
+        for(tinyxml2::XMLElement *pPrior = pModel->FirstChildElement("prior"); pPrior; pPrior = pPrior->NextSiblingElement("prior")){
+            const std::vector<std::string> prior_attrs = {"name", "center", "sigma", "abs"};
+            for (const tinyxml2::XMLAttribute* attr = pPrior->FirstAttribute(); attr; attr = attr->Next()) {
+                if (std::find(prior_attrs.begin(), prior_attrs.end(), std::string(attr->Name())) == prior_attrs.end()) {
+                    log<LOG_ERROR>(L"%1% || ERROR! Attribute [%2%] in a <model><prior> element is not expected; allowed: %3%") % __func__ % attr->Name() % prior_attrs;
+                    throw std::invalid_argument(std::string("<prior> attribute not allowed : ") + attr->Name());
+                }
+            }
+            PhysicsPriorSpec prior;
+            const char *pname = pPrior->Attribute("name");
+            if(pname == NULL || pname[0] == '\0'){
+                log<LOG_ERROR>(L"%1% || ERROR! A <model><prior> needs name=\"<physics parameter>\".") % __func__;
+                throw std::invalid_argument("<prior> without a name");
+            }
+            prior.name = pname;
+            auto number = [&](const char *key, double &out) {
+                const char *s = pPrior->Attribute(key);
+                char *e = NULL;
+                out = s ? strtod(s, &e) : 0.0;
+                if(s == NULL || e == s || *e != '\0' || !std::isfinite(out)){
+                    log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> needs a numeric %3%= (got \"%4%\").") % __func__ % pname % key % (s ? s : "");
+                    throw std::invalid_argument(std::string("<prior> ") + pname + " has an invalid " + key);
+                }
+            };
+            number("center", prior.center);
+            number("sigma", prior.sigma);
+            if(prior.sigma <= 0){
+                log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> has sigma=%3%; it must be > 0.") % __func__ % pname % prior.sigma;
+                throw std::invalid_argument(std::string("<prior> ") + pname + " has sigma <= 0");
+            }
+            if(const char *sabs = pPrior->Attribute("abs")){
+                const std::string v = sabs;
+                if(v != "true" && v != "false" && v != "1" && v != "0"){
+                    log<LOG_ERROR>(L"%1% || ERROR! <prior name=\"%2%\"> has abs=\"%3%\"; use true or false.") % __func__ % pname % sabs;
+                    throw std::invalid_argument(std::string("<prior> ") + pname + " has an invalid abs");
+                }
+                prior.abs = (v == "true" || v == "1");
+            }
+            for(const auto &p : m_model_physics_priors){
+                if(p.name == prior.name){
+                    log<LOG_ERROR>(L"%1% || ERROR! Two <model><prior>s on parameter '%2%'.") % __func__ % pname;
+                    throw std::invalid_argument(std::string("duplicate <prior> on ") + pname);
+                }
+            }
+            m_model_physics_priors.push_back(prior);
         }
 
     }//end model
@@ -2458,6 +2536,18 @@ int PROconfig::LoadFromXML(const std::string &filename){
             dataXml << "</channel>\n";
         }
         dataXml << "\n";
+
+        // Opt-in data model (for --inject-data): a <model> inside <data>, or inherit_model="true".
+        tinyxml2::XMLElement* pDataModel = pData->FirstChildElement("model");
+        if(!pDataModel && pData->BoolAttribute("inherit_model", false)) {
+            pDataModel = doc.FirstChildElement("model");
+            if(!pDataModel) throw std::invalid_argument("<data inherit_model=\"true\"> requires a top-level <model>");
+        }
+        if(pDataModel) {
+            tinyxml2::XMLPrinter printer;
+            pDataModel->Accept(&printer);
+            dataXml << printer.CStr() << "\n";
+        }
 
         // Serialize MCFile elements from inside the <data> section
         tinyxml2::XMLElement* pDataMC = pData->FirstChildElement("MCFile");
@@ -2661,6 +2751,14 @@ size_t PROconfig::NActiveBins(size_t var_index) const {
     size_t n = 0;
     for(char m : m_variable_active_bins_collapsed[var_index]) n += (m != 0);
     return n;
+}
+
+bool PROconfig::IsFilledVariable(size_t v) const {
+    if(v == i_prime) return true;
+    if(v < m_channel_variable_plot_bool.size() && m_channel_variable_plot_bool[v]) return true;
+    for(const auto &[name, binning] : m_mcgen_variation_binning_map)
+        if(binning >= 0 && (size_t)binning == v) return true;
+    return false;
 }
 
 namespace {
@@ -3256,6 +3354,12 @@ uint32_t PROconfig::CalcHash() const{
 
     unique_string << vecToString(m_mcgen_variation_allowlist);
 
+    // Overlap matching keys are recorded at process time (<tag>_overlap_mc.bin / the data
+    // overlap file). Unflagged files append nothing, so existing hashes are unchanged.
+    for (size_t fid = 0; fid < m_mcgen_overlap_matching_vars.size(); ++fid)
+        if (!m_mcgen_overlap_matching_vars[fid].empty())
+            unique_string << "ovl" << fid << ":" << vecToString(m_mcgen_overlap_matching_vars[fid]) << "|" << m_mcgen_overlap_common[fid];
+
     // apply_to_subchannel wildcards change which bins a systematic populates in the
     // cached SystStructs; empty map appends nothing so pre-existing hashes are unchanged.
     for (const auto& [sysname, pattern] : m_mcgen_variation_apply_to_subchannel)
@@ -3465,6 +3569,7 @@ ROOTFormula::ROOTFormula(const std::string &name, const std::string &formula, TT
             }
             exit(EXIT_FAILURE);
         }
+        f->SetQuickLoad(true); // remove redundant GetEntry() calls
         fs.push_back(std::move(f));
     }
     log<LOG_DEBUG>(L"%1% || Successfully compiled %2% formula(s) for '%3%'") % __func__ % fs.size() % name.c_str();
@@ -3477,6 +3582,16 @@ BranchVariable::Value ROOTFormula::EvalInstance() {
         ret.v.push_back(f->EvalInstance());
     }
     return ret;
+}
+
+float ROOTFormula::EvalFirst() {
+    if (fs.empty()) return EvalInstance().first();
+    return fs[0]->EvalInstance();
+}
+
+void ROOTFormula::EvalInto(BranchVariable::Value &out) {
+    out.v.resize(fs.size());
+    for (size_t i = 0; i < fs.size(); ++i) out.v[i] = fs[i]->EvalInstance();
 }
 
 void ROOTFormula::LoadEvent(unsigned eventno) {
@@ -3653,12 +3768,12 @@ int PROconfig::Binning::Bin(const std::vector<float> &v) const {
         size_t local_bin = pos_iter - thisbin.begin() - 1;
 
         if(pos_iter == thisbin.end() || pos_iter == thisbin.begin()){
-            static int underflow_overflow_count = 0;
-            underflow_overflow_count++;
-            if(underflow_overflow_count <= 10) {
+            static std::atomic<int> underflow_overflow_count{0};   // events may be binned from several threads
+            const int n_seen = ++underflow_overflow_count;
+            if(n_seen <= 10) {
                 log<LOG_DEBUG>(L"%1% || Value: %2% in Dim: %3% is in underflow or overflow bins, return bin of -1") % __func__ % v[i_vec] % i_vec;
                 log<LOG_DEBUG>(L"%1% || Binning has bin lower edge: %2% and bin upper edge: %3%") % __func__ % thisbin.front() % thisbin.back();
-                if(underflow_overflow_count == 10)
+                if(n_seen == 10)
                     log<LOG_DEBUG>(L"%1% || (suppressing further underflow/overflow messages)") % __func__;
             }
             return -1;
