@@ -59,8 +59,7 @@ namespace PROfit{
              *                              rescaled onto the data per channel before the call).
              * @param param                 Full parameter vector when available, so a metric
              *                              can derive its variance from something other than
-             *                              the shifted prediction (PROCNP uses the
-             *                              physics-only CV). nullptr when not available.
+             *                              the shifted prediction. nullptr when not available.
              * @return Vector of variances in the collapsed bin space. Bins whose variance is
              *         not strictly positive are dropped from the fit, so an implementation
              *         that wants to keep every bin must floor its variance.
@@ -82,17 +81,17 @@ namespace PROfit{
              * @details Only consulted when statisticalVariancesDependOnPrediction() is true. A
              * non-empty result enables the analytic gradient, which then adds the
              * −uᵀ diag(dvar/dθ) u term; an empty one (the default) falls back to
-             * analyticFallbackMode(). PROchi_pearson implements it. PROCNP cannot: its mu is the
-             * physics-only CV, not c.
+             * analyticFallbackMode(). PROchi_pearson and PROCNP implement it.
              */
             virtual Eigen::VectorXf statisticalVarianceSlope(
                 [[maybe_unused]] const Eigen::VectorXf &collapsed_prediction) const { return Eigen::VectorXf(); }
 
             /**
              * @brief Per-bin statistical variance used by getSingleChannelChi().
-             * @details Defaults to statisticalVariances() with no parameter vector. PROchi and
-             * PROCNP override it because their per-channel diagnostic path has historically
-             * used a different convention from their fit path (see those overrides).
+             * @details Defaults to statisticalVariances() with no parameter vector. PROchi
+             * overrides it because its per-channel diagnostic path has historically used a
+             * different convention from its fit path (see that override); PROCNP's override
+             * follows its fit path.
              * @param collapsed_cv  Predicted spectrum, already collapsed.
              * @param comparison    Observed data (the collapsed_cv is already per-channel rescaled in shape_only mode).
              */
@@ -101,12 +100,11 @@ namespace PROfit{
 
             /**
              * @brief Gradient mode used when GradientAnalytic is requested but unavailable.
-             * @details Defaults to PROmetric::GradientFallback (Gauss-Newton linearised FD),
-             * matching upstream's choice for PROCNP. PROchi_pearson (which only needs a
-             * fallback for EventByEvent) overrides this with a full-FD mode: its statistical
-             * variance is the prediction itself, so the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the
-             * linearised mode drops is first-order in the fitted parameters, and dropping it
-             * stalls the minimiser.
+             * @details Defaults to PROmetric::GradientFallback (Gauss-Newton linearised FD).
+             * PROchi_pearson and PROCNP (which only need a fallback for EventByEvent) override
+             * this with a full-FD mode: their statistical variance moves with the prediction,
+             * so the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term the linearised mode drops is first-order in the
+             * fitted parameters, and dropping it stalls the minimiser.
              */
             virtual GradientMode analyticFallbackMode() const { return GradientFallback; }
 

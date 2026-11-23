@@ -110,16 +110,14 @@ namespace PROfit {
              * PROcovariance for the binned strategies whenever the metric's
              * statistical variance either does not move with the prediction
              * (PROchi) or is a per-bin function of it with a closed-form slope
-             * (PROchi_pearson, via PROcovariance::statisticalVarianceSlope), and in
-             * PROpoisson (Gᵀ(T w), w = 2(1 − n/s); no covariance term). Where it is
-             * not available (PROCNP, whose mu is the physics-only CV; the
-             * EventByEvent strategy) the metric falls back to the mode chosen by
-             * PROcovariance::analyticFallbackMode() and logs a one-time warning:
-             * GradientFallback = GradientCentralLin (the previous default) for
-             * PROCNP/EventByEvent, but GradientOneSidedFull
-             * for PROchi_pearson under EventByEvent, whose prediction-valued
-             * variance makes the dM/dθ term the Gauss-Newton modes drop first-order
-             * (the lin fallback stalls well above the true minimum). --grad-mode
+             * (PROchi_pearson and PROCNP, via PROcovariance::statisticalVarianceSlope),
+             * and in PROpoisson (Gᵀ(T w), w = 2(1 − n/s); no covariance term). Where it
+             * is not available (the EventByEvent strategy) the metric falls back to the
+             * mode chosen by PROcovariance::analyticFallbackMode() and logs a one-time
+             * warning: GradientFallback = GradientCentralLin (the previous default) for
+             * PROchi, but GradientOneSidedFull for PROchi_pearson and PROCNP, whose
+             * prediction-valued variance makes the dM/dθ term the Gauss-Newton modes
+             * drop first-order (the lin fallback stalls well above the true minimum). --grad-mode
              * overrides the default for every fit (global, scan, FC) uniformly.
              *
              * Boundary handling: any FD step that lands on a parameter bound is
@@ -133,11 +131,11 @@ namespace PROfit {
                 GradientOneSidedFull,   ///< One-sided forward FD on full chi². ~2× faster, O(h) vs O(h²).
                 GradientCentralLin,     ///< Central FD on δ only, M frozen at base (Gauss-Newton). 5–10× faster than central-full; exact at the minimum. The fallback where the analytic gradient is not implemented.
                 GradientOneSidedLin,    ///< One-sided FD on δ only, M frozen at base. 10–20× faster.
-                GradientAnalytic,       ///< Default. Exact analytic gradient: dδ/dθ via FillSpectraGradient AND the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term in closed form. No FD truncation, no extra spectrum fills. Binned PROchi, PROchi_pearson and PROpoisson only.
+                GradientAnalytic,       ///< Default. Exact analytic gradient: dδ/dθ via FillSpectraGradient AND the (M⁻¹δ)ᵀ(dM/dθ)(M⁻¹δ) term in closed form. No FD truncation, no extra spectrum fills. Binned PROchi, PROchi_pearson, PROCNP and PROpoisson only.
             };
             /// Default mode used when GradientAnalytic is requested but not implemented
-            /// for the metric / strategy (PROCNP, EventByEvent); PROchi_pearson
-            /// overrides its (EventByEvent) fallback to GradientOneSidedFull via analyticFallbackMode().
+            /// for the metric / strategy (EventByEvent); PROchi_pearson and PROCNP
+            /// override their (EventByEvent) fallback to GradientOneSidedFull via analyticFallbackMode().
             static constexpr GradientMode GradientFallback = GradientCentralLin;
 
             std::vector<bool> is_fixed; ///< Per-parameter flags: true if the parameter is held fixed during fitting.

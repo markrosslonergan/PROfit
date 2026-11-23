@@ -32,6 +32,7 @@ PRO3p1_decay_vis_model1::PRO3p1_decay_vis_model1(const PROpeller &prop, const st
 
     model_constraint = [this](const Eigen::VectorXf &v){return this->UnitarityConstraint(v);};
 
+    truth_overflow_cells = false; // get_counts needs the uniform truth (L, E) grid
     build_hists_and_combined(prop); // fills hists, H_combined, phys_grid_sizes
     N_truth = compute_N_truth(prop); // save N_truth, so it can be modified by flux-weighting in PROcess.cxx
 
@@ -271,6 +272,7 @@ PRO3p1_decay_vis_model2::PRO3p1_decay_vis_model2(const PROpeller &prop, const st
 
     model_constraint = [this](const Eigen::VectorXf &v){return this->UnitarityConstraint(v);};
 
+    truth_overflow_cells = false; // get_counts needs the uniform truth (L, E) grid
     build_hists_and_combined(prop); // fills hists, H_combined, phys_grid_sizes
     N_truth = compute_N_truth(prop); // save N_truth, so it can be modified by flux-weighting in PROcess.cxx
 

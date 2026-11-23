@@ -77,7 +77,7 @@ PROcovariance::PROcovariance(const std::string tag, const PROconfig &conin, cons
     }
 
     cov_lndet = conin.m_covariance_options.lndet;
-    cov_frozen = conin.m_covariance_options.frozen;
+    cov_frozen = conin.m_covariance_options.fixed();
     cov_reference_in = conin.m_covariance_options.reference;
 }
 
@@ -333,12 +333,12 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
         // (spec = systw .* H*probs) for FillSpectraGradient — the event-by-event
         // fill mixes physics and systematics per event — and (b) a closed form for
         // any statistical variance that moves with the parameters. A variance that is
-        // a per-bin function of the collapsed prediction (PROchi_pearson) supplies its
-        // slope dvar/dc and gets the extra diag(dvar/dθ) term below; one that does not
-        // (PROCNP: mu is the physics-only CV) falls back to the mode chosen by
-        // analyticFallbackMode() — Gauss-Newton central-lin by default (exact at the
-        // minimum); PROchi_pearson's EventByEvent fallback is one-sided-full because
-        // its dM/dθ term is first-order and the lin mode stalls.
+        // a per-bin function of the collapsed prediction (PROchi_pearson, PROCNP)
+        // supplies its slope dvar/dc and gets the extra diag(dvar/dθ) term below; one
+        // that does not falls back to the mode chosen by analyticFallbackMode() —
+        // Gauss-Newton central-lin by default. PROchi_pearson's and PROCNP's
+        // EventByEvent fallback is one-sided-full because their dM/dθ term is
+        // first-order and the lin mode stalls.
         // A frozen M does not move at all, so every metric then has the analytic gradient.
         const bool stat_moves = !frozen && statisticalVariancesDependOnPrediction();
         Eigen::VectorXf dvar_dc; // empty unless the analytic path needs the stat-variance term
@@ -406,7 +406,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             //   F     fractional systematic covariance (N × N, symmetric)
             //   M(θ)  = diag(var(idx)) + [Tᵀ diag(s) F diag(s) T](idx,idx) (stat + syst)
             //         with var θ-independent (neyman) or a per-bin function of the
-            //         collapsed prediction c (pearson; Step 3′ below).
+            //         collapsed prediction c (pearson, CNP; Step 3′ below).
             //   P(θ)  nuisance pull penalty
             //   χ²(θ) = δᵀ M⁻¹ δ + P
             //
@@ -457,7 +457,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
             // i.e. grad = 2 (TᵀG)(idx,:)ᵀ u − 2 Gᵀ (w∘g) + [0; dP/dθ_nuis]. No finite
             // differences, no extra spectrum fills, no extra Cholesky factorisation.
             //
-            // Step 3′ — prediction-dependent stat variance (pearson). If var_k = f(c_k)
+            // Step 3′ — prediction-dependent stat variance (pearson, CNP). If var_k = f(c_k)
             // with c = Tᵀs the collapsed prediction (shape-rescaled in shape_only mode,
             // where G is already the rescaled Jacobian; the stat term is never projected), then
             //   uᵀ diag(dvar/dθ_j)(idx) u = Σ_k u_k² f′(c_k) (TᵀG)(idx_k, j),
@@ -512,7 +512,7 @@ float PROcovariance::operator()(const Eigen::VectorXf &param, Eigen::VectorXf &g
                     // ln det M: d/dθ_j = tr(M⁻¹ dM/dθ_j). With P_c = M⁻¹ placed on the usable bins of
                     // the collapsed space (zero elsewhere) and M_sys = R Q Rᵀ, Q = Tᵀ D_s F D_s T
                     // (R = I unless shape-only):
-                    //   stat  Σ_k (M⁻¹)_kk f′(c_k) (TᵀG)(idx_k, j)                        (pearson)
+                    //   stat  Σ_k (M⁻¹)_kk f′(c_k) (TᵀG)(idx_k, j)                   (pearson, CNP)
                     //   dQ    tr(P̃ dQ) = 2 Σ_b ṡ_b h_b,  h_b = (F D_s T P̃)_{b,c(b)},  P̃ = Rᵀ P_c R
                     //   dR    2 tr(P_c dR Q Rᵀ) = −2 Σ_j (TᵀG)(j, ·) z_j,
                     //         z_j = Σ_{k∈c(j)} (P_c R Q)_{jk} / ΣP̃_{c(j)}                (shape-only)

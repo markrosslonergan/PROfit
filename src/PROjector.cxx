@@ -329,7 +329,7 @@ namespace PROfit {
                 return false;
             }
             if(c.lndet != pjconf.lndet || c.frozen_cov != pjconf.frozen_cov) {
-                log<LOG_ERROR>(L"%1% || PROjector constraint was produced with --lndet %2% / --frozen-cov %3%, this run has %4% / %5%; the nuisance posterior is not transferable.")
+                log<LOG_ERROR>(L"%1% || PROjector constraint was produced with --lndet %2% / --fixed-cov %3%, this run has %4% / %5%; the nuisance posterior is not transferable.")
                     % __func__ % c.lndet % c.frozen_cov % pjconf.lndet % pjconf.frozen_cov;
                 return false;
             }
@@ -575,7 +575,7 @@ namespace PROfit {
         c.prefit_chi2 = chi2;
         c.shape_only = metric.ShapeOnly();
         c.lndet = metric.GetConfig().m_covariance_options.lndet;
-        c.frozen_cov = metric.GetConfig().m_covariance_options.frozen;
+        c.frozen_cov = metric.GetConfig().m_covariance_options.fixed();
 
         log<LOG_INFO>(L"%1% || ############ PROjector pre-fit posterior summary ############") % __func__;
         int n_widened = 0;

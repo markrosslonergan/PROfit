@@ -50,7 +50,9 @@ namespace PROfit {
  *
  * h = half-range of 2X over the bin. h is exact (events uniform in L/E) for an `L/E`
  * variable and first order (midpoint derivative, as in the decay models) for E bins; the
- * `L`+`E` pair multiplies the L-bin and E-bin sincs. Slow oscillations are untouched
+ * `L`+`E` pair multiplies the L-bin and E-bin sincs. An underflow/overflow cell (events
+ * outside the truth binning, PROmodel::phys_axes) sits at its events' mean with the window of
+ * the uniform distribution of the same variance. Slow oscillations are untouched
  * (sinc -> 1), fast ones average (sinc -> 0). Calls off the binned grid (event-by-event,
  * per-event subsets) are evaluated exactly per value. bin_average="0" samples the
  * midpoint like every other model.
@@ -93,8 +95,7 @@ private:
     /// One evaluation point: signed L/E [km/GeV] and up to two half-widths of its L/E window.
     struct OscPoint { double le; double hw[2]; };
 
-    std::vector<std::vector<float>> grid_;  ///< FillSpectra's binned midpoint grid, built identically.
-    std::vector<OscPoint> grid_points_;     ///< Distinct points of grid_ (subchannel blocks repeat bins).
+    std::vector<OscPoint> grid_points_;     ///< Distinct points of phys_grid (subchannel blocks repeat bins).
     std::vector<int> grid_index_;           ///< Flat grid index -> grid_points_ index.
 
     void build_grid(const PROconfig &config, const PROpeller &prop);

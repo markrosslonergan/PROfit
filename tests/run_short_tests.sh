@@ -854,6 +854,17 @@ grad_rel_check t81fldpeagradrel logs/t81eldpeagrad.full.log
 run_test t81gfrcnpgrad -l logs/t81gfrcnpgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --fix "${SPLINES[@]}" \
     -c CNP --frozen-cov scale-test --tests gradcheck -N 200
 grad_rel_check t81hfrcnpgradrel logs/t81gfrcnpgrad.full.log
+# Dynamic-M CNP: mu is the prediction, so its analytic gradient carries the diag(dvar/dc)
+# stat term like pearson's; plain, --shapeonly, and --lndet with the splines pinned.
+run_test t81icnpgrad -l logs/t81icnpgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c CNP \
+    scale-test --tests gradcheck -N 200
+grad_norm_check t81jcnpgradrel logs/t81icnpgrad.full.log
+run_test t81kcnpshgrad -l logs/t81kcnpshgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c CNP --shapeonly \
+    scale-test --tests gradcheck -N 200
+grad_norm_check t81lcnpshgradrel logs/t81kcnpshgrad.full.log
+run_test t81mcnpldgrad -l logs/t81mcnpldgrad.full.log -w 3 --use-fake-data -i dmsq 1 sinsq2thme 0.02 --fix "${SPLINES[@]}" \
+    -c CNP --lndet scale-test --tests gradcheck -N 200
+grad_rel_check t81ncnpldgradrel logs/t81mcnpldgrad.full.log
 # Provenance and refusals: fc records the options (fc_meta); --reuse without them,
 # poisson, an unknown reference name and a PROjector constraint built without
 # --lndet are refused.

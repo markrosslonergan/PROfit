@@ -300,6 +300,26 @@ tells the model which channel variable holds true L/E (variable index 1,
 i.e. the second `<bins>` entry). The XML model block is pure bookkeeping —
 the actual oscillation logic lives in `PROmodel.h`.
 
+**Cover every event with the kinematic binning.** In the default binned mode the
+model evaluates oscillation probabilities once per truth bin of that variable,
+not once per event. An event whose true L/E lies outside the `<bins>` range
+(here: above 2.5 km/GeV, i.e. far-detector events below ~0.24 GeV) has no truth
+bin. Such events go into an **underflow or overflow cell** of their subchannel.
+These cells are internal to the model: they do not change the binning, plots or
+caches. A cell is evaluated at its events' weighted mean L/E. The sine-kernel
+SBL models and `LBL_3+1-vacuum_angles` also average it over the events' spread
+(see `bin_average=` in the model appendix). This is only a safety net: one cell
+cannot follow how the tail's oscillation varies across reco bins, so the lowest
+or highest reco bins can still be off by several percent. PROfit warns when more
+than 0.1% of a subchannel's MC weight lands in cells and says which edge to move
+and how far, e.g. `raise the upper edge of variable 1's <bins> from 2.5 to above
+5.249`. Follow it until the warning goes away. The visible-decay models
+(`SBL_3+1+decay_vis1/2`) need a uniform truth grid and get no cells: events
+outside their binning are left out, with a warning. Before 2026-11-19, every
+model dropped these events from binned predictions, though `--event-by-event`
+kept them. On this config that made the lowest far-detector bins up to ~65%
+low.
+
 ### MC files and branches
 
 ```xml
@@ -391,11 +411,21 @@ The `<allowlist>` attributes:
 * `binning` — which variable's bins the systematic response is built on
   (`var0`, `var1`, ... in the order of the `<bins>`/`<variable>` entries; the
   default, `reco`, means *the fitting variable*, so it follows `fit="true"`).
-  E.g. cross-section splines are often better built in true energy, detector
-  systematics in the reco variable. Note this default is baked into
-  `_syst.bin` at `process` time: if you later switch the fitting variable, an
-  unqualified systematic keeps the binning it was built with. Write
-  `binning="varN"` explicitly if you want that pinned down.
+  **Keep every spline in the fitting variable**, cross-section and flux knobs
+  included. In the default binned mode, a spline binned in another variable
+  (true energy, say) is turned into one factor per fit bin by averaging it
+  through the *unoscillated* migration matrix. It keeps the
+  oscillation-dependent error a fit-variable spline has and adds a second
+  error, present even with no oscillation, that smears the knob's
+  reco-energy shape. Another binning only does better with `--event-by-event`
+  and a response that depends on true energy alone. Two exceptions are
+  legitimate: a parameter *defined* in another variable (the
+  `binned_unconstrained` free flux in true energy, below), and `flux`-tagged
+  splines of the visible-decay models, which must be binned in true energy.
+  The derivation is in `docs/best_practices/PROfit_best_practices.pdf`
+  (section 7.2). The default is baked into `_syst.bin` at `process` time: if
+  you later switch the fitting variable, re-run `process` so unqualified
+  systematics are rebuilt in the new one.
 * `knobvals` — for splines, the knob values if not stored in the file, as a
   space-separated list (default `-3 -2 -1 0 1 2 3`).
 * `prior=` / `center=` — override the default N(0,1) Gaussian pull;
@@ -724,11 +754,11 @@ through the oscillation models and splines, *plus* the exact
 covariance-scaling term the old Gauss-Newton `-lin` modes dropped): as
 accurate as `central-full` at the cost of roughly one evaluation, so it is
 the right choice for scans *and* publication runs. It applies to the
-`neyman`, `pearson` and `poisson` binned strategies (for `pearson` it also
-differentiates the prediction-valued statistical variance); `CNP` and
+`neyman`, `pearson`, `CNP` and `poisson` binned strategies (for `pearson` and
+`CNP` it also differentiates the prediction-valued statistical variance);
 `--eventbyevent` automatically
-fall back to `central-lin` (`pearson` with `--eventbyevent` to
-`one-sided-full`: its statistical variance IS the prediction, so the term
+falls back to `central-lin` (`pearson` and `CNP` with `--eventbyevent` to
+`one-sided-full`: their statistical variance moves with the prediction, so the term
 Gauss-Newton drops is first-order and the lin modes can stall), each with
 a one-time warning. `central-full` remains
 the finite-difference gold standard for cross-checks (and `scale-test
@@ -1181,8 +1211,9 @@ covariance and Gaussian pulls; `pearson` is the textbook Pearson χ², with
 the statistical variance instead the *predicted* count μ at the current
 parameter point (zero-data bins are kept); `CNP` swaps the statistical
 variance for the combined
-Neyman-Pearson form `3/(1/d + 2/μ)` ([X. Ji et al.](https://arxiv.org/pdf/1903.07185))
-and is the **recommended** choice whenever bins can be low-statistics;
+Neyman-Pearson form `3/(1/d + 2/μ)` ([X. Ji et al.](https://arxiv.org/pdf/1903.07185)),
+μ being the prediction at the tested point (nuisance pulls included; `μ/2` in
+a zero-data bin), and is the **recommended** choice whenever bins can be low-statistics;
 `poisson` is the Baker-Cousins likelihood-ratio sum. It has no covariance
 term, so it is a fatal error to run it with any covariance-type systematic
 (MC-stat included) still selected: remove them with `--exclude-systs`. Under
@@ -1190,59 +1221,73 @@ PROjector every covariance must be promoted (`--projector-knobs -1`, no
 `--projector-keep-cov`). The legacy
 spellings `PROchi`, `PROCNP`, and `Poisson` still work as deprecated
 aliases (mapping to `neyman`/`CNP`/`poisson` with a one-time warning).
-`neyman`, `pearson` and `poisson` have the closed-form analytic gradient
-(and the `grad-*` preset defaults); `CNP` falls back to `central-lin` and
-uses the legacy `good`/`fast` presets (with `--frozen-cov` it has the
-analytic gradient too). Adding a
+All four have the closed-form analytic gradient (and the `grad-*` preset
+defaults). Before 2026-11-23 `CNP` took μ from the physics-only central value
+(every spline at 0), had no analytic gradient and fell back to `central-lin`
+with the `good`/`fast` presets; its results, FC files and PROjector
+constraints from then are not comparable. Adding a
 new metric
 is deliberately easy — they all implement the same `PROmetric` interface.
 
-### ln det M and a frozen covariance (`--lndet`, `--frozen-cov`)
+### Variable or fixed covariance, and ln det M (`--variable-cov`, `--fixed-cov`, `--lndet`)
 
 For Gaussian data, −2 ln L = rᵀM⁻¹r + ln det M + const. The covariance
 metrics (`neyman`, `pearson`, `CNP`) minimise only the first term, which is
-exact when M is the same for every hypothesis. But PROfit rebuilds M at every
-tested point: the systematic part is always F∘(μμᵀ), and pearson's
-statistical part is diag(μ). So ln det M changes with θ, and dropping it
-biases fits toward larger predictions. A one-bin example: with a 10%
-uncertainty, μ = 110 is preferred to μ = 90 for an observation of 100. For a
-disappearance search this makes exclusions artificially strong. Two options
-address it:
+exact when M is the same for every hypothesis. How M is built is a choice,
+with two modes on an equal footing:
+
+* **`--variable-cov`** (the default) rebuilds M from the prediction at every
+  tested point: the systematic part is always F∘(μμᵀ), and pearson's
+  statistical part is diag(μ). Then ln det M changes with θ, and dropping it
+  biases fits toward larger predictions. A one-bin example: with a 10%
+  uncertainty, μ = 110 is preferred to μ = 90 for an observation of 100. For a
+  disappearance search this makes exclusions artificially strong.
+* **`--fixed-cov`** (alias `--frozen-cov`) evaluates the whole M once,
+  statistical part (by the metric's own convention) and systematic part, at
+  the reference prediction (below), and keeps it for every tested point. No
+  hypothesis gets a different M, so there is no ln det bias. Fits are faster,
+  because M is factorised only once. M is right only near the reference: for an
+  appearance search referenced at no oscillation the signal carries no
+  systematic, so check the reference suits the question.
+
+The two flags exclude each other; the log states which mode a run used and
+whether it was the default. The default lives in one place
+(`PROconfig::kDefaultCovarianceMode`), so it can be made configurable later.
+
+`--lndet` is an extra on top of either mode:
 
 ```bash
-# keep the dynamic M, add ln det M (reported relative to M at the reference)
+# variable M plus ln det M (reported relative to M at the reference)
 PROfit -x tutorial.xml -t TUT -o globld --seed 405 -n 8 --lndet global
-# hold M fixed at a reference prediction instead
-PROfit -x tutorial.xml -t TUT -o globfr --seed 405 -n 8 --frozen-cov --cov-reference dmsq 1 sinsq2thme 0.01 global
+# M fixed at a reference prediction
+PROfit -x tutorial.xml -t TUT -o globfr --seed 405 -n 8 --fixed-cov --cov-reference dmsq 1 sinsq2thme 0.01 global
 ```
 
 * **`--lndet`** adds ln det M − ln det M(reference) to χ². Subtracting the
   reference keeps χ² and Δχ² readable; it is a constant, so fits and Δχ² are
-  unchanged by the choice of reference. The global-fit log reports how much of
-  the best-fit χ² is the ln det part. The analytic gradient includes
-  tr(M⁻¹ ∂M/∂θ) in closed form for neyman and pearson, shape-only included.
-  The linearised gradient modes would drop it (it does not vanish at the
-  minimum), so with `--lndet` they run as their full finite-difference
-  versions instead.
-* **`--frozen-cov`** evaluates the whole M once, statistical part (by the
-  metric's own convention) and systematic part, at the reference prediction,
-  and keeps it for every tested point. Every metric, CNP included, then has
-  the analytic gradient, and fits are faster, because M is factorised only
-  once.
+  unchanged by the choice of reference. The global-fit log and the first line
+  of `_global_fit.txt` report how much of the best-fit χ² is the ln det part.
+  The analytic gradient includes tr(M⁻¹ ∂M/∂θ) in closed form for neyman and
+  pearson, shape-only included. The linearised gradient modes would drop it
+  (it does not vanish at the minimum), so with `--lndet` they run as their
+  full finite-difference versions instead. With `--fixed-cov` ln det M is a
+  constant and `--lndet` adds nothing (a warning says so). On Asimov data it
+  pulls the fit to lower predictions, so read Asimov results with `--lndet`
+  with care.
 * **`--cov-reference name value …`** sets the reference point for both: physics
   in physical units (like `-i`), splines in σ. Unlisted parameters sit at the
   model defaults and the splines at their prior centres. For the LBL models
   give a physical 3ν point here, because the model defaults (e.g. dmsq_31 =
   1e-3) are not physical.
 * **`--cov-reference-file <file>`** takes the reference from the
-  `_global_fit.txt` an earlier run wrote, e.g. to freeze M at a best fit. The
+  `_global_fit.txt` an earlier run wrote, e.g. to fix M at a best fit. The
   values are used as written there: physics in the fit's own units (log10 for
   the log parameters), splines by plotname. Pairs from `--cov-reference`
   override single parameters, so this keeps the splines at the best fit but
   the physics at no oscillation:
 
   ```bash
-  PROfit -x tutorial.xml -t TUT -o globfr2 --seed 405 -n 8 --frozen-cov \
+  PROfit -x tutorial.xml -t TUT -o globfr2 --seed 405 -n 8 --fixed-cov \
       --cov-reference-file TUT_glob1_global_fit.txt --cov-reference sinsq2thme 1e-10 global
   ```
 
@@ -1341,7 +1386,8 @@ The example shows one of these. The spline mean is +0.84 against
 are fine. That is not bad luck. Over 30 pseudo-experiments (physics fixed
 with `--syst-only`) this config's spline pulls average +0.56 with the right
 width (1.03). The offset is the
-same with `-c CNP`, and stays when the toys hold every spline at zero. It
+same with `-c CNP` (measured with the pre-2026-11-23 CNP, whose μ ignored
+the spline pulls), and stays when the toys hold every spline at zero. It
 lives in a few weakly constrained knobs that move with the ND normalisation
 (CrossSection3/4, DetSys2/3, Flux3, FluxNorm_ND), whose
 fitted values are themselves pushed up. So the fit, not the priors, shifts
@@ -2721,7 +2767,10 @@ tracks the bin mean to within ~0.03. A pinned χ² comparison on such bins
 therefore differs strongly between `bin_average="1"` and `"0"`. Use
 `bin_average="0"` only to reproduce `LBL_3nu-vacuum_angles` numbers;
 otherwise keep the default. Where a truth bin spans more than about one
-cycle of a slow oscillation, refine that binning.
+cycle of a slow oscillation, refine that binning. Events outside the truth
+binning sit in underflow/overflow cells. Each cell is averaged as a bin
+centred on its events' mean, with the width of a uniform distribution of the
+same variance.
 
 | attribute | meaning | allowed | default |
 |---|---|---|---|
@@ -3008,7 +3057,7 @@ statistical model the fit did:
 | `-c` | `C_b` | in the chain |
 |---|---|---|
 | `neyman` | `d_b` | constant |
-| `CNP` | `3/(1/d_b + 2/μ_b)`, `μ_b/2` if `d_b = 0` (μ = physics-only CV) | constant (physics is pinned in the band chain) |
+| `CNP` | `3/(1/d_b + 2/μ_b)`, `μ_b/2` if `d_b = 0` (μ = `S_b`, the sample's own prediction) | re-evaluated at every chain point |
 | `pearson` | `S_b`, the sample's own prediction | re-evaluated at every chain point |
 
 Restrict to the **contributing bins** `B`: bins that are active

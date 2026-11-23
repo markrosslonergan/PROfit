@@ -17,6 +17,8 @@
 #include <Eigen/Eigen>
 // STANDARD
 #include <Eigen/src/Core/Matrix.h>
+#include <algorithm>
+#include <limits>
 #include <vector>
 #include <chrono>
 #include <memory>
@@ -246,6 +248,19 @@ namespace PROfit{
             /// these); empty = every variable. Not serialized: run_process sets it from the config.
             std::vector<char> binned_variables;
 
+            /// One variable's subchannel blocks in the global bin layout, indexed by global
+            /// subchannel index (the same block for every variable: an event fills one subchannel).
+            struct BlockLayout {
+                std::vector<int> start;     ///< First global bin of each block.
+                std::vector<float> lo, hi;  ///< Outer edges of each block's 1D binning; NaN = none.
+            };
+            /// Per variable; empty = unknown. Lets a model put an event whose kinematic variable lies
+            /// outside its binning into its block's underflow/overflow cell (PROmodel::phys_axes).
+            /// Not serialized: set from the config by SetBlockLayout.
+            std::vector<BlockLayout> block_layout;
+            /// Subchannel full name of each block (for logs); set with block_layout.
+            std::vector<std::string> block_names;
+
             uint32_t hash; ///< MurmurHash3 of the PROconfig used to create this PROpeller; checked during serialisation.
 
             /// Which entries are the same interaction in another analysis (PROoverlap.h). Only
@@ -309,6 +324,43 @@ namespace PROfit{
             }
             /** @brief Return the number of MC events stored in this PROpeller. */
             size_t NEvent() const {return added_weights.size();}
+
+            /**
+             * @brief Fill block_layout from @p config (same layout FindGlobalVariableBin uses).
+             * @details Called wherever a PROpeller is built or loaded for fitting (end of
+             * PROcess_CAFAna, after the cache load in run_process).
+             */
+            void SetBlockLayout(const PROconfig &config) {
+                const float nan = std::numeric_limits<float>::quiet_NaN();
+                const size_t nsub = config.m_fullnames.size();
+                block_names = config.m_fullnames;
+                block_layout.assign(config.m_num_variables, BlockLayout());
+                for(size_t v = 0; v < config.m_num_variables; ++v) {
+                    BlockLayout &b = block_layout[v];
+                    b.start.resize(nsub);
+                    b.lo.assign(nsub, nan);
+                    b.hi.assign(nsub, nan);
+                    for(size_t s = 0; s < nsub; ++s) {
+                        b.start[s] = (int)config.GetGlobalVariableBinStart(s, v);
+                        const PROconfig::Binning &bins = config.GetChannelVariableBins(config.GetLocalChannelIndexFromGlobalSubchannelIndex(s), v);
+                        if(bins.NDim() != 1 || bins.NBins() == 0) continue;
+                        b.lo[s] = bins.bin_edges[0].front();
+                        b.hi[s] = bins.bin_edges[0].back();
+                    }
+                }
+            }
+
+            /** @brief Block (global subchannel index) of event @p i, from the first variable it is
+             *  binned in; -1 if block_layout is unset or the event is outside every variable. */
+            int EventBlock(size_t i) const {
+                for(size_t v = 0; v < block_layout.size() && v < variable_bin_indices.size(); ++v) {
+                    const int bin = variable_bin_indices[v][i];
+                    if(bin < 0) continue;
+                    const std::vector<int> &start = block_layout[v].start;
+                    return (int)(std::upper_bound(start.begin(), start.end(), bin) - start.begin()) - 1;
+                }
+                return -1;
+            }
 
             /**
              * @brief Free the pre-binned (variable × variable) histogram matrices.

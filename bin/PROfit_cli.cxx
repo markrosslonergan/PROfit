@@ -20,7 +20,7 @@ PROpt::PROpt(int argc, char **argv) {
         app.add_option("--inject-cv", cv_osc_params, "Physics parameters to inject as CV. Example: dmsq 3 sinsq2thmm 0.25")->expected(-1);
         app.add_option("--fix", fixed_params, "Fix Certain Physics or Systematics parameters. Fixed to CV.");
         app.add_option("-s, --seed", global_seed, "A global seed for PROseed rng. Default to -1 for hardware rng seed.")->default_val(-1);
-        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (-c CNP, --event-by-event, or a model without closed-form get_probs_grad such as LBL).");
+        CLI::Option *preset_opt = app.add_option("-p,--preset", fit_preset, "Preset fitting params. Available `fast`, `good`, `overkill`, `sensitivity`, plus the analytic-gradient presets `grad-fast`, `grad-good`, `grad-deep`, `grad-overkill`. Takes up to a vector of 2, first for global. 2nd for scan. Defaults to `grad-good` `grad-fast` when the analytic gradient is available, and to `good` `fast` when it is not (--event-by-event, or a model without closed-form get_probs_grad such as LBL).");
         app.add_option("--fit-options", global_fit_options, "Parameters for single, detailed global best fit LBFGSB. See PROfitter.h or run --fit-help for available settings.");
         app.add_option("--scan-fit-options", scan_fit_options, "Parameters for simpier, multiple best fits in PROfile/surface LBFGSB.");
         app.add_flag("--fit-help", show_fit_help, "Show detailed help for all fitting parameters (L-BFGS-B, PSO, MCMC, etc.)");
@@ -31,8 +31,8 @@ PROpt::PROpt(int argc, char **argv) {
                        "central-lin (central FD on delta only, M frozen at base; Gauss-Newton, ~5-10x), "
                        "one-sided-lin (forward FD on delta only, M frozen at base; ~10-20x), "
                        "analytic (DEFAULT; exact closed-form gradient incl. the dM/dtheta term; no FD truncation, "
-                       "no extra spectrum fills; neyman, pearson and poisson binned strategies only — CNP and the "
-                       "event-by-event strategy fall back to central-lin (pearson event-by-event to one-sided-full), with a warning). "
+                       "no extra spectrum fills; binned strategies only — the event-by-event strategy falls back to "
+                       "central-lin (pearson and CNP event-by-event to one-sided-full), with a warning). "
                        "Applies to every fit (global, scan, FC).")
             ->default_str("");
 
@@ -96,19 +96,25 @@ PROpt::PROpt(int argc, char **argv) {
                 "Shape-only analysis: the prediction is rescaled onto the data's integral in every channel before the chi2 "
                 "(data untouched), and every systematic (splines and all covariance sources) is projected onto per-channel shape. "
                 "Implies --area-norm for the plots. fc / brazil / fc-adaptive inherit the flag.");
+        const bool variable_default = PROconfig::kDefaultCovarianceMode == PROconfig::CovarianceMode::Variable;
+        auto *variable_cov_flag = app.add_flag("--variable-cov", variable_cov,
+                std::string("Covariance mode (neyman / pearson / CNP): rebuild the covariance M from the prediction at every tested "
+                "point")+(variable_default ? " (the default)." : ".")+" Exclusive with --fixed-cov.");
+        app.add_flag("--fixed-cov,--frozen-cov", fixed_cov,
+                std::string("Covariance mode (neyman / pearson / CNP): hold the whole covariance M (statistical + systematic) at its "
+                "value at the --cov-reference prediction for every tested point")+(variable_default ? "." : " (the default).")
+                +" Exclusive with --variable-cov.")
+            ->excludes(variable_cov_flag);
         app.add_flag("--lndet", lndet,
-                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries when its covariance M "
-                "is rebuilt from the prediction at every tested point (without it fits lean towards larger predictions). "
+                "Add ln det M to chi2 (neyman / pearson / CNP), the term -2 ln L of a Gaussian carries; in either covariance mode, "
+                "though with --fixed-cov it is a constant. Without it a variable M leans the fit towards larger predictions. "
                 "Reported relative to ln det M at --cov-reference.");
-        app.add_flag("--frozen-cov", frozen_cov,
-                "Hold the whole covariance M (statistical + systematic) at its value at the --cov-reference prediction instead "
-                "of rebuilding it at every tested point (neyman / pearson / CNP).");
         app.add_option("--cov-reference", cov_reference,
-                "Reference point for --frozen-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
+                "Reference point for --fixed-cov and the --lndet offset: name/value pairs (physics in physical units, splines in "
                 "sigma). Unlisted physics at the model defaults, splines at their prior centres. Example: dmsq_31 2.5e-3 sinsqt23 0.55")
             ->expected(-1);
         app.add_option("--cov-reference-file", cov_reference_file,
-                "Take the --frozen-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
+                "Take the --fixed-cov / --lndet reference point from a <tag>_<out>_global_fit.txt written by an earlier fit "
                 "(values as written there: physics in the fit's own units, log10 where the model uses log10; splines by name or "
                 "plotname). --cov-reference pairs given alongside override single parameters.")
             ->check(CLI::ExistingFile);
@@ -461,6 +467,9 @@ PROpt::PROpt(int argc, char **argv) {
         }
 
         if(shapeonly) area_normalized = true;
+
+        if(fixed_cov) cov_mode = PROconfig::CovarianceMode::Fixed;
+        else if(variable_cov) cov_mode = PROconfig::CovarianceMode::Variable;
 
         pbounds.Load(bound_list);
         final_output_tag = analysis_tag +"_"+ output_tag;

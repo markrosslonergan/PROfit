@@ -440,20 +440,35 @@ static std::vector<bool> read_cov_reference_file(const std::string &path, const 
     return set;
 }
 
-// --lndet / --frozen-cov / --cov-reference[-file] become PROconfig::CovarianceOptions, which every
-// PROcovariance reads at construction: install them before the first metric is built.
+// --variable-cov / --fixed-cov / --lndet / --cov-reference[-file] become PROconfig::CovarianceOptions,
+// which every PROcovariance reads at construction: install them before the first metric is built.
 void set_covariance_options(PROconfig &config, const PROpt &options, const PROmodel &model, const PROsyst &systs) {
-    if(!options.lndet && !options.frozen_cov) {
-        if(!options.cov_reference.empty() || !options.cov_reference_file.empty())
-            log<LOG_WARNING>(L"%1% || --cov-reference / --cov-reference-file are only used with --lndet or --frozen-cov; ignoring them.") % __func__;
+    const bool fixed = options.cov_mode == PROconfig::CovarianceMode::Fixed;
+    const bool references = !options.cov_reference.empty() || !options.cov_reference_file.empty();
+    if(options.chi2 == "poisson") {
+        if(options.lndet || options.fixed_cov) {
+            log<LOG_ERROR>(L"%1% || -c poisson has no covariance matrix: --lndet and --fixed-cov apply to neyman, pearson and CNP only.") % __func__;
+            exit(EXIT_FAILURE);
+        }
+        // Keep a fixed default mode away from a metric that has no M.
+        config.m_covariance_options.mode = PROconfig::CovarianceMode::Variable;
+        if(references)
+            log<LOG_WARNING>(L"%1% || -c poisson has no covariance matrix; ignoring --cov-reference / --cov-reference-file.") % __func__;
         return;
     }
-    if(options.chi2 == "poisson") {
-        log<LOG_ERROR>(L"%1% || -c poisson has no covariance matrix: --lndet and --frozen-cov apply to neyman, pearson and CNP only.") % __func__;
-        exit(EXIT_FAILURE);
+    config.m_covariance_options.mode = options.cov_mode;
+    config.m_covariance_options.lndet = options.lndet;
+    log<LOG_INFO>(L"%1% || Covariance M: %2% (%3%), ln det M %4%.") % __func__
+        % (fixed ? "fixed at the reference prediction" : "variable, rebuilt from the prediction at every tested point")
+        % (options.fixed_cov ? "--fixed-cov" : options.variable_cov ? "--variable-cov" : "default")
+        % (options.lndet ? "on" : "off");
+    if(!options.lndet && !fixed) {
+        if(references)
+            log<LOG_WARNING>(L"%1% || --cov-reference / --cov-reference-file are only used with --lndet or --fixed-cov; ignoring them.") % __func__;
+        return;
     }
-    if(options.lndet && options.frozen_cov)
-        log<LOG_WARNING>(L"%1% || With --frozen-cov, ln det M is a constant: --lndet adds nothing.") % __func__;
+    if(options.lndet && fixed)
+        log<LOG_WARNING>(L"%1% || With a fixed M, ln det M is a constant: --lndet adds nothing.") % __func__;
 
     const size_t nphys = model.nparams, nsyst = systs.GetNSplines();
     std::vector<float> ref(nphys + nsyst, 0.0f);
@@ -493,13 +508,10 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
     }
     if(overridden)
         log<LOG_INFO>(L"%1% || --cov-reference overrides %2% value(s) read from %3%.") % __func__ % overridden % options.cov_reference_file.c_str();
-    config.m_covariance_options.lndet = options.lndet;
-    config.m_covariance_options.frozen = options.frozen_cov;
     config.m_covariance_options.reference = ref;
     Eigen::VectorXf phys(nphys);
     for(size_t i = 0; i < nphys; ++i) phys(i) = model.is_log10[i] ? std::pow(10.0f, ref[i]) : ref[i];
-    log<LOG_INFO>(L"%1% || Covariance options: ln det M %2%, frozen M %3%; reference physics (physical units) %4%")
-        % __func__ % (options.lndet ? "on" : "off") % (options.frozen_cov ? "on" : "off") % phys;
+    log<LOG_INFO>(L"%1% || Covariance reference physics (physical units) %2%") % __func__ % phys;
     if(splines_moved)
         log<LOG_INFO>(L"%1% || Reference splines (sigma, in fit order): %2%")
             % __func__ % Eigen::VectorXf(Eigen::Map<const Eigen::VectorXf>(ref.data() + nphys, nsyst));
@@ -511,9 +523,8 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
 // The grad-* presets are tuned FOR the analytic gradient: physics-only latin
 // hypercube, PSO effectively off, the budget spent on many cheap multistart
 // descents. That shape only pays off when a gradient really costs ~one evaluation
-// and is exact. Three things can take that away:
-//   * a metric other than neyman/pearson/poisson (CNP demotes to central-lin),
-//   * --event-by-event (the unbinned strategy demotes too),
+// and is exact. Two things can take that away:
+//   * --event-by-event (the unbinned strategy demotes to a finite-difference mode),
 //   * a model without closed-form get_probs_grad (PROmodel's base class falls back
 //     to a central finite difference on the probabilities, so every gradient costs
 //     2*nparams extra get_probs calls and carries an O(h^2) truncation error).
@@ -521,10 +532,6 @@ void set_covariance_options(PROconfig &config, const PROpt &options, const PROmo
 // them unless the user picked a preset themselves — an explicit -p is always honoured.
 void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel &model) {
     std::vector<std::string> reasons;
-    // A frozen M gives every covariance metric (CNP too) the analytic gradient.
-    const bool analytic_metric = options.chi2 == "neyman" || options.chi2 == "pearson" || options.chi2 == "poisson"
-                              || (options.chi2 == "CNP" && options.frozen_cov);
-    if(!analytic_metric) reasons.push_back(options.chi2);
     if(options.eventbyevent)            reasons.push_back("--event-by-event");
     if(!model.has_analytic_gradient())  reasons.push_back("model '" + config.m_model_tag +
                                                           "' (no closed-form get_probs_grad)");
@@ -808,7 +815,7 @@ void print_global_fit_results(float global_fit_chi2, const Eigen::VectorXf &glob
         log<LOG_INFO>(L"%1% || ########### Global Best Fit Results ############") % __func__;
         log<LOG_INFO>(L"%1% || ################################################") % __func__;
         log<LOG_INFO>(L"%1% || Global Best Fit chi^2: %2%") %__func__ % global_fit_chi2;
-        const bool lndet_part = config.m_covariance_options.lndet && !config.m_covariance_options.frozen;
+        const bool lndet_part = config.m_covariance_options.lndet && !config.m_covariance_options.fixed();
         const float lndet_term = lndet_part ? metric.CovarianceLnDetTerm(global_fit_result) : 0.0f;
         if(lndet_part)
             log<LOG_INFO>(L"%1% || of which ln det M - ln det M(reference): %2%") % __func__ % lndet_term;
