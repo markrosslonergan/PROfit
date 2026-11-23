@@ -738,7 +738,7 @@ namespace PROfit{
                         for(size_t i = 0; i < k; ++i)
                             throws_k((Eigen::Index)i, (Eigen::Index)ai) = nd(PROseed::global_rng);
 
-                    // Samples sharing C share the factorisation: consecutive runs (pearson: one
+                    // Samples sharing C share the factorisation: consecutive runs (pearson, CNP: one
                     // per accepted step; neyman: one run), cut into blocks solved in parallel.
                     struct Block { size_t begin, end, run; };
                     constexpr size_t kMaxBlock = 512;

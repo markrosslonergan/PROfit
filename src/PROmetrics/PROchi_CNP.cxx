@@ -1,7 +1,5 @@
 #include "PROmetrics/PROchi_CNP.h"
 
-#include "PROcess.h"
-
 #include <algorithm>
 
 using namespace PROfit;
@@ -9,7 +7,7 @@ using namespace PROfit;
 namespace {
     /// Floor on the predicted count entering the CNP variance. Without it a bin with
     /// mu <= 0 would zero the statistical diagonal and make M singular wherever the
-    /// systematic covariance is also empty.
+    /// systematic covariance is also empty; it also keeps the set of fitted bins fixed.
     constexpr float kMinCNPMu = 1e-6f;
 }
 
@@ -19,59 +17,29 @@ PROCNP::PROCNP(const std::string tag, const PROconfig &conin, const PROpeller &p
                std::vector<float> physics_param_fixed)
     : PROcovariance(tag, conin, pin, systin, modelin, datain, strat, shape_only,
                     physics_param_fixed, true) {
-    // No buildConstantStatCache() here: mu, and therefore the CNP variance, moves with the
-    // physics parameters, so the reduced statistical covariance is rebuilt per evaluation.
+    // No buildConstantStatCache() here: mu, and therefore the CNP variance, is the
+    // prediction, so the reduced statistical covariance is rebuilt per evaluation.
 }
 
 bool PROCNP::statisticalVariancesDependOnPrediction() const {
     return true;
 }
 
-void PROCNP::reset() {
-    PROcovariance::reset();
-    cnp_cv_cache_valid = false;
-}
-
-void PROCNP::override_systs(const PROsyst &new_syst) {
-    PROcovariance::override_systs(new_syst);
-    cnp_cv_cache_valid = false;
-}
-
-const Eigen::VectorXf &PROCNP::cachedNoshiftCollapsedCV(const Eigen::VectorXf &phys,
-                                                        Eigen::Index param_size) const {
-    if(cnp_cv_cache_valid && cnp_cached_phys.size() == phys.size() && cnp_cached_phys == phys)
-        return cnp_cached_collapsed_cv;
-    Eigen::VectorXf noshiftvec = Eigen::VectorXf::Zero(param_size);
-    noshiftvec.head(model.nparams) = phys;
-    // Deliberately the uncached FillSpectra overload: fs_cache is a single-slot cache keyed
-    // on the physics/systematic half of the parameter vector, and routing this no-shift
-    // call through it would evict the entry operator() is about to reuse.
-    cnp_cached_collapsed_cv = CollapseMatrix(config, FillSpectra(config, peller, *syst, model,
-                                                                noshiftvec, strat != EventByEvent,
-                                                                config.i_prime).Spec());
-    cnp_cached_phys = phys;
-    cnp_cv_cache_valid = true;
-    return cnp_cached_collapsed_cv;
+PROmetric::GradientMode PROCNP::analyticFallbackMode() const {
+    // Reached only with EventByEvent. As for pearson, the variance moves with the prediction,
+    // so the Gauss-Newton modes would drop a first-order term.
+    return GradientOneSidedFull;
 }
 
 Eigen::VectorXf PROCNP::statisticalVariances(const Eigen::VectorXf &collapsed_prediction,
                                              const Eigen::VectorXf &comparison,
-                                             const Eigen::VectorXf *param) const {
-    // mu comes from the physics-only CV when the parameter vector is available, so the
-    // statistical part of M does not respond to the nuisance pulls. Fall back to the
-    // shifted prediction when it is not.
-    Eigen::VectorXf cv = param
-        ? cachedNoshiftCollapsedCV(param->head(model.nparams), param->size())
-        : collapsed_prediction;
-    // Shape-only: the physics-only CV must live on the same per-channel scale as the
-    // (rescaled) prediction it stands in for. collapsed_prediction is already rescaled.
-    if(shape_only && param) cv = cv.cwiseProduct(ChannelNormFactors(config, cv, comparison, config.i_prime));
-
+                                             [[maybe_unused]] const Eigen::VectorXf *param) const {
+    // mu is the full prediction at the tested point (per-channel rescaled onto the data when
+    // shape-only), nuisance pulls included: CNP's cancellation of the Neyman and Pearson
+    // biases needs mu to move in every direction the prediction does.
     Eigen::VectorXf variances(comparison.size());
     for(Eigen::Index i = 0; i < comparison.size(); ++i) {
-        const float mu = std::max(cv(i), kMinCNPMu);
-        // Doubles in the harmonic blend match the historical promotion of the
-        // 1.0 / 2.0 / 3.0 literals, so results stay bit-identical to pre-refactor CNP.
+        const float mu = std::max(collapsed_prediction(i), kMinCNPMu);
         variances(i) = comparison(i) == 0.0f
             ? mu / 2.0f
             : (float)(3.0 / (1.0 / comparison(i) + 2.0 / mu));
@@ -79,13 +47,24 @@ Eigen::VectorXf PROCNP::statisticalVariances(const Eigen::VectorXf &collapsed_pr
     return variances;
 }
 
+Eigen::VectorXf PROCNP::statisticalVarianceSlope(const Eigen::VectorXf &collapsed_prediction) const {
+    // var = 3 n mu / (mu + 2n)  =>  d var / d mu = 6 n^2 / (mu + 2n)^2;  var = mu/2 at n = 0.
+    // The engine passes the observed data as the comparison, so n is data.Spec().
+    const Eigen::VectorXf &obs = data.Spec();
+    Eigen::VectorXf slope(collapsed_prediction.size());
+    for(Eigen::Index i = 0; i < collapsed_prediction.size(); ++i) {
+        const double mu = collapsed_prediction(i), n = obs(i);
+        if(!(mu > kMinCNPMu)) slope(i) = 0.0f;
+        else if(n == 0.0)     slope(i) = 0.5f;
+        else                  slope(i) = (float)(6.0 * n * n / ((mu + 2.0 * n) * (mu + 2.0 * n)));
+    }
+    return slope;
+}
+
 Eigen::VectorXf PROCNP::singleChannelStatVariances(const Eigen::VectorXf &collapsed_cv,
                                                    const Eigen::VectorXf &comparison) const {
-    // This per-channel diagnostic differs from the fit path above: mu is the *shifted*
-    // prediction handed in by the caller rather than the physics-only CV. It is floored
-    // like the fit path, so a zero-prediction bin (e.g. a shape-only channel with no data,
-    // r = 0) cannot make M singular. (The comparison is the observed data in every mode.)
-    // Doubles match the historical promotion of the 1.0/2.0/3.0 literals.
+    // Same convention as the fit path: mu is the prediction handed in by the caller.
+    // (The comparison is the observed data in every mode.)
     const Eigen::VectorXf &obs = data.Spec();
     Eigen::VectorXf variances(obs.size());
     for(Eigen::Index i = 0; i < obs.size(); ++i) {

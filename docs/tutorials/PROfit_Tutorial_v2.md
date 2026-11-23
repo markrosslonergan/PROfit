@@ -754,11 +754,11 @@ through the oscillation models and splines, *plus* the exact
 covariance-scaling term the old Gauss-Newton `-lin` modes dropped): as
 accurate as `central-full` at the cost of roughly one evaluation, so it is
 the right choice for scans *and* publication runs. It applies to the
-`neyman`, `pearson` and `poisson` binned strategies (for `pearson` it also
-differentiates the prediction-valued statistical variance); `CNP` and
+`neyman`, `pearson`, `CNP` and `poisson` binned strategies (for `pearson` and
+`CNP` it also differentiates the prediction-valued statistical variance);
 `--eventbyevent` automatically
-fall back to `central-lin` (`pearson` with `--eventbyevent` to
-`one-sided-full`: its statistical variance IS the prediction, so the term
+falls back to `central-lin` (`pearson` and `CNP` with `--eventbyevent` to
+`one-sided-full`: their statistical variance moves with the prediction, so the term
 Gauss-Newton drops is first-order and the lin modes can stall), each with
 a one-time warning. `central-full` remains
 the finite-difference gold standard for cross-checks (and `scale-test
@@ -1211,8 +1211,9 @@ covariance and Gaussian pulls; `pearson` is the textbook Pearson χ², with
 the statistical variance instead the *predicted* count μ at the current
 parameter point (zero-data bins are kept); `CNP` swaps the statistical
 variance for the combined
-Neyman-Pearson form `3/(1/d + 2/μ)` ([X. Ji et al.](https://arxiv.org/pdf/1903.07185))
-and is the **recommended** choice whenever bins can be low-statistics;
+Neyman-Pearson form `3/(1/d + 2/μ)` ([X. Ji et al.](https://arxiv.org/pdf/1903.07185)),
+μ being the prediction at the tested point (nuisance pulls included; `μ/2` in
+a zero-data bin), and is the **recommended** choice whenever bins can be low-statistics;
 `poisson` is the Baker-Cousins likelihood-ratio sum. It has no covariance
 term, so it is a fatal error to run it with any covariance-type systematic
 (MC-stat included) still selected: remove them with `--exclude-systs`. Under
@@ -1220,10 +1221,11 @@ PROjector every covariance must be promoted (`--projector-knobs -1`, no
 `--projector-keep-cov`). The legacy
 spellings `PROchi`, `PROCNP`, and `Poisson` still work as deprecated
 aliases (mapping to `neyman`/`CNP`/`poisson` with a one-time warning).
-`neyman`, `pearson` and `poisson` have the closed-form analytic gradient
-(and the `grad-*` preset defaults); `CNP` falls back to `central-lin` and
-uses the legacy `good`/`fast` presets (with `--fixed-cov` it has the
-analytic gradient too). Adding a
+All four have the closed-form analytic gradient (and the `grad-*` preset
+defaults). Before 2026-11-23 `CNP` took μ from the physics-only central value
+(every spline at 0), had no analytic gradient and fell back to `central-lin`
+with the `good`/`fast` presets; its results, FC files and PROjector
+constraints from then are not comparable. Adding a
 new metric
 is deliberately easy — they all implement the same `PROmetric` interface.
 
@@ -1243,9 +1245,8 @@ with two modes on an equal footing:
 * **`--fixed-cov`** (alias `--frozen-cov`) evaluates the whole M once,
   statistical part (by the metric's own convention) and systematic part, at
   the reference prediction (below), and keeps it for every tested point. No
-  hypothesis gets a different M, so there is no ln det bias. Every metric,
-  CNP included, then has the analytic gradient, and fits are faster, because
-  M is factorised only once. M is right only near the reference: for an
+  hypothesis gets a different M, so there is no ln det bias. Fits are faster,
+  because M is factorised only once. M is right only near the reference: for an
   appearance search referenced at no oscillation the signal carries no
   systematic, so check the reference suits the question.
 
@@ -1385,7 +1386,8 @@ The example shows one of these. The spline mean is +0.84 against
 are fine. That is not bad luck. Over 30 pseudo-experiments (physics fixed
 with `--syst-only`) this config's spline pulls average +0.56 with the right
 width (1.03). The offset is the
-same with `-c CNP`, and stays when the toys hold every spline at zero. It
+same with `-c CNP` (measured with the pre-2026-11-23 CNP, whose μ ignored
+the spline pulls), and stays when the toys hold every spline at zero. It
 lives in a few weakly constrained knobs that move with the ND normalisation
 (CrossSection3/4, DetSys2/3, Flux3, FluxNorm_ND), whose
 fitted values are themselves pushed up. So the fit, not the priors, shifts
@@ -3055,7 +3057,7 @@ statistical model the fit did:
 | `-c` | `C_b` | in the chain |
 |---|---|---|
 | `neyman` | `d_b` | constant |
-| `CNP` | `3/(1/d_b + 2/μ_b)`, `μ_b/2` if `d_b = 0` (μ = physics-only CV) | constant (physics is pinned in the band chain) |
+| `CNP` | `3/(1/d_b + 2/μ_b)`, `μ_b/2` if `d_b = 0` (μ = `S_b`, the sample's own prediction) | re-evaluated at every chain point |
 | `pearson` | `S_b`, the sample's own prediction | re-evaluated at every chain point |
 
 Restrict to the **contributing bins** `B`: bins that are active
