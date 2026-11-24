@@ -405,7 +405,7 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     // start from that one point. Fall back to sampling all parameters, so the splines are 
     // varied in the starting points.
     const bool latin_phys_only = fitconfig.latin_phys_only && n_phys_dims > 0;
-    if(fitconfig.latin_phys`_only && !latin_phys_only){
+    if(fitconfig.latin_phys_only && !latin_phys_only){
         static std::atomic<bool> warned{false};
         if(!warned.exchange(true))
             log<LOG_INFO>(L"%1% || latin_phys_only is set but the model has no physics parameters: sampling the latin hypercube over all (spline) parameters instead.") % __func__;
