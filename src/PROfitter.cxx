@@ -400,7 +400,17 @@ float PROfitter::Fit(PROmetric &metric, const std::vector<Eigen::VectorXf> &seed
     std::vector<std::vector<float>> latin_samples = latin_hypercube_sampling(fitconfig.n_latin_points, ub.size(), d_uni,rng);
     recenter_latin_samples(latin_samples, ub, lb);
     const Eigen::Index n_phys_dims = (Eigen::Index)metric.GetModel().nparams;
-    if(fitconfig.latin_phys_only){
+    // A model without physics parameters has no physics space to sample: a physics-only LHS 
+    // would put every point at the nominal, and the swarm particles and local fits would all
+    // start from that one point. Fall back to sampling all parameters, so the splines are 
+    // varied in the starting points.
+    const bool latin_phys_only = fitconfig.latin_phys_only && n_phys_dims > 0;
+    if(fitconfig.latin_phys`_only && !latin_phys_only){
+        static std::atomic<bool> warned{false};
+        if(!warned.exchange(true))
+            log<LOG_INFO>(L"%1% || latin_phys_only is set but the model has no physics parameters: sampling the latin hypercube over all (spline) parameters instead.") % __func__;
+    }
+    if(latin_phys_only){
         // Physics-only LHS: nuisance parameters at nominal (0, clamped into the box)
         // so the LHS chi2 ranks oscillation basins rather than random nuisance pulls.
         for(auto &pt : latin_samples)

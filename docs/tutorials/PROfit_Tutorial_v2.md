@@ -1085,7 +1085,8 @@ Every fit in PROfit is a three-stage pipeline:
 The default `grad-*` presets (below) rebalance this pipeline around the
 analytic gradient: the Latin hypercube samples **physics parameters only**
 (`latin_phys_only` — nuisances start at their centers, where the pull term
-puts them anyway), the particle-swarm stage is effectively disabled (one
+puts them anyway; a model with no physics parameters, where every fitted
+parameter is a spline, samples all of them instead), the particle-swarm stage is effectively disabled (one
 iteration), and the budget goes into **many L-BFGS-B multistarts** instead —
 with the exact gradient, local descents are cheap and reliable enough that
 they beat swarm exploration. The classic three-stage behavior is still
