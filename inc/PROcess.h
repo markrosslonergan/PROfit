@@ -30,6 +30,8 @@
 
 namespace PROfit{
 
+    class SplinePriorSampler;
+
     /**
      * @brief Single-slot cache for the binned FillSpectra path, splitting the work into
      *        independently keyed physics and systematic halves.
@@ -146,9 +148,10 @@ namespace PROfit{
      * @param cvparams   Central-value physics parameter vector.
      * @param seed       Random seed.
      * @param var_index  Variable index to fill (default 0).
+     * @param prior_sampler  The spline prior (SplinePriorSampler), built once per band.
      * @return A PROspec with one random systematic throw applied.
      */
-    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index);
+    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const SplinePriorSampler &prior_sampler);
 
     /**
      * @brief One systematic throw, split into signal and background pieces.
@@ -168,9 +171,10 @@ namespace PROfit{
      * @param seed         Random seed.
      * @param var_index    Variable index to fill.
      * @param bkg_bin_mask Full-bin 0/1 vector marking background-subchannel bins.
+     * @param prior_sampler The spline prior (SplinePriorSampler), built once per band.
      * @return {signal, background} PROspecs, both collapsed.
      */
-    std::pair<PROspec, PROspec> FillSystRandomThrowSplit(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const Eigen::VectorXf &bkg_bin_mask);
+    std::pair<PROspec, PROspec> FillSystRandomThrowSplit(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const Eigen::VectorXf &bkg_bin_mask, const SplinePriorSampler &prior_sampler);
 
     /**
      * @brief Generate a spectrum with a single named spline systematic randomly shifted.
@@ -195,8 +199,9 @@ namespace PROfit{
      * lookup (covariance_to_spline knobs may not populate it), inverted-bounds tolerance, and
      * bounded rejection attempts with a clamp-to-nearest-in-range fallback plus warning
      * (pattern from commit 000b3d0).
-     * Shared by the FC pseudo-experiment generators (PROfc, PROAdaptiveFC) and the
-     * pseudo-experiment CLI path.
+     * This is the spline's MARGINAL prior: it ignores prior correlations and pinned partners.
+     * Throws of the whole prior go through SplinePriorSampler (PROsplinePrior.h), which uses
+     * the same arithmetic for uncorrelated splines.
      * @param insyst  Systematic object holding the spline bounds.
      * @param i       0-based spline index.
      * @param rng     Generator to draw from (caller owns seeding/threading).
@@ -204,6 +209,13 @@ namespace PROfit{
      * @return The thrown pull (truncated Gaussian, or uniform for uniform-prior splines).
      */
     float ThrowRestrictedSplinePull(const PROsyst &insyst, size_t i, std::mt19937 &rng, std::normal_distribution<float> &d);
+
+    /**
+     * @brief Draw N(mu, sig) truncated to [tlo, thi] by rejection (the Gaussian branch of
+     *        ThrowRestrictedSplinePull). After 10000 rejected draws it clamps to the in-range
+     *        value nearest mu and warns, naming @p name / @p index.
+     */
+    float ThrowTruncatedNormal(float mu, float sig, float tlo, float thi, std::mt19937 &rng, std::normal_distribution<float> &d, const std::string &name, size_t index);
 
     /**
      * @brief Index of a named parameter in the full [physics | splines] parameter vector.

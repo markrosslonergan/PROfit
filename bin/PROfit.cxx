@@ -41,7 +41,15 @@ int main(int argc, char* argv[])
 
     //Initilize configuration from the XML;
     // fit_variable (-1 unless --fit-variable was given) overrides the XML's fit="true" binning.
-    PROconfig config(options.xmlname, options.rateonly, options.fit_variable);
+    // XML validation throws std::invalid_argument: report it as an input error, not a crash.
+    std::unique_ptr<PROconfig> config_owner;
+    try {
+        config_owner = std::make_unique<PROconfig>(options.xmlname, options.rateonly, options.fit_variable);
+    } catch(const std::exception &e) {
+        log<LOG_ERROR>(L"%1% || Invalid configuration %2%: %3%") % __func__ % options.xmlname.c_str() % e.what();
+        return EXIT_FAILURE;
+    }
+    PROconfig &config = *config_owner;
 
     // Process input files, save in prop and systsstructs
     PROpeller prop;
@@ -81,6 +89,7 @@ int main(int argc, char* argv[])
     const std::vector<std::string> all_spline_names = variable_systs[config.i_prime].spline_names;
     include_or_exclude_systs(variable_systs, config, options);
     poisson_covariance_check(options, config, variable_systs[config.i_prime]);
+    prior_correlation_check(config, variable_systs[config.i_prime], all_spline_names);
     // fakedataparams (the profile's injected-truth markers) must follow the fitted layout.
     fakedataparams = remap_spline_params(fakedataparams, model->nparams, all_spline_names, variable_systs[config.i_prime].spline_names);
 
@@ -181,6 +190,7 @@ int main(int argc, char* argv[])
     // Before set_global_bounds: the reference check reads the model's XML ranges, not --fix pins.
     set_covariance_options(config, options, *model, variable_systs[config.i_prime]);
     set_global_bounds(global_lb, global_ub, global_fixed, config, options, *model, variable_systs[config.i_prime], CVParams);
+    prior_sampler_check(config, variable_systs);
 
     //Metric Time
     //Metrics are for i_prime only for now

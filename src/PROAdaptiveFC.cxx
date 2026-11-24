@@ -1144,11 +1144,12 @@ AdaptiveFCResult run_adaptive_fc(
 
         // Throw-invariant fractional-covariance root, hoisted out of the per-throw loop.
         const Eigen::MatrixXf brazil_frac_root = CovarianceThrowRoot(config, systs);
+        const SplinePriorSampler brazil_prior_sampler(config, systs);
 
         for (int t_new = 0; t_new < n_new; ++t_new) {
             const int t_abs = n_existing + t_new;
             PROdata throw_data = generate_pseudo_experiment_data(
-                config, prop, systs, *model, fakeDataParams, acfg.binned, brazil_frac_root, proseed);
+                config, prop, systs, *model, fakeDataParams, acfg.binned, brazil_frac_root, brazil_prior_sampler, proseed);
 
             AsimovObs obs = compute_asimov_obs(
                 config, prop, systs, *model, fitconfig, throw_data,

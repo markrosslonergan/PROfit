@@ -70,6 +70,7 @@ namespace PRObench {
         Bench_MCMC_Post        = 1u << 13, ///< (n) Metropolis::step() post-burnin (tune_mode=false; cached proposal Cholesky, no tune()).
         Bench_GradCheck        = 1u << 14, ///< (o) Gradient cross-validation: every mode (incl. analytic) vs the central-full FD reference at random points. [GRADCHECK] lines.
         Bench_GradModeFit      = 1u << 15, ///< (p) Repeated full PROfitter::Fit per gradient mode with matched seeds; logs wall time, LBFGS iterations, metric calls, best chi². [GRADBENCH] lines.
+        Bench_PriorThrow       = 1u << 16, ///< (q) SplinePriorSampler validation on synthetic priors (moments, conditioning, truncation, acceptance guard). [PRIORTHROW] lines. Not in Bench_All.
         Bench_FillSpectra_Group = Bench_FillSpectra_All | Bench_FillSpectra_Phys | Bench_FillSpectra_Nuis,
         Bench_Metric_Group      = Bench_Metric_All       | Bench_Metric_Phys       | Bench_Metric_Nuis,
         Bench_MetricGrad_Group  = Bench_MetricGrad_All   | Bench_MetricGrad_Phys   | Bench_MetricGrad_Nuis,

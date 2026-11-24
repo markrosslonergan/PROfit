@@ -17,6 +17,7 @@
 
 #include "PROAdaptiveFC.h"
 #include "PROmodel.h"
+#include "PROsplinePrior.h"
 
 #include <Eigen/Eigen>
 
@@ -77,6 +78,7 @@ PROdata generate_pseudo_experiment_data(
     const Eigen::VectorXf &fakeDataParams,
     bool binned,
     const Eigen::MatrixXf &frac_root,
+    const SplinePriorSampler &prior_sampler,
     PROseed &proseed);
 
 // --------------------------------------------------------------------

@@ -1,4 +1,5 @@
 #include "PROplot.h"
+#include "PROsplinePrior.h"
 #include "PROparallel.h"
 #include "PROwatermark.h"
 #include "TStyle.h"
@@ -345,9 +346,10 @@ namespace PROfit{
         // Warm the decomposition cache here: otherwise every worker misses it at once and
         // each recomputes the same eigendecomposition.
         if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovariance(config, cv_spec.Spec());
+        const SplinePriorSampler prior_sampler(config, syst);
         //Fills already collapsed
         parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
-            Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, seeds[i], other_index).Spec();
+            Eigen::VectorXf var = FillSystRandomThrow(config, prop, syst, model,cv_spec, cvparams, seeds[i], other_index, prior_sampler).Spec();
             if(shape_norm) var = var.cwiseProduct(ChannelNormFactors(config, var, cv, other_index));
             specs[i] = var;
         });
@@ -470,10 +472,11 @@ namespace PROfit{
         std::vector<Eigen::VectorXf> sig_specs(nerrorsample), bkg_specs(nerrorsample);
         // Warm the (uncollapsed) decomposition cache once, as in getErrorBand.
         if(syst.GetNCovar() != 0) syst.DecomposeFractionalCovarianceFull(config, cv_spec.Spec());
+        const SplinePriorSampler prior_sampler(config, syst);
         parallel_for(nerrorsample, PROsyst::spline2cov_nthreads, [&](size_t i) {
             // Subtract each throw's OWN background so bkg systematic variations
             // cancel: the band that comes out is signal-only.
-            auto [sig, bkg] = FillSystRandomThrowSplit(config, prop, syst, model, cv_spec, cvparams, seeds[i], other_index, mask);
+            auto [sig, bkg] = FillSystRandomThrowSplit(config, prop, syst, model, cv_spec, cvparams, seeds[i], other_index, mask, prior_sampler);
             sig_specs[i] = sig.Spec();
             bkg_specs[i] = bkg.Spec();
         });
@@ -2731,10 +2734,27 @@ namespace PROfit{
                         hvec.push_back(h);
                     }
 
-                    for (size_t i = 0; i < nbins; ++i) {
-                        hsum->SetBinContent(i+1, sqrt(hsum->GetBinContent(i+1)));
+                    // Correlated spline priors: add their cross terms (signed) to the quadrature sum.
+                    const bool has_cross = allsplinesyst.HasSyst(PROsyst::prior_cross_terms_name);
+                    if(has_cross) {
+                        const Eigen::MatrixXf cross_cov = collapsed_full_of(PROsyst::prior_cross_terms_name)(channel_bins, channel_bins);
+                        const Eigen::MatrixXf channel_diag = collapsed_diag(channel_bins, channel_bins);
+                        const size_t nx = config.m_channel_variable_bins[channel][other_index].NBinsAlong(0);
+                        const size_t ny = config.m_channel_variable_dims[channel][other_index] == 2
+                            ? config.m_channel_variable_bins[channel][other_index].NBinsAlong(1) : 1;
+                        for(size_t ix = 0; ix < nx && ix < nbins; ++ix) {
+                            double var = 0.0, cv1d = 0.0;
+                            for(size_t j = ny*ix; j < ny*(ix+1); ++j) {
+                                cv1d += channel_diag(j, j);
+                                for(size_t k = ny*ix; k < ny*(ix+1); ++k) var += cross_cov(j, k);
+                            }
+                            if(cv1d > 0) hsum->SetBinContent(ix+1, hsum->GetBinContent(ix+1) + var/(cv1d*cv1d));
+                        }
                     }
-                    leg->AddEntry(hsum,"Sum","l");
+                    for (size_t i = 0; i < nbins; ++i) {
+                        hsum->SetBinContent(i+1, sqrt(std::max(0.0, hsum->GetBinContent(i+1))));
+                    }
+                    leg->AddEntry(hsum, has_cross ? "Sum (incl. prior correlations)" : "Sum","l");
                     hsum->SetXTitle(config.GetChannelAxisTitle(channel, other_index, 0).c_str());
                     hsum->SetTitle(("Summary: "+name).c_str());
                     hsum->SetYTitle("Fractional Uncertainty");

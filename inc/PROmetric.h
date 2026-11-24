@@ -18,6 +18,7 @@
 #include "PROconfig.h"
 #include "PROdata.h"
 #include "PROcess.h"
+#include "PROsplinePrior.h"
 
 #include <Eigen/Eigen>
 #include <atomic>
@@ -620,6 +621,12 @@ namespace PROfit {
             bool correlated_systematics;          ///< Whether correlated nuisance priors are enabled.
             Eigen::MatrixXf prior_covariance;     ///< Prior covariance for nuisance parameters.
             Eigen::MatrixXf prior_covariance_inv; ///< Cached inverse prior covariance.
+
+            /// (Re)build the spline prior from @p config and the current syst (SplinePriorCovariance).
+            void buildSplinePrior(const PROconfig &config) {
+                prior_covariance = SplinePriorCovariance(config, *syst, correlated_systematics);
+                prior_covariance_inv = SplinePriorPrecisionFromCovariance(prior_covariance);
+            }
 
             FillSpectraCache fs_cache; ///< Per-metric cache for FillSpectra.
 

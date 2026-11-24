@@ -54,40 +54,8 @@ PROpoisson::PROpoisson(const std::string tag, const PROconfig &conin, const PROp
     if(conin.m_covariance_options.lndet || conin.m_covariance_options.fixed())
         log<LOG_WARNING>(L"%1% || The covariance options (ln det M, fixed M) do not apply to the Poisson likelihood; ignored.") % __func__;
 
-    // Build the correlation matrix between priors if configured to
-    if (conin.m_mcgen_correlations.size()) {
-        correlated_systematics = true;
-        prior_covariance = Eigen::MatrixXf::Identity(syst->GetNSplines(), syst->GetNSplines());
-        for (auto const &t: conin.m_mcgen_correlations) {
-          auto itA = std::find(systin->spline_names.begin(), systin->spline_names.end(), std::get<0>(t));
-          if (itA == systin->spline_names.end()) {
-            log<LOG_WARNING>(L"%1% || Systematic correlation %2% not in list. Skipping.") % __func__ % std::get<0>(t).c_str();
-            continue;
-          }
-
-          auto itB = std::find(systin->spline_names.begin(), systin->spline_names.end(), std::get<1>(t));
-          if (itB == systin->spline_names.end()) {
-            log<LOG_WARNING>(L"%1% || Systematic correlation %2% not in list. Skipping.") % __func__ % std::get<1>(t).c_str();
-            continue;
-          }
-         
-          int iA = std::distance(systin->spline_names.begin(), itA);
-          int iB = std::distance(systin->spline_names.begin(), itB);
-
-          // set correlations
-          prior_covariance(iA, iB) = std::get<2>(t);
-          prior_covariance(iB, iA) = std::get<2>(t);
-        }
-        prior_covariance = systin->spline_priors.asDiagonal() * prior_covariance * systin->spline_priors.asDiagonal();
-        for(size_t i = 0; i < systin->spline_prior_types.size(); ++i) {
-            if (systin->spline_prior_types[i] == SplinePriorType::Uniform) {
-                prior_covariance.row(i).setZero();
-                prior_covariance.col(i).setZero();
-                prior_covariance(i, i) = 1.0f;
-            }
-        }
-        prior_covariance_inv = prior_covariance.inverse();
-    }
+    // Same prior as the covariance metrics, PROjector's external covariance included.
+    buildSplinePrior(conin);
 }
 
 void PROpoisson::reset() {

@@ -307,6 +307,74 @@ int PROconfig::ResolveFitVariableFromXML(tinyxml2::XMLDocument &doc) const {
     return resolved;
 }
 
+void PROconfig::ValidateCorrelations() const {
+    if(m_mcgen_correlations.empty()) return;
+    // Types whose XML name is itself a Gaussian spline fit parameter. Everything else is a
+    // covariance (no parameter), a derived set of parameters (eigenmode knobs, per-bin
+    // scales), or is converted away (spline_to_covariance), so a correlation could not act.
+    static const std::set<std::string> parameter_types = {"spline", "norm", "hist1d", "hist2d", "explicit_spline"};
+    const auto fail = [](const std::string &msg) {
+        log<LOG_ERROR>(L"%1% || %2%") % "ValidateCorrelations" % msg.c_str();
+        throw std::invalid_argument(msg);
+    };
+
+    std::vector<std::string> names;
+    std::map<std::string, size_t> index;
+    std::set<std::pair<std::string, std::string>> seen;
+    for(const auto &[a, b, rho] : m_mcgen_correlations) {
+        const std::string pair = "<correlation> " + a + " " + b + " " + std::to_string(rho);
+        if(!std::isfinite(rho) || std::abs(rho) >= 1.0f)
+            fail(pair + ": the correlation must satisfy |rho| < 1 (|rho| = 1 makes the prior singular).");
+        if(a == b)
+            fail(pair + ": a systematic cannot be correlated with itself.");
+        if(!seen.insert(std::minmax(a, b)).second)
+            fail(pair + ": this pair is listed more than once.");
+        for(const std::string &n : {a, b}) {
+            auto it = m_mcgen_variation_type_map.find(n);
+            if(it == m_mcgen_variation_type_map.end()) {
+                for(const auto &[parent, children] : m_mcgen_variation_children)
+                    if(std::find(children.begin(), children.end(), n) != children.end())
+                        fail(pair + ": '" + n + "' is a derived parameter of systematic '" + parent +
+                             "'; derived parameters cannot be correlated.");
+                fail(pair + ": '" + n + "' is not a declared systematic (names are the XML systematic names, not plotnames).");
+            }
+            if(!parameter_types.count(it->second))
+                fail(pair + ": '" + n + "' has type=\"" + it->second + "\", which does not give a Gaussian spline fit parameter of that name. "
+                     "Only spline, norm, hist1d, hist2d and explicit_spline systematics can be correlated.");
+            if(GetSplinePriorType(n) == SplinePriorType::Uniform)
+                fail(pair + ": '" + n + "' has a uniform prior; only Gaussian priors can be correlated.");
+            auto pit = m_mcgen_variation_prior.find(n);
+            const float sigma = pit == m_mcgen_variation_prior.end() ? 1.0f : pit->second;
+            if(!std::isfinite(sigma) || !(sigma > 0.0f))
+                fail(pair + ": '" + n + "' has prior=" + std::to_string(sigma) + "; a correlated prior needs a finite width > 0.");
+            if(!index.count(n)) { index[n] = names.size(); names.push_back(n); }
+        }
+    }
+
+    // The correlation matrix of every named systematic must be positive definite; then so is
+    // every principal submatrix, i.e. the prior of any later selection of these splines.
+    const Eigen::Index n = (Eigen::Index)names.size();
+    Eigen::MatrixXd R = Eigen::MatrixXd::Identity(n, n);
+    for(const auto &[a, b, rho] : m_mcgen_correlations) {
+        R(index.at(a), index.at(b)) = rho;
+        R(index.at(b), index.at(a)) = rho;
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(R);
+    const double lmin = es.eigenvalues()(0);
+    if(es.info() != Eigen::Success || !(lmin > 1e-6)) {
+        std::ostringstream os;
+        os << "The <correlation> entries do not form a valid (positive-definite) correlation matrix: smallest eigenvalue "
+           << lmin << ". The direction at fault involves:";
+        const Eigen::VectorXd v = es.eigenvectors().col(0);
+        for(Eigen::Index k = 0; k < n; ++k)
+            if(std::abs(v(k)) > 0.2) os << " " << names[k] << " (" << v(k) << ")";
+        os << ". Pairwise |rho| < 1 is not enough: e.g. rho(A,B) = rho(B,C) = 0.9 forces rho(A,C) > 0.62.";
+        fail(os.str());
+    }
+    log<LOG_INFO>(L"%1% || %2% <correlation> entries over %3% spline priors validated (smallest correlation eigenvalue %4%).")
+        % __func__ % m_mcgen_correlations.size() % n % lmin;
+}
+
 void PROconfig::ValidateFitVariable() const {
 
     if(i_prime >= m_num_variables) {
@@ -2025,15 +2093,25 @@ int PROconfig::LoadFromXML(const std::string &filename){
         }
     }
 
-    // Correlations between systematics
+    // Correlations between systematics. Everything beyond the syntax (types, priors, positive
+    // definiteness) is checked by ValidateCorrelations once all systematics are expanded.
     while (pCorrelations) {
-        std::stringstream tup(pCorrelations->GetText());
+        const char *text = pCorrelations->GetText();
+        std::stringstream tup(text ? text : "");
         std::string s;
         std::vector<std::string> split;
-        while (getline(tup, s, ' ')) split.push_back(s);
+        while (tup >> s) split.push_back(s);
 
         if (split.size() != 3) {
-            throw std::invalid_argument(std::string("Correlations should be formed as <Systematic A> <Systematic B> <Correlation>. Could not parse: ") + std::string(pCorrelations->GetText()));
+            throw std::invalid_argument(std::string("Correlations should be formed as <Systematic A> <Systematic B> <Correlation>. Could not parse: ") + std::string(text ? text : ""));
+        }
+        float rho = 0.0f;
+        try {
+            size_t used = 0;
+            rho = std::stof(split[2], &used);
+            if(used != split[2].size()) throw std::invalid_argument("trailing characters");
+        } catch(const std::exception &) {
+            throw std::invalid_argument("<correlation> " + split[0] + " " + split[1] + ": '" + split[2] + "' is not a number");
         }
 
         const auto is_uniform = [this](const std::string &name) {
@@ -2045,7 +2123,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
                 split[0] + " " + split[1]
             );
         }
-        m_mcgen_correlations.push_back(std::make_tuple(split[0], split[1], std::stof(split[2])));
+        m_mcgen_correlations.push_back(std::make_tuple(split[0], split[1], rho));
 
         pCorrelations = pCorrelations->NextSiblingElement("correlation");
     }
@@ -2488,6 +2566,7 @@ int PROconfig::LoadFromXML(const std::string &filename){
     this->RegisterBinnedUnconstrainedChildren();
     this->ResolveSplineCrossQuadMembers();
     this->ResolveCovarianceToSplineUniformSources();
+    this->ValidateCorrelations();
 
     log<LOG_INFO>(L"%1% || Checking number of Mode/Detector/Channel/Subchannels and BINs") % __func__;
     log<LOG_INFO>(L"%1% || num_modes: %2% ") % __func__ % m_num_modes;
@@ -3182,17 +3261,6 @@ void PROconfig::RegisterBinnedUnconstrainedChildren(){
         // The parent itself never becomes a fit parameter, but marking it uniform lets the
         // generic prior-type query reject it everywhere a Gaussian prior would be assumed.
         m_mcgen_variation_prior_types[parent] = SplinePriorType::Uniform;
-
-        // <correlation> entries were parsed before this expansion, so check them here.
-        for(const auto &[a, b, rho] : m_mcgen_correlations){
-            const bool hits = (a == parent || b == parent ||
-                               std::find(children.begin(), children.end(), a) != children.end() ||
-                               std::find(children.begin(), children.end(), b) != children.end());
-            if(hits){
-                throw std::invalid_argument(std::string("binned_unconstrained systematic '") + parent +
-                    "' (or one of its per-bin parameters) cannot appear in a Gaussian <correlation> entry: " + a + " " + b);
-            }
-        }
 
         log<LOG_INFO>(L"%1% || binned_unconstrained systematic '%2%' -> %3% free per-bin parameters (%4%_bin0..%4%_bin%5%) in binning %6%, scale range [%7%, %8%], shared across subchannels %9%")
             % __func__ % parent.c_str() % nlocal % parent.c_str() % (nlocal - 1) % binning % range.first % range.second % names;

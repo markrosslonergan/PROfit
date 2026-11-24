@@ -16,6 +16,7 @@
 
 //C++ include 
 #include <Eigen/Eigen>
+#include <optional>
 #include <string>
 #include <vector>
 #include <map>
@@ -185,6 +186,40 @@ namespace PROfit {
              * @return Fractional covariance matrix for the specified spline.
              */
             Eigen::MatrixXf spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const ;
+
+            /**
+             * @brief Fractional shift of one spline as a piecewise cubic in its prior's z-score.
+             * @details u_k(z) = 1 - f_k(centre + prior z)/f_k(x0) for every bin k of other_index,
+             * with x0 the spline's value in params. On knot interval i (z in [zl_i, zh_i)),
+             * u(z) = E_i [1 z z^2 z^3]^T. A zero-width prior gives the constant u0 instead.
+             */
+            struct ShiftExpansion {
+                bool point = false;                ///< Prior width 0: u is the constant u0.
+                Eigen::VectorXd u0;
+                std::vector<double> zl, zh;        ///< Knot intervals in z (+-inf at the ends).
+                std::vector<Eigen::MatrixXd> E;    ///< nb x 4 cubic coefficients per interval.
+            };
+
+            /**
+             * @brief The closed form behind spline2cov, or nullopt where the binned prediction does
+             * not factorise in this spline (get_counts models, quadratic-group members) or its
+             * factor vanishes at params.
+             */
+            std::optional<ShiftExpansion> shiftExpansion(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params) const;
+
+            /**
+             * @brief Fractional covariance that correlated spline priors add to the per-spline
+             * spline2cov matrices: sum over correlated pairs of Cov(u_i, u_j) + Cov(u_j, u_i).
+             * @details Prior correlations from SplinePriorCovariance; empty when there are none.
+             * Exact (closed-form conditional Gaussian moments, adaptive quadrature in z_i) when
+             * both splines have a shiftExpansion, else from spline2cov_throws paired throws of the
+             * bivariate prior seeded from @p seed. Untruncated, like spline2cov. The result is
+             * indefinite; allsplines2cov stores it under prior_cross_terms_name.
+             */
+            Eigen::MatrixXf PriorCorrelationCrossTerms(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const;
+
+            /// Key of the hidden covariance entry holding PriorCorrelationCrossTerms in allsplines2cov's result (not in covar_names).
+            inline static const std::string prior_cross_terms_name = "__prior_correlation_cross_terms";
 
             /// Random throws per spline where spline2cov has no closed form (--syst-throws; default 500).
             inline static size_t spline2cov_throws = 500;

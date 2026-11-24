@@ -293,6 +293,10 @@ void resolve_fit_presets(PROpt &options, const PROconfig &config, const PROmodel
 void include_or_exclude_systs(std::vector<PROsyst> &variable_systs, const PROconfig &config, const PROpt &options);
 // Fatal if -c poisson would silently ignore a covariance-type systematic (incl. mcstat).
 void poisson_covariance_check(const PROpt &options, const PROconfig &config, const PROsyst &systs);
+/// Fatal if a <correlation> partner is not a fit parameter for a reason other than the user's selection.
+void prior_correlation_check(const PROconfig &config, const PROsyst &systs, const std::vector<std::string> &all_spline_names);
+/// Build each variable's SplinePriorSampler once; fatal if a correlated block cannot be thrown.
+void prior_sampler_check(const PROconfig &config, const std::vector<PROsyst> &variable_systs);
 // Statistical overlap (PROoverlap.h): metric and data/MC/toy consistency, fatal on misuse.
 void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROdata &data, bool use_real_data);
 // Re-lay the spline part of a [physics, splines] vector from old_names' order onto new_names'

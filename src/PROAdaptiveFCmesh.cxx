@@ -40,15 +40,6 @@
 namespace PROfit {
 namespace afc {
 
-// Truncated-Gaussian nuisance throws use the shared, bounded, OOB-safe
-// ThrowRestrictedSplinePull from PROcess.h (pattern from commit 000b3d0).
-static float throw_restricted_spline(const PROsyst &systs, size_t i,
-                                     std::mt19937 &rng,
-                                     std::normal_distribution<float> &d)
-{
-    return ThrowRestrictedSplinePull(systs, i, rng, d);
-}
-
 // ====================================================================
 //  Section 1a — run_throw_global_fit
 //
@@ -237,6 +228,7 @@ std::vector<PROmesh::AMRResult> generate_throws(
     PROspec collapsed_cv = PROspec(CollapseMatrix(config, cv.Spec()),
                                    CollapseMatrix(config, cv.Error()));
     const Eigen::MatrixXf frac_root = CovarianceThrowRoot(config, systs);
+    const SplinePriorSampler prior_sampler(config, systs);
 
     // Convert acfg axis bounds back to *transformed* (log/lin) space — that's
     // what PROmesh expects and what PROsurf::FillSurfaceAMR uses (see line
@@ -272,12 +264,9 @@ std::vector<PROmesh::AMRResult> generate_throws(
         Eigen::VectorXf throwp = fakeDataParams;
 
         if (!acfg.stat_only_throws) {
-            // Truncated to each spline's allowed range — keeps the mesh throws
-            // statistically consistent with the PE throws in run_one_pe /
-            // generate_pseudo_experiment_data.
-            for (size_t i = 0; i < systs.GetNSplines(); ++i) {
-                throwp((int)(i + N_phys_params)) = throw_restricted_spline(systs, i, PROseed::global_rng, d);
-            }
+            // The fit's spline prior (truncated, correlated, conditioned on pins), as in
+            // run_one_pe / generate_pseudo_experiment_data.
+            prior_sampler.Throw(throwp.segment(N_phys_params, systs.GetNSplines()), PROseed::global_rng, d);
         }
         const bool binned_flag = acfg.binned;
         PROspec shifted = FillSpectra(config, prop, systs, model, throwp, binned_flag, config.i_prime);
@@ -773,6 +762,7 @@ PROdata generate_pseudo_experiment_data(
     const Eigen::VectorXf &fakeDataParams,
     bool binned,
     const Eigen::MatrixXf &frac_root,
+    const SplinePriorSampler &prior_sampler,
     PROseed &proseed)
 {
     const size_t nphys   = model.nparams;
@@ -782,9 +772,7 @@ PROdata generate_pseudo_experiment_data(
     std::uniform_int_distribution<uint32_t> dseed(0, std::numeric_limits<uint32_t>::max());
 
     Eigen::VectorXf throws = fakeDataParams;
-    for (size_t i = 0; i < nspline; ++i) {
-        throws((int)(i + nphys)) = throw_restricted_spline(systs, i, PROseed::global_rng, d);
-    }
+    prior_sampler.Throw(throws.segment(nphys, nspline), PROseed::global_rng, d);
 
     PROspec shifted = FillSpectra(config, prop, systs, model, throws, binned, config.i_prime);
     if (prop.overlap) {

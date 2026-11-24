@@ -11,6 +11,7 @@
 #include "PROspec.h"
 #include "PROtocall.h"
 #include "PROMCMC.h"
+#include "PROsplinePrior.h"
 
 #include <Eigen/Eigen>
 
@@ -540,7 +541,11 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
         // Fractional-covariance root; each universe scales it by its own prediction,
         // so a thrown physics point needs no re-factorization.
         Eigen::MatrixXf frac_root;
-        if (throw_systs) frac_root = CovarianceThrowRoot(config, syst);
+        SplinePriorSampler prior_sampler;
+        if (throw_systs) {
+            frac_root = CovarianceThrowRoot(config, syst);
+            prior_sampler = SplinePriorSampler(config, syst);
+        }
         for (int u = 0; u < n_universes; ++u) {
             Eigen::VectorXf tp = nominal;
             if (throw_phys) {
@@ -560,8 +565,7 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
                 }
             }
             if (throw_systs)
-                for (size_t i = 0; i < nspline; ++i)
-                    tp((Eigen::Index)(nphys + i)) = ThrowRestrictedSplinePull(syst, i, rng, nd);
+                prior_sampler.Throw(tp.segment((Eigen::Index)nphys, (Eigen::Index)nspline), rng, nd);
             PROspec shifted = FillSpectra(config, prop, syst, model, tp, true, io);
             Eigen::VectorXf coll  = CollapseMatrix(config, shifted.Spec(), io);
             Eigen::VectorXf collE = CollapseMatrix(config, shifted.Error(), io);
@@ -737,6 +741,171 @@ void run_grad_mode_fits(const PROconfig &config, const PROpeller &prop,
 
 }  // namespace
 
+namespace {
+
+// One synthetic prior on a copy of the run's systematics: the splines in `idx` get the
+// covariance `cov` (installed as an external prior, as PROjector does), centre 0 and the box
+// [lo_k, hi_k]; every other spline keeps its own marginal prior. Returns the sample moments of
+// the `idx` splines over `ndraw` throws.
+struct PriorMoments { Eigen::VectorXd mean; Eigen::MatrixXd cov; };
+
+PROsyst synthetic_prior(const PROsyst &base, const std::vector<size_t> &idx, const Eigen::MatrixXd &cov,
+                        const std::vector<double> &lo, const std::vector<double> &hi) {
+    PROsyst s = base;
+    const size_t n = s.GetNSplines();
+    s.spline_has_restrict.resize(n, false);
+    s.spline_restrict_lo.resize(n, 0.0f);
+    s.spline_restrict_hi.resize(n, 0.0f);
+    s.external_prior_cov = Eigen::MatrixXf::Zero(n, n);
+    for(size_t i = 0; i < n; ++i) s.external_prior_cov(i, i) = s.spline_priors(i) * s.spline_priors(i);
+    for(size_t a = 0; a < idx.size(); ++a) {
+        const size_t i = idx[a];
+        s.spline_centers(i) = 0.0f;
+        s.spline_priors(i) = (float)std::sqrt(cov(a, a));
+        s.spline_has_restrict[i] = true;
+        s.spline_restrict_lo[i] = (float)lo[a];
+        s.spline_restrict_hi[i] = (float)hi[a];
+        for(size_t b = 0; b < idx.size(); ++b) s.external_prior_cov(i, idx[b]) = (float)cov(a, b);
+    }
+    s.has_external_prior_cov = true;
+    return s;
+}
+
+PriorMoments sample_prior(const PROconfig &config, const PROsyst &s, const std::vector<size_t> &idx, int ndraw, uint32_t seed) {
+    const SplinePriorSampler sampler(config, s);
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> d;
+    Eigen::VectorXf x(s.GetNSplines());
+    const Eigen::Index k = (Eigen::Index)idx.size();
+    Eigen::VectorXd s1 = Eigen::VectorXd::Zero(k);
+    Eigen::MatrixXd s2 = Eigen::MatrixXd::Zero(k, k);
+    for(int t = 0; t < ndraw; ++t) {
+        sampler.Throw(x, rng, d);
+        Eigen::VectorXd v(k);
+        for(Eigen::Index a = 0; a < k; ++a) v(a) = x(idx[a]);
+        s1 += v;
+        s2.noalias() += v * v.transpose();
+    }
+    PriorMoments m;
+    m.mean = s1 / ndraw;
+    m.cov = s2 / ndraw - m.mean * m.mean.transpose();
+    return m;
+}
+
+// Largest |z| of the sample mean and covariance against Gaussian targets (sampling errors of a
+// Gaussian sample: Var(mean_i) = C_ii/N, Var(cov_ij) = (C_ii C_jj + C_ij^2)/N).
+double max_moment_z(const PriorMoments &m, const Eigen::VectorXd &mu, const Eigen::MatrixXd &C, int ndraw) {
+    double z = 0.0;
+    for(Eigen::Index a = 0; a < mu.size(); ++a) {
+        z = std::max(z, std::abs(m.mean(a) - mu(a)) / std::sqrt(C(a, a) / ndraw));
+        for(Eigen::Index b = 0; b <= a; ++b)
+            z = std::max(z, std::abs(m.cov(a, b) - C(a, b)) / std::sqrt((C(a, a) * C(b, b) + C(a, b) * C(a, b)) / ndraw));
+    }
+    return z;
+}
+
+void emit_prior_check(const std::string &name, bool pass, const std::string &detail) {
+    log<LOG_INFO>(L"[PRIORTHROW] case=%1% %2% %3%") % name.c_str() % (pass ? "PASS" : "FAIL") % detail.c_str();
+}
+
+}  // namespace
+
+// Statistical validation of SplinePriorSampler (scale-test --tests priorthrow). Synthetic priors
+// are installed on copies of the run's systematics; every check has an answer computed without
+// the sampler. Emits one [PRIORTHROW] line per case.
+void run_prior_throw_check(const PROconfig &config, const PROsyst &syst, int ndraw, uint32_t seed) {
+    std::vector<size_t> gauss;
+    for(size_t i = 0; i < syst.GetNSplines(); ++i)
+        if(!(i < syst.spline_prior_types.size() && syst.spline_prior_types[i] == SplinePriorType::Uniform)) gauss.push_back(i);
+    const double zcut = 5.0;
+
+    // Without correlations the sampler must reproduce the historic per-spline draws bit for bit.
+    if(!syst.has_external_prior_cov && config.m_mcgen_correlations.empty()) {
+        const SplinePriorSampler sampler(config, syst);
+        std::mt19937 r1(seed), r2(seed);
+        std::normal_distribution<float> d1, d2;
+        Eigen::VectorXf x(syst.GetNSplines());
+        bool same = true;
+        for(int t = 0; t < 1000 && same; ++t) {
+            sampler.Throw(x, r1, d1);
+            for(size_t i = 0; i < syst.GetNSplines(); ++i)
+                if(x(i) != ThrowRestrictedSplinePull(syst, i, r2, d2)) { same = false; break; }
+        }
+        emit_prior_check("legacy_bitwise", same, "(1000 throws vs ThrowRestrictedSplinePull)");
+    }
+
+    if(gauss.size() < 3) {
+        log<LOG_WARNING>(L"%1% || priorthrow: needs at least 3 Gaussian splines; synthetic cases skipped.") % __func__;
+        return;
+    }
+    const std::vector<size_t> g3(gauss.begin(), gauss.begin() + 3);
+
+    {   // A: untruncated correlated block — moments and the mean Mahalanobis distance (= 3).
+        Eigen::MatrixXd C(3, 3);
+        C << 1.0, 0.6, 0.3,  0.6, 2.0, -0.5,  0.3, -0.5, 0.5;
+        const PROsyst s = synthetic_prior(syst, g3, C, {-60, -60, -60}, {60, 60, 60});
+        const PriorMoments m = sample_prior(config, s, g3, ndraw, seed ^ 0xA1u);
+        const double z = max_moment_z(m, Eigen::VectorXd::Zero(3), C, ndraw);
+        const double maha = (C.inverse() * (m.cov + m.mean * m.mean.transpose())).trace();
+        const double zm = std::abs(maha - 3.0) / std::sqrt(6.0 / ndraw);
+        std::ostringstream os;
+        os << "max_z=" << z << " mahalanobis=" << maha << " (3 +- " << std::sqrt(6.0 / ndraw) << ")";
+        emit_prior_check("untruncated", z < zcut && zm < zcut, os.str());
+    }
+    {   // B: chain A-P-B, S_AB = 0, P pinned at 1 — A and B must come out correlated given P.
+        Eigen::MatrixXd C(3, 3);
+        C << 1.0, 0.7, 0.0,  0.7, 1.0, 0.7,  0.0, 0.7, 1.0;
+        const PROsyst s = synthetic_prior(syst, g3, C, {-60, 1.0, -60}, {60, 1.0, 60});
+        const std::vector<size_t> free_ab = {g3[0], g3[2]};
+        const PriorMoments m = sample_prior(config, s, free_ab, ndraw, seed ^ 0xB2u);
+        Eigen::Vector2d mu(0.7, 0.7);
+        Eigen::Matrix2d Cc;
+        Cc << 0.51, -0.49,  -0.49, 0.51;
+        const double z = max_moment_z(m, mu, Cc, ndraw);
+        std::ostringstream os;
+        os << "max_z=" << z << " cov_AB=" << m.cov(0, 1) << " (target -0.49)";
+        emit_prior_check("conditioned_chain", z < zcut, os.str());
+    }
+    {   // C: truncated bivariate (a one-sided-like box), against moments integrated on a grid.
+        Eigen::MatrixXd C(2, 2);
+        C << 1.0, 0.8,  0.8, 1.0;
+        const std::vector<double> lo = {0.0, -1.0}, hi = {3.0, 3.0};
+        const std::vector<size_t> g2 = {g3[0], g3[1]};
+        const PROsyst s = synthetic_prior(syst, g2, C, lo, hi);
+        const PriorMoments m = sample_prior(config, s, g2, ndraw, seed ^ 0xC3u);
+        const Eigen::Matrix2d P = C.inverse();
+        const int ng = 1500;
+        const double hx = (hi[0] - lo[0]) / ng, hy = (hi[1] - lo[1]) / ng;
+        double w0 = 0, wx = 0, wy = 0, wxx = 0, wyy = 0, wxy = 0;
+        for(int a = 0; a < ng; ++a) {
+            const double x = lo[0] + (a + 0.5) * hx;
+            for(int b = 0; b < ng; ++b) {
+                const double y = lo[1] + (b + 0.5) * hy;
+                const double w = std::exp(-0.5 * (P(0, 0) * x * x + 2 * P(0, 1) * x * y + P(1, 1) * y * y));
+                w0 += w; wx += w * x; wy += w * y; wxx += w * x * x; wyy += w * y * y; wxy += w * x * y;
+            }
+        }
+        Eigen::Vector2d mu(wx / w0, wy / w0);
+        Eigen::Matrix2d Ct;
+        Ct << wxx / w0 - mu(0) * mu(0), wxy / w0 - mu(0) * mu(1),  wxy / w0 - mu(0) * mu(1), wyy / w0 - mu(1) * mu(1);
+        // Gaussian sampling-error formula with the truncated moments: approximate for this
+        // non-Gaussian law, ample for a 5-sigma test.
+        const double z = max_moment_z(m, mu, Ct, ndraw);
+        std::ostringstream os;
+        os << "max_z=" << z << " mean=(" << m.mean(0) << "," << m.mean(1) << ") grid=(" << mu(0) << "," << mu(1) << ")";
+        emit_prior_check("truncated_joint", z < zcut, os.str());
+    }
+    if(gauss.size() >= 12) {   // D: twelve one-sided splines: joint acceptance ~1e-5, must be refused.
+        const std::vector<size_t> g12(gauss.begin(), gauss.begin() + 12);
+        Eigen::MatrixXd C = Eigen::MatrixXd::Constant(12, 12, 0.1);
+        C.diagonal().setOnes();
+        const PROsyst s = synthetic_prior(syst, g12, C, std::vector<double>(12, 0.0), std::vector<double>(12, 1.0));
+        bool refused = false;
+        try { SplinePriorSampler sampler(config, s); } catch(const std::runtime_error &) { refused = true; }
+        emit_prior_check("acceptance_guard", refused, "(12 one-sided splines must be refused)");
+    }
+}
+
 std::vector<BenchResult> run_scale_test(
     const PROconfig &config,
     const PROpeller &prop,
@@ -867,6 +1036,11 @@ std::vector<BenchResult> run_scale_test(
         run_grad_check(metric, p);
         // Restore the CLI-selected mode for any tests that follow.
         metric.setGradientMode(fitconfig.gradient_mode);
+    }
+
+    // ---- (q) Spline-prior sampler validation ----
+    if (opts.tests & Bench_PriorThrow) {
+        run_prior_throw_check(config, syst, std::max(1000, 100 * opts.N), opts.rng_seed ^ 0x100u);
     }
 
     // ---- (p) Fit benchmark: preset × gradient-mode sweep ----

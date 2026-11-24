@@ -958,6 +958,64 @@ else
 fi
 run_test t85cprofpois --use-fake-data -i dmsq 1 sinsq2thme 0.02 -c poisson "${PEX[@]}" --profile-nuisances global
 
+# --- 23. Correlated spline priors (<correlation>) ------------------------------
+# Every throw (fc, fc-adaptive, brazil, --pseudo-experiment, bands) draws correlated
+# blocks jointly from the fit's prior (SplinePriorSampler); plot adds the exact
+# cross terms (PROsyst::PriorCorrelationCrossTerms). Correlations are not hashed, so
+# the variants reuse ${TAG}'s binaries. Bad <correlation> input must be refused.
+SAVED_COMMON=("${COMMON[@]}")
+corr_xml() {
+    local out="$1"; shift
+    awk -v extra="$(printf '%s\\n' "$@")" '{print} /<\/variation_list>/ {printf "%s", extra}' local_test.xml > "$out"
+}
+priorthrow_check() {   # <name> <log> <expected PASS lines>
+    local npass nfail
+    npass=$(grep -c "\[PRIORTHROW\] case=.* PASS" "$2" || true)
+    nfail=$(grep -c "\[PRIORTHROW\] case=.* FAIL" "$2" || true)
+    if [ "$npass" = "$3" ] && [ "$nfail" = 0 ]; then
+        note "PASS  $1  ($npass sampler checks)"; PASS=$((PASS+1))
+    else
+        note "FAIL  $1  ($npass PASS / $nfail FAIL [PRIORTHROW] lines, want $3 / 0)"; FAIL=$((FAIL+1))
+    fi
+}
+grep_check() {   # <name> <file> <pattern> <description>
+    if grep -q -- "$3" "$2" 2>/dev/null; then
+        note "PASS  $1  ($4)"; PASS=$((PASS+1))
+    else
+        note "FAIL  $1  (missing: $4)"; FAIL=$((FAIL+1))
+    fi
+}
+corr_xml local_corr.xml "<correlation>Flux1 Flux2 0.6</correlation>" \
+    "<correlation>CrossSection1 DetSys1 -0.6</correlation>" "<correlation>nu_ND_numu:0.02 nu_FD_numu:0.02 0.5</correlation>"
+corr_xml local_corr_rho1.xml "<correlation>Flux1 Flux2 1.0</correlation>"
+corr_xml local_corr_nonpd.xml "<correlation>Flux1 Flux2 0.9</correlation>" \
+    "<correlation>Flux2 Flux3 0.9</correlation>" "<correlation>Flux1 Flux3 -0.9</correlation>"
+corr_xml local_corr_unknown.xml "<correlation>Flux1 NotASyst 0.3</correlation>"
+corr_xml local_corr_dup.xml "<correlation>Flux1 Flux2 0.3</correlation>" "<correlation>Flux2 Flux1 0.3</correlation>"
+corr_xml local_corr_cov.xml "<correlation>Flux1 RPA_CCQE 0.3</correlation>"
+corr_xml local_corr_nan.xml "<correlation>Flux1 Flux2 0.3x</correlation>"
+
+# Sampler statistics; the uncorrelated config also checks the legacy draws bit for bit.
+run_test t86apriorthrow -l logs/t86apriorthrow.full.log -w 3 --use-fake-data scale-test --tests priorthrow -N 100
+priorthrow_check t86bpriorthrowok logs/t86apriorthrow.full.log 5
+COMMON=(-x local_corr.xml -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
+run_test t86cpriorthrowcorr -l logs/t86cpriorthrowcorr.full.log -w 3 --use-fake-data scale-test --tests priorthrow -N 100
+priorthrow_check t86dpriorthrowcorrok logs/t86cpriorthrowcorr.full.log 4
+grep_check t86econrblocks logs/t86cpriorthrowcorr.full.log "thrown jointly (Flux1, Flux2)" "Flux1/Flux2 thrown as one block"
+run_test t86fcorrglobal --use-fake-data global
+run_test t86gcorrfc --use-fake-data fc -u 2
+grep_check t86hcorrfcmeta "${TAG}_t86gcorrfc_FC_meta.txt" "prior_throw: joint" "fc_meta records prior_throw: joint"
+run_test t86icorrpseudo -l logs/t86icorrpseudo.full.log -w 3 --use-fake-data --pseudo-experiment --inject-systs Flux1 1.5 global
+grep_check t86jcorrheld logs/t86icorrpseudo.full.log "conditioned on pinned/held partner(s) Flux1" "Flux2 conditioned on the held Flux1"
+run_test t86kcorrplot -l logs/t86kcorrplot.full.log -w 3 --use-fake-data plot --with-covar
+grep_check t86lcorrcross logs/t86kcorrplot.full.log "cross terms for 3 correlated spline pair(s) (3 closed form" "exact cross terms for the 3 pairs"
+expect_fail t86mcorrprojector --use-fake-data --projector-prefit "_ND_" global
+for bad in rho1 nonpd unknown dup cov nan; do
+    COMMON=(-x "local_corr_${bad}.xml" -t "$TAG" -n 1 -v 2 --seed 405 --preset fast)
+    expect_fail "t86n${bad}" --use-fake-data global
+done
+COMMON=("${SAVED_COMMON[@]}")
+
 note "----------------------------------------------------------------------"
 note "RESULT: $PASS passed, $FAIL failed  (outputs in $RUNDIR)"
 exit "$FAIL"
