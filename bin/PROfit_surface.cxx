@@ -184,6 +184,7 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
 
         PROspec collapsed_cv = PROspec(CollapseMatrix(config, cv.Spec()), CollapseMatrix(config, cv.Error()));
         const Eigen::MatrixXf frac_root = CovarianceThrowRoot(config, metric.GetSysts());
+        const SplinePriorSampler prior_sampler(config, metric.GetSysts());
         // Statistical overlap: expected cells at the throws' truth (MC fractions only); the
         // stat-only throws fluctuate the CV, the others the injected truth.
         std::optional<OverlapFractions> overlap_frac;
@@ -193,12 +194,7 @@ void run_surface(float &global_fit_chi2, Eigen::VectorXf &global_fit_result, con
         }
         for(size_t i = 0; i < (size_t)options.n_brazil_throws; ++i) {
             Eigen::VectorXf throwp = fakeDataParams;
-            // Shared truncated-Gaussian helper: samples each spline's actual prior
-            // N(center, sigma) within its restrict bounds (the raw d(rng) here
-            // ignored both, which was wrong for XML priors and for PROjector's
-            // constrained posterior).
-            for(size_t i = 0; i < metric.GetSysts().GetNSplines(); i++)
-                throwp(i+metric.GetModel().nparams) = ThrowRestrictedSplinePull(metric.GetSysts(), i, PROseed::global_rng, d);
+            prior_sampler.Throw(throwp.segment(metric.GetModel().nparams, metric.GetSysts().GetNSplines()), PROseed::global_rng, d);
             bool binned = (options.eventbyevent ? PROmetric::EventByEvent : PROmetric::BinnedChi2) != 0;
             // Fill the fitting variable explicitly: the CollapseMatrix below uses the
             // i_prime collapsing matrix, so letting var_index default to 0 would mix

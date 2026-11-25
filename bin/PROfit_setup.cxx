@@ -195,7 +195,7 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
             if (options.pseudo_experiment && io == config.i_prime) {
                 // True FC-style pseudo-experiment for the i_prime variable.
                 // Same recipe as src/PROfc.cxx::fc_worker's per-PE body:
-                //   1. Throw spline pulls Gaussian, rejection-sampled within restrict bounds.
+                //   1. Throw the spline prior (truncated to each box, correlated blocks jointly).
                 //   2. Build the shifted spectrum.
                 //   3. Add a covariance fluctuation scaled by that spectrum (ThrowCovarianceShift),
                 //      Poisson-variate.
@@ -205,7 +205,10 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
 
                 const Eigen::MatrixXf frac_root = CovarianceThrowRoot(config, variable_systs[io]);
 
-                // Splines named in --inject-systs are held at their injected value; the rest are thrown.
+                // Splines named in --inject-systs are held at their injected value; the rest are
+                // thrown, correlated partners of a held spline from the prior conditional on it.
+                // This runs before syst selection, PROjector and --fix, so it throws the XML prior
+                // of every spline.
                 std::vector<char> held(nspline, 0);
                 for (const auto &[name, shift]: options.injected_systs) {
                     const int idx = find_spline_index(variable_systs[io], config, name);
@@ -213,14 +216,15 @@ PROdata construct_data(std::vector<PROdata> &variable_data, bool use_real_data, 
                 }
 
                 Eigen::VectorXf throws = fakedataparams;
-                // Shared truncated-Gaussian helper: samples each spline's actual prior
-                // N(center, sigma) within its restrict bounds, OOB-safe (never spins
-                // forever on unreachable bounds; clamps to the in-range value nearest
-                // the prior center and warns).
-                for (size_t i = 0; i < nspline; ++i) {
-                    if (held[i]) continue;
-                    throws((int)(i + nphys)) = ThrowRestrictedSplinePull(variable_systs[io], i, PROseed::global_rng, d);
+                std::optional<SplinePriorSampler> prior_sampler;
+                try {
+                    prior_sampler.emplace(config, variable_systs[io], held,
+                                          Eigen::VectorXf(fakedataparams.segment(nphys, nspline)), true);
+                } catch(const std::exception &e) {
+                    log<LOG_ERROR>(L"%1% || Cannot throw the spline prior for --pseudo-experiment: %2%") % __func__ % e.what();
+                    exit(EXIT_FAILURE);
                 }
+                prior_sampler->Throw(throws.segment(nphys, nspline), PROseed::global_rng, d);
 
                 PROspec shifted = FillSpectra(config, prop, variable_systs[io], model,
                                               throws, !options.eventbyevent, io);
@@ -674,6 +678,40 @@ void poisson_covariance_check(const PROpt &options, const PROconfig &config, con
         % __func__ % covs;
     log<LOG_ERROR>(L"Terminating.");
     exit(EXIT_FAILURE);
+}
+
+void prior_correlation_check(const PROconfig &config, const PROsyst &systs, const std::vector<std::string> &all_spline_names) {
+    // ValidateCorrelations already made every name a declared Gaussian spline; here only the
+    // run's selection can have removed one.
+    for(const auto &[a, b, rho] : config.m_mcgen_correlations) {
+        for(const std::string &n : {a, b}) {
+            if(std::find(systs.spline_names.begin(), systs.spline_names.end(), n) != systs.spline_names.end()) continue;
+            if(std::find(all_spline_names.begin(), all_spline_names.end(), n) != all_spline_names.end()) {
+                log<LOG_INFO>(L"%1% || <correlation> %2% %3% %4%: '%5%' is excluded from this run, so the pair is dropped "
+                        L"(the remaining prior is its exact marginal).") % __func__ % a.c_str() % b.c_str() % rho % n.c_str();
+                continue;
+            }
+            log<LOG_ERROR>(L"%1% || <correlation> %2% %3% %4%: '%5%' is not a spline fit parameter of the fitted variable.")
+                % __func__ % a.c_str() % b.c_str() % rho % n.c_str();
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+void prior_sampler_check(const PROconfig &config, const std::vector<PROsyst> &variable_systs) {
+    // Build every throw's spline prior once, here, so a correlated block whose box cannot be
+    // sampled stops the run before any fit, fc or band starts.
+    for(size_t io = 0; io < variable_systs.size(); ++io) {
+        if(variable_systs[io].GetNSplines() == 0) continue;
+        try {
+            SplinePriorSampler(config, variable_systs[io], {}, Eigen::VectorXf(), io == config.i_prime);
+        } catch(const std::exception &e) {
+            log<LOG_ERROR>(L"%1% || Cannot throw the spline prior of variable %2%: %3%") % __func__ % io % e.what();
+            log<LOG_ERROR>(L"Terminating.");
+            exit(EXIT_FAILURE);
+        }
+    }
 }
 
 void stat_overlap_check(const PROpt &options, const PROpeller &prop, const PROmodel &model, const PROdata &data, bool use_real_data) {

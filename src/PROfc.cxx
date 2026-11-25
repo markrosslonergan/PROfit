@@ -70,16 +70,18 @@ void fc_worker(fc_args args, MultiPROgressBar &progress) {
     if(args.prop.overlap)
         overlap_frac = ComputeOverlapFractions(args.config, args.prop, *model, args.phy_params.head(nphys), args.config.i_prime);
 
+    // The spline prior the toy fits penalise against, correlations and --fix pins included.
+    const SplinePriorSampler prior_sampler(args.config, args.systs);
+
     for(size_t u = 0; u < args.todo; ++u) {
         log<LOG_INFO>(L"%1% | Thread #%2% Throw #%3%") % __func__ % args.thread % u;
         std::normal_distribution<float> d;
-        // Bounded, OOB-safe truncated-Gaussian throws (shared helper; the old
-        // do/while here could spin forever on unreachable restrict bounds).
         // Unthrown splines sit at their prior centre (XML center= / PROjector θ̂), not 0.
-        for(size_t i = 0; i < args.systs.GetNSplines(); i++) {
-            throws(i+nphys) = args.throw_systematics
-                ? ThrowRestrictedSplinePull(args.systs, i, rng, d)
-                : (i < (size_t)args.systs.spline_centers.size() ? args.systs.spline_centers(i) : 0.0f);
+        if(args.throw_systematics) {
+            prior_sampler.Throw(throws.segment(nphys, args.systs.GetNSplines()), rng, d);
+        } else {
+            for(size_t i = 0; i < args.systs.GetNSplines(); i++)
+                throws(i+nphys) = i < (size_t)args.systs.spline_centers.size() ? args.systs.spline_centers(i) : 0.0f;
         }
         // Fill the i_prime variable explicitly: the previous call passed an
         // EvalStrategy enum where FillSpectra takes `bool binned` and let

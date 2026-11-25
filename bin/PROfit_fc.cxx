@@ -154,7 +154,7 @@ struct FCMeta {
     std::vector<std::pair<std::string, std::string>> strs;
 };
 
-static FCMeta makeFCMeta(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &test_point, const Eigen::VectorXf &phys_lb, const Eigen::VectorXf &phys_ub, const PROfitterConfig &scanFitConfig, const PROpt &options, const char *throw_mode) {
+static FCMeta makeFCMeta(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const PROsyst &systs, const Eigen::VectorXf &test_point, const Eigen::VectorXf &phys_lb, const Eigen::VectorXf &phys_ub, const PROfitterConfig &scanFitConfig, const PROpt &options, const char *throw_mode) {
     FCMeta m;
     m.nums.push_back({"meta_version", 1});
     for(size_t i = 0; i < model.nparams; ++i) {
@@ -177,6 +177,11 @@ static FCMeta makeFCMeta(const PROconfig &config, const PROpeller &prop, const P
     m.strs.push_back({"version", PROJECT_VERSION_STR});
     // Toys thrown with the MC statistical overlap (PROoverlap.h) are a different distribution.
     if(prop.overlap) m.strs.push_back({"stat_overlap", std::to_string(OverlapFingerprint(*prop.overlap))});
+    // Correlated spline priors are thrown jointly (SplinePriorSampler) since 2026-11-24;
+    // earlier files threw each spline from its marginal.
+    bool correlated_prior = false;
+    SplinePriorCovariance(config, systs, correlated_prior);
+    if(correlated_prior) m.strs.push_back({"prior_throw", "joint"});
     // ln det M / a fixed M change the statistic of every toy and of the data.
     const PROconfig::CovarianceOptions &co = config.m_covariance_options;
     if(co.lndet) m.nums.push_back({"cov_lndet", 1.0f});
@@ -282,6 +287,14 @@ static bool checkFCMeta(const std::string &filename, const FCMeta &now) {
         log<LOG_ERROR>(L"%1% || --reuse: %2% in %3% is '%4%', this run has '%5%'.") % __func__ % k.c_str() % filename.c_str() % a.c_str() % b.c_str();
         ok = false;
     }
+    std::string stored_throw, now_throw;
+    for(size_t i = 0; i < snames.size(); ++i) if(snames[i] == "prior_throw" && svals[i]) stored_throw = *svals[i];
+    for(const auto &[k, v]: now.strs) if(k == "prior_throw") now_throw = v;
+    if(stored_throw != now_throw)
+        log<LOG_WARNING>(L"%1% || --reuse: spline-prior throw scheme in %2% is '%3%', this run's is '%4%' ('joint' = correlated "
+                L"priors thrown jointly; empty = uncorrelated priors, or a file from before 2026-11-24 that threw every spline from "
+                L"its marginal). Its toys may not follow this run's prior; regenerate it for a calibrated FC.")
+            % __func__ % filename.c_str() % stored_throw.c_str() % now_throw.c_str();
     f->Close(); delete f;
     return ok;
 }
@@ -438,7 +451,7 @@ void run_fc(const PROconfig &config, const PROpeller &prop, PROmetric &metric, c
     size_t nuniv = options.nuniv;
     const std::string FC_file = options.final_output_tag + "_FC.root";
     bool gen_null_dist = true;
-    FCMeta meta = makeFCMeta(config, prop, model, test_point, phys_lb, phys_ub, scanFitConfig, options, throw_mode);
+    FCMeta meta = makeFCMeta(config, prop, model, metric.GetSysts(), test_point, phys_lb, phys_ub, scanFitConfig, options, throw_mode);
     if(profiled) {
         auto lin = [&](size_t i, float v) { return model.is_log10[i] ? std::pow(10.0f, v) : v; };
         for(size_t i = 0; i < nphys; ++i) meta.nums.push_back({"profiled_" + model.param_names[i], (float)free_mask[i]});

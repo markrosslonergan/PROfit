@@ -25,56 +25,7 @@ PROcovariance::PROcovariance(const std::string tag, const PROconfig &conin, cons
       owned_peller(own_config_and_peller ? std::optional<PROpeller>(pin) : std::nullopt),
       config(owned_config ? *owned_config : conin),
       peller(owned_peller ? *owned_peller : pin) {
-    // An externally supplied posterior (PROjector projected mode) takes precedence over
-    // any XML-configured prior correlations: it already IS the full prior covariance.
-    if (systin->has_external_prior_cov) {
-        if (conin.m_mcgen_correlations.size())
-            log<LOG_WARNING>(L"%1% || Both an external prior covariance and XML prior correlations are set; using the external one.") % __func__;
-        correlated_systematics = true;
-        prior_covariance = systin->external_prior_cov;
-        for(size_t i = 0; i < systin->spline_prior_types.size(); ++i) {
-            if (systin->spline_prior_types[i] == SplinePriorType::Uniform) {
-                prior_covariance.row(i).setZero();
-                prior_covariance.col(i).setZero();
-                prior_covariance(i, i) = 1.0f;
-            }
-        }
-        prior_covariance_inv = prior_covariance.inverse();
-    }
-    // Build the correlation matrix between priors if configured to
-    else if (conin.m_mcgen_correlations.size()) {
-        correlated_systematics = true;
-        prior_covariance = Eigen::MatrixXf::Identity(syst->GetNSplines(), syst->GetNSplines());
-        for (auto const &t: conin.m_mcgen_correlations) {
-          auto itA = std::find(systin->spline_names.begin(), systin->spline_names.end(), std::get<0>(t));
-          if (itA == systin->spline_names.end()) {
-            log<LOG_WARNING>(L"%1% || Systematic correlation %2% not in list. Skipping.") % __func__ % std::get<0>(t).c_str();
-            continue;
-          }
-
-          auto itB = std::find(systin->spline_names.begin(), systin->spline_names.end(), std::get<1>(t));
-          if (itB == systin->spline_names.end()) {
-            log<LOG_WARNING>(L"%1% || Systematic correlation %2% not in list. Skipping.") % __func__ % std::get<1>(t).c_str();
-            continue;
-          }
-         
-          int iA = std::distance(systin->spline_names.begin(), itA);
-          int iB = std::distance(systin->spline_names.begin(), itB);
-
-          // set correlations
-          prior_covariance(iA, iB) = std::get<2>(t);
-          prior_covariance(iB, iA) = std::get<2>(t);
-        }
-        prior_covariance = systin->spline_priors.asDiagonal() * prior_covariance * systin->spline_priors.asDiagonal();
-        for(size_t i = 0; i < systin->spline_prior_types.size(); ++i) {
-            if (systin->spline_prior_types[i] == SplinePriorType::Uniform) {
-                prior_covariance.row(i).setZero();
-                prior_covariance.col(i).setZero();
-                prior_covariance(i, i) = 1.0f;
-            }
-        }
-        prior_covariance_inv = prior_covariance.inverse();
-    }
+    buildSplinePrior(conin);
 
     cov_lndet = conin.m_covariance_options.lndet;
     cov_frozen = conin.m_covariance_options.fixed();

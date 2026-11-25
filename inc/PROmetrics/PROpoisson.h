@@ -86,6 +86,7 @@ namespace PROfit{
             virtual void override_systs(const PROsyst &new_syst) {
                 syst = &new_syst;
                 fs_cache.invalidate();
+                buildSplinePrior(config);
             }
 
             /** @brief The analysis configuration (also public as `config`). */

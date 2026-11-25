@@ -32,6 +32,7 @@ void run_bench(const PROconfig &config, const PROpeller &prop, PROmetric &metric
         else if (tok == "grad")        bench_mask |= Bench_Grad_Group;
         else if (tok == "gradcheck" || tok == "o") bench_mask |= Bench_GradCheck;
         else if (tok == "gradmodes" || tok == "gradfit" || tok == "p") bench_mask |= Bench_GradModeFit;
+        else if (tok == "priorthrow" || tok == "q") bench_mask |= Bench_PriorThrow;
         else log<LOG_WARNING>(L"%1% || scale-test: unknown --tests token '%2%' (ignored)") % __func__ % tok.c_str();
     };
     const std::string &s = options.bench_tests_str;

@@ -377,15 +377,6 @@ std::vector<std::vector<float>> pinned_cell_truths(const NuisanceSpec &spec,
     return truths;
 }
 
-// Truncated-Gaussian nuisance throws use the shared, bounded, OOB-safe
-// ThrowRestrictedSplinePull from PROcess.h (pattern from commit 000b3d0).
-static float throw_restricted_spline(const PROsyst &systs, size_t i,
-                                     std::mt19937 &rng,
-                                     std::normal_distribution<float> &d)
-{
-    return ThrowRestrictedSplinePull(systs, i, rng, d);
-}
-
 // --------------------------------------------------------------------
 //  Per-cell PE worker — intentionally kept parallel to
 //  src/PROfc.cxx::fc_worker (the brute-force FC); deduplicating the two
@@ -411,6 +402,7 @@ struct AdaptivePEArgs {
     const PROsyst   *systs;
     const PROmodel  *model;
     const Eigen::MatrixXf *R;    ///< Fractional-covariance root (CovarianceThrowRoot), scaled per PE by its own prediction.
+    const SplinePriorSampler *prior_sampler;  ///< The fit's spline prior, shared read-only by every worker.
     const PROfitterConfig *fitconfig;
     std::string chi2_kind;       ///< "neyman" | "pearson" | "CNP" | "poisson" (legacy aliases accepted)
     bool   binned;
@@ -471,10 +463,8 @@ static PEBankRecord run_one_pe(const AdaptivePEArgs &args)
         lb_osc((int)j)  = lo; ub_osc((int)j)  = hi;
     }
 
-    // Throw splines (Gaussian, respecting restrict ranges; bounded + OOB-safe).
-    for (size_t i = 0; i < nspline; ++i) {
-        throws((int)(i + nphys)) = throw_restricted_spline(systs, i, rng, d);
-    }
+    // Throw splines from the fit's prior (truncated, correlated, conditioned on pins).
+    args.prior_sampler->Throw(throws.segment(nphys, nspline), rng, d);
 
     // Build fake-data spectrum. Fill the i_prime variable explicitly: the
     // previous call passed an EvalStrategy enum where FillSpectra takes
@@ -617,6 +607,7 @@ void schedule_pes(const AdaptiveFCConfig &acfg,
 {
     const int n_cells = (int)cell_truth.size();
     if (n_cells == 0) return;
+    const SplinePriorSampler prior_sampler(config, systs);
 
     // Preserve any pre-existing PEs (top-up support).
     if ((int)bank_out.cell_pes.size() != n_cells) {
@@ -711,6 +702,7 @@ void schedule_pes(const AdaptiveFCConfig &acfg,
                 args.systs  = &systs;
                 args.model  = &model;
                 args.R      = &frac_root;
+                args.prior_sampler = &prior_sampler;
                 args.fitconfig = &fitconfig;
                 args.chi2_kind = acfg.chi2;
                 args.binned    = acfg.binned;

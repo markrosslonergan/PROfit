@@ -7,6 +7,7 @@
 #include "PROlog.h"
 #include "PROtocall.h"
 #include "PROsmooth.h"
+#include "PROsplinePrior.h"
 #include <Eigen/Eigen>
 #include <mutex>
 #include <atomic>
@@ -16,6 +17,8 @@
 #include <set>
 #include <limits>
 #include <array>
+#include <map>
+#include <optional>
 
 namespace PROfit {
 
@@ -109,7 +112,10 @@ namespace PROfit {
             }
             const Eigen::MatrixXf proj = R * covmat[i] * R.transpose();
             covmat[i] = 0.5f * (proj + proj.transpose());
-            if(i < corrmat.size()) corrmat[i] = GenerateCorrMatrix(covmat[i]);
+            // The prior-correlation cross terms are indefinite: no correlation matrix.
+            const auto cross = syst_map.find(prior_cross_terms_name);
+            const bool is_cross = cross != syst_map.end() && cross->second.first == i;
+            if(i < corrmat.size() && !is_cross) corrmat[i] = GenerateCorrMatrix(covmat[i]);
         }
         if(covmat.size()) fractional_covariance = SumMatrices();
     }
@@ -706,6 +712,17 @@ namespace PROfit {
                                        break;
             }
         }
+        // Correlated spline priors: the per-spline matrices above are each spline's marginal
+        // contribution; the covariance between correlated pairs goes in one extra entry. It is
+        // indefinite, so it stays out of covar_names (no per-systematic page or breakdown curve)
+        // but enters fractional_covariance, i.e. the totals and the chi^2 labels.
+        const Eigen::MatrixXf cross = PriorCorrelationCrossTerms(config, prop, model, params, seed);
+        if(cross.size()) {
+            ret.syst_map[prior_cross_terms_name] = std::make_pair(ret.covmat.size(), SystType::Covariance);
+            ret.covmat.push_back(cross);
+            ret.corrmat.push_back(Eigen::MatrixXf::Zero(cross.rows(), cross.cols()));
+            ++ret.n_covar;
+        }
         ret.fractional_covariance = ret.covmat.size() ? ret.SumMatrices()
             : Eigen::MatrixXf::Constant(fractional_covariance.rows(), fractional_covariance.cols(), 0.0f);
         ret.other_index = other_index;
@@ -713,24 +730,22 @@ namespace PROfit {
         return ret;
     }
 
-    Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
-        Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
-
+    std::optional<PROsyst::ShiftExpansion> PROsyst::shiftExpansion(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params) const {
         // Closed form: binned FillSpectra is (H_combined * probs) times a per-bin product of spline
         // factors, so throwing this spline alone to x gives throw(k) = cv(k) f_k(x) / f_k(x0), and
-        // the fractional covariance is exactly F = E[u u^T], u_k = 1 - f_k(x)/f_k(x0), x ~ N(centre,
-        // prior). f_k is a cubic in x between consecutive knots (the end segments extrapolate), so
-        // each interval adds E_i M_i E_i^T: E_i = every bin's cubic in z = (x - centre)/prior, M_i the
-        // 4x4 matrix of Gaussian moments of z^0..z^6 over the interval. No throws, no noise.
-        // Not for get_counts models (flux splines act before the decay migration) or quadratic-group
-        // members (a member's throw changes the group's shared factor): those keep the throws below.
+        // the fractional shift is u_k = 1 - f_k(x)/f_k(x0), x = centre + prior z. f_k is a cubic in x
+        // between consecutive knots (the end segments extrapolate), so on each interval u = E_i
+        // [1 z z^2 z^3]^T with E_i every bin's cubic in z. Not for get_counts models (flux splines
+        // act before the decay migration) or quadratic-group members (a member's throw changes the
+        // group's shared factor).
         const bool in_group = spline < (int)quadratic_group_of.size() && quadratic_group_of[spline] >= 0;
         bool exact = !model.uses_get_counts() && !in_group;
+        if(!exact) return std::nullopt;
 
         const size_t nb = config.m_num_variable_bins_total[other_index];
         const size_t sb = (size_t)spline_binnings[spline];
         Eigen::VectorXf unweighted;
-        if(exact && sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
+        if(sb != (size_t)other_index) unweighted = prop.variable_hist_storage.UnweightedColSum(sb, other_index);
         // This spline's per-bin factor at knob value t, built as in FillSpectra.
         auto factor = [&](float t) {
             Eigen::VectorXf f = Eigen::VectorXf::Ones(nb);
@@ -745,73 +760,91 @@ namespace PROfit {
             }
             return f;
         };
-        Eigen::VectorXf f0;
-        if(exact) {
-            f0 = factor(params(model.nparams + spline));
-            if(!f0.allFinite() || (f0.array() == 0.0f).any()) {
-                exact = false;   // cannot divide this spline out of cv
-                log<LOG_DEBUG>(L"%1% || %2%: zero/non-finite factor at the CV value, using throws") % __func__ % spline_names[spline].c_str();
-            }
+        const Eigen::VectorXf f0 = factor(params(model.nparams + spline));
+        if(!f0.allFinite() || (f0.array() == 0.0f).any()) {
+            log<LOG_DEBUG>(L"%1% || %2%: zero/non-finite factor at the CV value, using throws") % __func__ % spline_names[spline].c_str();
+            return std::nullopt;   // cannot divide this spline out of cv
         }
 
-        if(exact) {
-            const Spline &sp = splines[spline];
-            const double mu = spline_centers(spline);
-            const double sigma = std::abs((double)spline_priors(spline));
-            const Eigen::VectorXd f0d = f0.cast<double>();
-            Eigen::MatrixXd F;
-            if(sigma == 0.0) {   // no spread: every throw sits at the centre
-                const Eigen::VectorXd u = Eigen::VectorXd::Ones(nb) - factor((float)mu).cast<double>().cwiseQuotient(f0d);
-                F = u * u.transpose();
+        ShiftExpansion ex;
+        const Spline &sp = splines[spline];
+        const double mu = spline_centers(spline);
+        const double sigma = std::abs((double)spline_priors(spline));
+        const Eigen::VectorXd f0d = f0.cast<double>();
+        if(sigma == 0.0) {   // no spread: every throw sits at the centre
+            ex.point = true;
+            ex.u0 = Eigen::VectorXd::Ones(nb) - factor((float)mu).cast<double>().cwiseQuotient(f0d);
+            return ex;
+        }
+        Eigen::MatrixXd H;   // (bins of sb) x (bins of other_index), as WeightedColSum uses it
+        Eigen::VectorXd Hsum;
+        if(sb != (size_t)other_index) {
+            H = Eigen::MatrixXf(prop.variable_hist_storage(sb, other_index)).cast<double>();
+            Hsum = H.colwise().sum().transpose();
+        }
+        std::vector<float> knots;
+        for(const auto &seg : sp.segments) knots.push_back(seg.knot);
+        std::sort(knots.begin(), knots.end());
+        knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
+        const double inf = std::numeric_limits<double>::infinity();
+        const double binom[4][4] = {{1, 0, 0, 0}, {1, 1, 0, 0}, {1, 2, 1, 0}, {1, 3, 3, 1}};
+        Eigen::MatrixXd P(sp.bins, 4), G(nb, 4);
+        for(size_t i = 0; i <= knots.size(); ++i) {
+            // Interval i is (-inf, k_0), [k_{i-1}, k_i), ..., [k_last, inf); GetSplineShift picks
+            // the same segment everywhere inside it, so find that segment from one point.
+            const double xl = i == 0 ? -inf : knots[i - 1];
+            const double xh = i == knots.size() ? inf : knots[i];
+            const float probe = i == 0 ? knots[0] - 1.0f : (i == knots.size() ? knots.back() + 1.0f : 0.5f * (knots[i - 1] + knots[i]));
+            for(int j = 0; j < sp.bins; ++j) {
+                const SplineSegment *segs = &sp.segments[(size_t)j * sp.segments_per_bin];
+                const SplineSegment *end = segs + sp.segments_per_bin;
+                const SplineSegment *seg = std::upper_bound(segs, end, probe, [](float x, const SplineSegment &q) { return x < q.knot; });
+                if(seg != segs) --seg;
+                const float hi = seg + 1 < end ? seg[1].knot : sp.knot_hi;
+                const double w = (float)(hi - seg->knot);
+                const double a = (mu - seg->knot) / w, b = sigma / w;   // segment variable t = a + b z
+                P.row(j).setZero();
+                for(int pw = 0; pw < 4; ++pw)
+                    for(int q = 0; q <= pw; ++q)
+                        P(j, q) += seg->coeffs[pw] * binom[pw][q] * std::pow(a, pw - q) * std::pow(b, q);
+            }
+            if(sb == (size_t)other_index) {
+                G = P;
             } else {
-                Eigen::MatrixXd H;   // (bins of sb) x (bins of other_index), as WeightedColSum uses it
-                Eigen::VectorXd Hsum;
-                if(sb != (size_t)other_index) {
-                    H = Eigen::MatrixXf(prop.variable_hist_storage(sb, other_index)).cast<double>();
-                    Hsum = H.colwise().sum().transpose();
+                G = H.transpose() * P;
+                for(size_t k = 0; k < nb; ++k) {
+                    if(unweighted(k) > 0) G.row(k) /= Hsum(k);
+                    else G.row(k) << 1.0, 0.0, 0.0, 0.0;
                 }
-                std::vector<float> knots;
-                for(const auto &seg : sp.segments) knots.push_back(seg.knot);
-                std::sort(knots.begin(), knots.end());
-                knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
-                const double inf = std::numeric_limits<double>::infinity();
-                const double binom[4][4] = {{1, 0, 0, 0}, {1, 1, 0, 0}, {1, 2, 1, 0}, {1, 3, 3, 1}};
+            }
+            Eigen::MatrixXd E = -(f0d.cwiseInverse().asDiagonal() * G);   // u_k = 1 - g_k / g_k(x0)
+            E.col(0).array() += 1.0;
+            ex.zl.push_back((xl - mu) / sigma);
+            ex.zh.push_back((xh - mu) / sigma);
+            ex.E.push_back(std::move(E));
+        }
+        return ex;
+    }
+
+    Eigen::MatrixXf PROsyst::spline2cov(int spline, const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
+        Eigen::MatrixXf cv = FillSpectra(config, prop, *this, model, params , true, other_index).Spec();
+
+        // Closed form (shiftExpansion): the fractional covariance is exactly F = E[u u^T] with
+        // x ~ N(centre, prior), i.e. each knot interval adds E_i M_i E_i^T, M_i the 4x4 matrix of
+        // Gaussian moments of z^0..z^6 over the interval. No throws, no noise.
+        const std::optional<ShiftExpansion> ex = shiftExpansion(spline, config, prop, model, params);
+        if(ex) {
+            const size_t nb = config.m_num_variable_bins_total[other_index];
+            Eigen::MatrixXd F;
+            if(ex->point) {
+                F = ex->u0 * ex->u0.transpose();
+            } else {
                 F = Eigen::MatrixXd::Zero(nb, nb);
-                Eigen::MatrixXd P(sp.bins, 4), G(nb, 4);
-                for(size_t i = 0; i <= knots.size(); ++i) {
-                    // Interval i is (-inf, k_0), [k_{i-1}, k_i), ..., [k_last, inf); GetSplineShift picks
-                    // the same segment everywhere inside it, so find that segment from one point.
-                    const double xl = i == 0 ? -inf : knots[i - 1];
-                    const double xh = i == knots.size() ? inf : knots[i];
-                    const float probe = i == 0 ? knots[0] - 1.0f : (i == knots.size() ? knots.back() + 1.0f : 0.5f * (knots[i - 1] + knots[i]));
-                    for(int j = 0; j < sp.bins; ++j) {
-                        const SplineSegment *segs = &sp.segments[(size_t)j * sp.segments_per_bin];
-                        const SplineSegment *end = segs + sp.segments_per_bin;
-                        const SplineSegment *seg = std::upper_bound(segs, end, probe, [](float x, const SplineSegment &q) { return x < q.knot; });
-                        if(seg != segs) --seg;
-                        const float hi = seg + 1 < end ? seg[1].knot : sp.knot_hi;
-                        const double w = (float)(hi - seg->knot);
-                        const double a = (mu - seg->knot) / w, b = sigma / w;   // segment variable t = a + b z
-                        P.row(j).setZero();
-                        for(int pw = 0; pw < 4; ++pw)
-                            for(int q = 0; q <= pw; ++q)
-                                P(j, q) += seg->coeffs[pw] * binom[pw][q] * std::pow(a, pw - q) * std::pow(b, q);
-                    }
-                    if(sb == (size_t)other_index) {
-                        G = P;
-                    } else {
-                        G = H.transpose() * P;
-                        for(size_t k = 0; k < nb; ++k) {
-                            if(unweighted(k) > 0) G.row(k) /= Hsum(k);
-                            else G.row(k) << 1.0, 0.0, 0.0, 0.0;
-                        }
-                    }
-                    Eigen::MatrixXd E = -(f0d.cwiseInverse().asDiagonal() * G);   // u_k = 1 - g_k / g_k(x0)
-                    E.col(0).array() += 1.0;
-                    const std::array<double, 7> J = GaussianMoments((xl - mu) / sigma, (xh - mu) / sigma);
+                for(size_t i = 0; i < ex->E.size(); ++i) {
+                    const std::array<double, 7> J = GaussianMoments(ex->zl[i], ex->zh[i]);
                     Eigen::Matrix4d M;
                     for(int q = 0; q < 4; ++q) for(int r = 0; r < 4; ++r) M(q, r) = J[q + r];
-                    F.noalias() += (E * M) * E.transpose();
+                    F.noalias() += (ex->E[i] * M) * ex->E[i].transpose();
                 }
             }
             Eigen::MatrixXf frac_covar_matrix = F.cast<float>();
@@ -850,6 +883,166 @@ namespace PROfit {
         PROsyst::toFiniteMatrix(frac_covar_matrix);
 
         return frac_covar_matrix;
+    }
+
+    namespace {
+        /// Adaptive 7/15-point Gauss-Kronrod quadrature of a vector-valued integrand on [a, b]:
+        /// a panel is accepted when its error estimate is below tol_per_unit * its width (so the
+        /// target never drops under rounding noise), else bisected, at most depth times.
+        template<class Fn>
+        Eigen::ArrayXd integrateGK(const Fn &f, double a, double b, double tol_per_unit, int depth) {
+            static const double xk[8] = {0.991455371120812639, 0.949107912342758525, 0.864864423359769073, 0.741531185599394440,
+                                         0.586087235467691130, 0.405845151377397167, 0.207784955007898468, 0.0};
+            static const double wk[8] = {0.022935322010529225, 0.063092092629978553, 0.104790010322250184, 0.140653259715525919,
+                                         0.169004726639267903, 0.190350578064785410, 0.204432940075298892, 0.209482141084727828};
+            static const double wg[4] = {0.129484966168869693, 0.279705391489276668, 0.381830050505118945, 0.417959183673469388};
+            const double c = 0.5 * (a + b), h = 0.5 * (b - a);
+            const Eigen::ArrayXd f0 = f(c);
+            Eigen::ArrayXd K = wk[7] * f0, Gs = wg[3] * f0;
+            for(int i = 0; i < 7; ++i) {
+                const Eigen::ArrayXd fp = f(c + h * xk[i]), fm = f(c - h * xk[i]);
+                K += wk[i] * (fp + fm);
+                if(i % 2 == 1) Gs += wg[i / 2] * (fp + fm);
+            }
+            K *= h;
+            Gs *= h;
+            const double err = (K - Gs).abs().maxCoeff();
+            if(depth <= 0 || err <= tol_per_unit * (b - a)) return K;
+            return integrateGK(f, a, c, tol_per_unit, depth - 1) + integrateGK(f, c, b, tol_per_unit, depth - 1);
+        }
+
+        /**
+         * Cov(u_a(z1), u_b(z2)) for (z1, z2) standard bivariate normal with correlation rho, u_a,
+         * u_b piecewise cubic (PROsyst::ShiftExpansion). Each pair of knot intervals contributes
+         * E_a,i N_ij E_b,j^T with N_ij(p, q) = E[z1^p z2^q 1{z1 in I_i, z2 in I_j}]: given z1, z2 is
+         * N(rho z1, 1 - rho^2), so the z2 moments are closed form and z1 is integrated numerically.
+         */
+        Eigen::MatrixXd crossCovariance(const PROsyst::ShiftExpansion &A, const PROsyst::ShiftExpansion &B, double rho) {
+            const Eigen::Index nb = A.E.front().rows();
+            const size_t na = A.E.size(), nbi = B.E.size();
+            const double s = std::sqrt(1.0 - rho * rho);
+            const double binom[4][4] = {{1, 0, 0, 0}, {1, 1, 0, 0}, {1, 2, 1, 0}, {1, 3, 3, 1}};
+            const double inv_sqrt_2pi = 0.39894228040143267794;
+            const double zcut = 12.0;   // Gaussian mass beyond is < 1e-32
+
+            Eigen::MatrixXd EB(4 * nbi, nb);   // stacked E_b,j^T
+            for(size_t j = 0; j < nbi; ++j) EB.middleRows(4 * j, 4) = B.E[j].transpose();
+
+            // Integrand over z1: row p, column 4j+q of N_i, flattened column-major (4 x 4*nbi).
+            const auto integrand = [&](double z1) {
+                Eigen::ArrayXd out(16 * nbi);
+                const double phi = inv_sqrt_2pi * std::exp(-0.5 * z1 * z1);
+                const double m = rho * z1;
+                double zp[4] = {1.0, z1, z1 * z1, z1 * z1 * z1};
+                double mp[4] = {1.0, m, m * m, m * m * m};
+                double sp[4] = {1.0, s, s * s, s * s * s};
+                for(size_t j = 0; j < nbi; ++j) {
+                    const std::array<double, 7> J = GaussianMoments((B.zl[j] - m) / s, (B.zh[j] - m) / s);
+                    for(int q = 0; q < 4; ++q) {
+                        double inner = 0.0;   // E[z2^q 1{z2 in I_j} | z1]
+                        for(int k = 0; k <= q; ++k) inner += binom[q][k] * mp[q - k] * sp[k] * J[k];
+                        for(int p = 0; p < 4; ++p) out(p + 4 * (4 * j + q)) = phi * zp[p] * inner;
+                    }
+                }
+                return out;
+            };
+
+            Eigen::MatrixXd C = Eigen::MatrixXd::Zero(nb, nb);
+            for(size_t i = 0; i < na; ++i) {
+                const double lo = std::max(A.zl[i], -zcut), hi = std::min(A.zh[i], zcut);
+                if(!(lo < hi)) continue;
+                const Eigen::ArrayXd flat = integrateGK(integrand, lo, hi, 1e-12, 24);
+                const Eigen::Map<const Eigen::MatrixXd> N(flat.data(), 4, 4 * nbi);
+                C.noalias() += A.E[i] * (N * EB);
+            }
+            // Subtract the product of the means: E[u] = sum_i E_i E[z^p 1{z in I_i}].
+            auto mean = [](const PROsyst::ShiftExpansion &X) {
+                Eigen::VectorXd m = Eigen::VectorXd::Zero(X.E.front().rows());
+                for(size_t i = 0; i < X.E.size(); ++i) {
+                    const std::array<double, 7> J = GaussianMoments(X.zl[i], X.zh[i]);
+                    m += X.E[i] * Eigen::Vector4d(J[0], J[1], J[2], J[3]);
+                }
+                return m;
+            };
+            C -= mean(A) * mean(B).transpose();
+            return C;
+        }
+    }
+
+    Eigen::MatrixXf PROsyst::PriorCorrelationCrossTerms(const PROconfig &config, const PROpeller &prop, const PROmodel &model, const Eigen::VectorXf &params, uint32_t seed) const {
+        bool correlated = false;
+        const Eigen::MatrixXf S = SplinePriorCovariance(config, *this, correlated);
+        if(!correlated) return Eigen::MatrixXf();
+        const size_t n = GetNSplines();
+        const auto gaussian = [&](size_t i) { return !(i < spline_prior_types.size() && spline_prior_types[i] == SplinePriorType::Uniform); };
+        std::vector<std::pair<size_t, size_t>> pairs;
+        for(size_t i = 0; i < n; ++i)
+            for(size_t j = i + 1; j < n; ++j)
+                if(gaussian(i) && gaussian(j) && S(i, j) != 0.0f) pairs.emplace_back(i, j);
+        if(pairs.empty()) return Eigen::MatrixXf();
+
+        const size_t nb = config.m_num_variable_bins_total[other_index];
+        const Eigen::VectorXf cv = FillSpectra(config, prop, *this, model, params, true, other_index).Spec();
+        std::map<size_t, std::optional<ShiftExpansion>> expansions;
+        auto expansion = [&](size_t i) -> const std::optional<ShiftExpansion> & {
+            auto it = expansions.find(i);
+            if(it == expansions.end()) it = expansions.emplace(i, shiftExpansion((int)i, config, prop, model, params)).first;
+            return it->second;
+        };
+        // u = 1 - spec/cv of one spline set to x, the others at params (spline2cov's throw path).
+        auto shift = [&](size_t i, float x) {
+            Eigen::VectorXf p = params;
+            p(model.nparams + i) = x;
+            const Eigen::VectorXf sp = FillSpectra(config, prop, *this, model, p, true, other_index).Spec();
+            Eigen::VectorXd u = Eigen::VectorXd::Zero(nb);
+            for(size_t k = 0; k < nb; ++k) if(cv(k) != 0.0f) u(k) = 1.0 - (double)sp(k) / cv(k);
+            return u;
+        };
+
+        Eigen::MatrixXd X = Eigen::MatrixXd::Zero(nb, nb);
+        size_t n_exact = 0, n_thrown = 0;
+        for(const auto &[i, j] : pairs) {
+            const double si = S(i, i), sj = S(j, j);
+            if(!(si > 0.0 && sj > 0.0)) continue;
+            const double rho = std::clamp((double)S(i, j) / std::sqrt(si * sj), -1.0, 1.0);
+            const std::optional<ShiftExpansion> &ei = expansion(i), &ej = expansion(j);
+            Eigen::MatrixXd C;
+            if(ei && ej) {
+                if(ei->point || ej->point) continue;   // a zero-width prior has no covariance
+                C = crossCovariance(*ei, *ej, rho);
+                ++n_exact;
+            } else {
+                // No closed form for one of the two: paired throws of the bivariate prior.
+                std::mt19937 rng(seed + (uint32_t)(i * 7919u + j));
+                std::normal_distribution<double> d;
+                const double c = std::sqrt(1.0 - rho * rho);
+                const float mi = spline_centers(i), mj = spline_centers(j);
+                const float wi = std::abs(spline_priors(i)), wj = std::abs(spline_priors(j));
+                Eigen::VectorXd sa = Eigen::VectorXd::Zero(nb), sb = Eigen::VectorXd::Zero(nb);
+                Eigen::MatrixXd sab = Eigen::MatrixXd::Zero(nb, nb);
+                const size_t T = std::max<size_t>(spline2cov_throws, 2);
+                for(size_t t = 0; t < T; ++t) {
+                    const double z1 = d(rng), z2 = rho * z1 + c * d(rng);
+                    const Eigen::VectorXd ua = shift(i, mi + wi * (float)z1), ub = shift(j, mj + wj * (float)z2);
+                    sa += ua;
+                    sb += ub;
+                    sab.noalias() += ua * ub.transpose();
+                }
+                C = sab / (double)T - (sa / (double)T) * (sb / (double)T).transpose();
+                ++n_thrown;
+            }
+            X += C + C.transpose();
+        }
+        Eigen::MatrixXf out = X.cast<float>();
+        for(size_t k = 0; k < nb; ++k) {
+            if(cv(k) != 0.0f) continue;
+            out.row(k).setZero();
+            out.col(k).setZero();
+        }
+        PROsyst::toFiniteMatrix(out);
+        log<LOG_INFO>(L"%1% || Prior-correlation cross terms for %2% correlated spline pair(s) (%3% closed form, %4% from %5% paired throws).")
+            % __func__ % pairs.size() % n_exact % n_thrown % spline2cov_throws;
+        return out;
     }
 
     void PROsyst::PropagateDerivedNames(const PROconfig& config, const std::string& parent, size_t n_spl_before, size_t n_cov_before) {

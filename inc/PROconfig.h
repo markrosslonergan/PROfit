@@ -330,6 +330,15 @@ namespace PROfit{
             void ValidateFitVariable() const;
 
             /**
+             * @brief Check the <correlation> entries once every systematic is declared and expanded.
+             * @details Fatal (std::invalid_argument) unless: |rho| < 1, no self-pair, no repeated
+             * pair, both names are declared spline/norm/hist1d/hist2d/explicit_spline systematics
+             * (their XML name is the fit parameter) with a Gaussian prior of finite width > 0, and
+             * the correlation matrix over all named systematics is positive definite.
+             */
+            void ValidateCorrelations() const;
+
+            /**
              * @brief Check DetVar variations whose name appears in more than one DetVarSection.
              * @details Such a name is ONE systematic (one fit parameter): run_process builds each
              * section's response from that section's own CV and files and sums them. Fatal unless

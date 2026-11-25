@@ -180,6 +180,7 @@ namespace PROfit{
                 syst = &new_syst;
                 fs_cache.invalidate();
                 cov_ref_ready = false;
+                buildSplinePrior(config);
             }
 
             /** @brief The analysis configuration (also public as `config`). */

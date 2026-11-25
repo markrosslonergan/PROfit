@@ -429,15 +429,16 @@ The `<allowlist>` attributes:
 * `knobvals` — for splines, the knob values if not stored in the file, as a
   space-separated list (default `-3 -2 -1 0 1 2 3`).
 * `prior=` / `center=` — override the default N(0,1) Gaussian pull;
-  `<correlation>` blocks make spline priors correlated.
+  `<correlation>` blocks make spline priors correlated (see
+  [Correlated priors](#correlated-spline-priors-correlation) below).
 * `prior_type="gaussian|uniform"` — `uniform` (spline type only) removes the
   Gaussian pull entirely: the parameter floats freely inside its
   `restrict="lo,hi"` range, which becomes **mandatory** (and `prior=`,
   `center=`, and `<correlation>` entries are forbidden for it). Use it for
   a genuinely unconstrained scale factor you want measured, not pulled.
-  FC/Brazil/fc-adaptive pseudo-experiment throws draw such splines flat
-  over the `restrict` range, matching the prior. (PROplot's pre-fit band
-  still throws them as N(0,1); that is display only.)
+  Every throw of the prior (FC/Brazil/fc-adaptive pseudo-experiments and the
+  pre-fit error band) draws such splines flat over the `restrict` range,
+  matching the prior.
 * `mode="covariance_to_spline"` with `num_decomp_knobs=` promotes a
   covariance to its leading eigenmode splines (the same machinery PROjector
   uses — see section 9). `restrict` bounds a spline's allowed range.
@@ -615,8 +616,8 @@ sees. Notes:
   (this now also holds for plain `covariance_to_spline`); `--fix` and
   `--inject-systs` take the `_decomp_knob_<k>` names; a consumed source entry
   is no longer a fit object, so its own name resolves nowhere;
-* the usual uniform-spline caveat: PROplot's pre-fit band throws these knobs
-  as N(0,1) (not meaningful); FC/Brazil throws draw them flat over the knob box.
+* like every uniform spline, these knobs are thrown flat over the knob box,
+  by FC/Brazil and by the pre-fit band alike.
 
 ### Asymmetric errors from histogram sources: `<HistVarFiles>`
 
@@ -689,6 +690,56 @@ Subcommands:
   scale-test   Run timing benchmarks for FillSpectra / metric / fit hot paths.
   proletariat  Stage, tar, and submit grid jobs (section 11).
 ```
+
+### Correlated spline priors: `<correlation>`
+
+```xml
+<correlation>multisigma_SBND_POT multisigma_ICARUSRun4_POT 0.33</correlation>
+```
+
+`<correlation>` is a top-level element (a sibling of `<systematics>`), one per
+pair: two systematic names (the XML names, not plotnames) and the correlation
+coefficient ρ. The prior on those splines becomes a multivariate Gaussian
+N(c, Σ) with Σ_ij = ρ_ij σ_i σ_j; pairs that are not listed are uncorrelated.
+
+The entries are checked when the XML is read, and PROfit refuses the config
+unless:
+
+* |ρ| < 1, no spline is paired with itself, and each pair appears once;
+* both names are `spline`, `norm`, `hist1d`, `hist2d` or `explicit_spline`
+  systematics with a Gaussian prior of width > 0 — the types whose XML name is
+  itself the fit parameter. Covariance-type systematics, `spline_to_covariance`,
+  the `*_to_spline` eigenmode knobs, `binned_unconstrained` and uniform priors
+  cannot be correlated;
+* together they form a valid correlation matrix (positive definite). Pairwise
+  |ρ| < 1 is not enough: ρ(A,B) = ρ(B,C) = 0.9 forces ρ(A,C) > 0.62.
+
+Where the correlations act:
+
+* **The fit**: the pull term of every metric is (θ − c)ᵀ Σ⁻¹ (θ − c).
+* **Every throw of the prior**: FC, fc-adaptive and Brazil pseudo-experiments,
+  `--pseudo-experiment` and the pre-fit error band draw correlated splines
+  jointly from N(c, Σ), truncated to their fit ranges. A spline fixed with
+  `--fix` (or held with `--inject-systs` in `--pseudo-experiment`) keeps its
+  value, and its partners are drawn from the prior conditional on it.
+* **`plot`**: the covariance pages and the χ²/nbins labels include the
+  covariance between correlated pairs, computed exactly. The per-systematic
+  breakdown curves stay per systematic; their "Sum" line includes the
+  correlations.
+* **Excluding one spline of a pair** (`--exclude-systs`) drops the pair; the
+  other spline keeps its marginal prior, which is exact.
+
+The log lists each block of splines thrown together and the fraction of its
+prior inside the fit ranges. The truncation applies to the whole block at once
+(exact rejection sampling), so a block whose ranges keep less than 0.1% of its
+prior cannot be thrown: PROfit refuses to run and names the splines whose range
+lies within 1σ of the centre, typically one-sided splines (knob range [0, 1],
+centre 0). Widen their `restrict=` range or loosen the correlations that tie
+them together.
+
+Correlations are not part of the config hash, so adding or changing one needs
+no re-`process`. FC outputs record `prior_throw: joint` in `fc_meta`. PROjector
+cannot currently be combined with `<correlation>` (see the PROjector section).
 
 ### Tags, outputs, and the binary cache
 
@@ -2075,9 +2126,15 @@ on the promoted spline parameters.
 * Closure signatures worth checking on any new setup: a projected Asimov
   `global` fit gives χ² = 0 at CV; a pre-fit with only FD-blind systematics
   gives posterior widths of exactly 1.
-* FC/Brazil throws in projected mode sample the *marginal* widths of the
-  constraint only — correlations enter the pull term, not the throws (PROfit
-  prints a runtime warning to remind you).
+* FC/Brazil throws and the pre-fit band in projected mode draw the nuisances
+  from the full constraint (θ̂, Σ), correlations included — the same prior the
+  pull term applies, for every metric including `-c poisson`. A dense Σ is one
+  correlated block; if it holds several one-sided splines (knob range [0, 1]
+  with the centre at 0) its box can be too tight to sample, which PROfit
+  refuses up front.
+* PROjector cannot currently be combined with XML `<correlation>` entries:
+  PROfit stops with "Currently PROjector and <correlation> do not work
+  together. If you need it, contact Mark."
 
 Note that autocorrelation and harmonic scan plots will not be filled properly with the projector option.
 
@@ -2969,9 +3026,12 @@ its prior many times, rebuild the spectrum each time, and look at the spread
 of spectra you get.** No data is involved anywhere. Concretely, for each of
 `N = 2500` throws `i` (configurable with `plot --band-throws N`):
 
-1. **Throw every spline from its prior**: `s_j⁽ⁱ⁾ ~ N(c_j, σ_j)`,
-   independently per spline (marginals only — XML correlations enter the fit
-   through the pull term, not these throws). Physics stays at the CV.
+1. **Throw every spline from its prior**: `s_j⁽ⁱ⁾ ~ N(c_j, σ_j)` truncated to
+   the spline's fit range (`restrict=` or its knob range), exactly as the
+   pseudo-experiments do: correlated splines (`<correlation>`, a PROjector
+   constraint) are drawn jointly from their multivariate prior, uniform-prior
+   splines flat over their range, and `--fix`'d splines stay at their fixed
+   value. Physics stays at the CV.
 2. **Rebuild the spectrum through the full (nonlinear) spline response**:
    `S⁽ⁱ⁾ = P(φ_CV, s⁽ⁱ⁾)` — each event/bin is reweighted through its response
    spline at the thrown knob values, then collapsed. This is where the

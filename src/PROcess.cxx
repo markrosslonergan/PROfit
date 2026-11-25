@@ -4,6 +4,7 @@
 #include "PROspec.h"
 #include "PROsyst.h"
 #include "PROtocall.h"
+#include "PROsplinePrior.h"
 #include "TH2D.h"
 
 #include <Eigen/Eigen>
@@ -494,7 +495,7 @@ namespace PROfit {
         return myspectrum;
     }
 
-    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index) {
+    PROspec FillSystRandomThrow(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const SplinePriorSampler &prior_sampler) {
         int nbins = inconfig.m_num_variable_bins_total[var_index],
         nbins_collapsed = inconfig.m_num_variable_bins_total_collapsed[var_index];
         Eigen::VectorXf spec = Eigen::VectorXf::Constant(nbins, 0);
@@ -505,34 +506,25 @@ namespace PROfit {
         // seed argument after the first-ever call and raced across threads.
         // Callers are responsible for passing distinct seeds per throw.
         std::mt19937 rng{seed};
-        std::vector<std::normal_distribution<float>> d_spline;
-        for(size_t i = 0; i < insyst.GetNSplines(); ++i)
-            d_spline.emplace_back(insyst.spline_centers(i), insyst.spline_priors(i));
+        std::normal_distribution<float> d_spline;
         std::normal_distribution<float> d_cov;
-        std::vector<float> throws;
-        //Eigen::VectorXf throwC = Eigen::VectorXf::Constant(inconfig.m_num_variable_bins_total[inconfig.i_prime], 0);
+        // The same prior draw as the pseudo-experiments: truncated to each box, uniform splines
+        // flat, --fix'd splines pinned, correlated blocks joint.
+        prior_sampler.Throw(params.segment(model.nparams, insyst.GetNSplines()), rng, d_spline);
+        const Eigen::VectorXf throw_vec = params.segment(model.nparams, insyst.GetNSplines());
         Eigen::VectorXf throwC = Eigen::VectorXf::Constant(nbins_collapsed, 0);
-        for(size_t i = 0; i < insyst.GetNSplines(); i++) {
-            throws.push_back(d_spline[i](rng));
-        }
         for(int i = 0; i < nbins_collapsed; i++)
             throwC(i) = d_cov(rng);
-
-        //get actual splines 
-        for(size_t i=0;i<throws.size();i++){
-            params(i+model.nparams) = throws.at(i);
-        }
 
         bool binned = true;//dont want to faf around with event by event here lets be honst
         if (binned){
           spec = FillSpectra(inconfig, inprop, insyst, model, params, binned, var_index).Spec();
 
         }else{//currently never run
-            const Eigen::Map<const Eigen::VectorXf> throw_vec(throws.data(), throws.size());
             for(size_t i = 0; i<inprop.NEvent(); ++i){
                 float add_w = inprop.added_weights[i]; 
                 float systw = 1;
-                for(size_t j = 0; j < throws.size(); ++j) {
+                for(Eigen::Index j = 0; j < throw_vec.size(); ++j) {
                     int binning = insyst.spline_binnings[j];
                     const int spline_bin = inprop.VariableBinIndex(binning, i);
                     systw *= insyst.GetSplineFactor(j, throw_vec, spline_bin);
@@ -560,30 +552,21 @@ namespace PROfit {
         return PROspec(final_spec, final_spec.array().sqrt());
     }
 
-    std::pair<PROspec, PROspec> FillSystRandomThrowSplit(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const Eigen::VectorXf &bkg_bin_mask) {
+    std::pair<PROspec, PROspec> FillSystRandomThrowSplit(const PROconfig &inconfig, const PROpeller &inprop, const PROsyst &insyst, const PROmodel &model, const PROspec &cvspec, const Eigen::VectorXf &cvparams, uint32_t seed, int var_index, const Eigen::VectorXf &bkg_bin_mask, const SplinePriorSampler &prior_sampler) {
         int nbins = inconfig.m_num_variable_bins_total[var_index];
 
         Eigen::VectorXf params = cvparams;
 
-        // Local generator seeded per call, as in FillSystRandomThrow.
+        // Local generator seeded per call; splines drawn as in FillSystRandomThrow.
         std::mt19937 rng{seed};
-        std::vector<std::normal_distribution<float>> d_spline;
-        for(size_t i = 0; i < insyst.GetNSplines(); ++i)
-            d_spline.emplace_back(insyst.spline_centers(i), insyst.spline_priors(i));
+        std::normal_distribution<float> d_spline;
         std::normal_distribution<float> d_cov;
-        std::vector<float> throws;
-        for(size_t i = 0; i < insyst.GetNSplines(); i++) {
-            throws.push_back(d_spline[i](rng));
-        }
+        prior_sampler.Throw(params.segment(model.nparams, insyst.GetNSplines()), rng, d_spline);
         // Covariance throw in FULL bin space (nbins normals rather than
         // nbins_collapsed) so the bkg subchannels' variation is separable.
         Eigen::VectorXf throwF = Eigen::VectorXf::Constant(nbins, 0);
         for(int i = 0; i < nbins; i++)
             throwF(i) = d_cov(rng);
-
-        for(size_t i = 0; i < throws.size(); i++) {
-            params(i + model.nparams) = throws.at(i);
-        }
 
         Eigen::VectorXf full = FillSpectra(inconfig, inprop, insyst, model, params, true, var_index).Spec();
         if(insyst.GetNCovar() != 0)
@@ -648,12 +631,16 @@ namespace PROfit {
 
         // Sample the spline's ACTUAL prior N(center, sigma), not a hardcoded N(0,1):
         // center/sigma default to 0/1 (identical behaviour for legacy configs) but honor
-        // XML-configured priors and PROjector's constrained posterior. Note only the
-        // MARGINAL width is sampled here — prior correlations (XML correlations or a
-        // PROjector external prior covariance) are not reflected in per-spline throws.
+        // XML-configured priors and PROjector's constrained posterior. This is the MARGINAL
+        // prior: a spline with correlated partners must go through SplinePriorSampler.
         const float mu  = i < (size_t)insyst.spline_centers.size() ? insyst.spline_centers((Eigen::Index)i) : 0.0f;
         const float sig = i < (size_t)insyst.spline_priors.size() ? std::abs(insyst.spline_priors((Eigen::Index)i)) : 1.0f;
+        const std::string sname = i < insyst.spline_names.size()
+            ? insyst.spline_names[i] : ("spline#" + std::to_string(i));
+        return ThrowTruncatedNormal(mu, sig, tlo, thi, rng, d, sname, i);
+    }
 
+    float ThrowTruncatedNormal(float mu, float sig, float tlo, float thi, std::mt19937 &rng, std::normal_distribution<float> &d, const std::string &name, size_t index) {
         const int max_attempts = 10000;
         int attempts = 0;
         float x = mu + sig * d(rng);
@@ -661,11 +648,9 @@ namespace PROfit {
             x = mu + sig * d(rng);
         if (x < tlo || x > thi) {
             x = (mu < tlo) ? tlo : (mu > thi ? thi : mu);
-            const std::string sname = i < insyst.spline_names.size()
-                ? insyst.spline_names[i] : ("spline#" + std::to_string(i));
             log<LOG_WARNING>(L"%1% || spline '%2%' (index %3%) has throw bounds [%4%, %5%] unreachable "
                              L"by its N(%6%, %7%) prior after %8% draws; clamping to %9%. Check its knobvals / restrict attribute.")
-                % __func__ % sname.c_str() % (int)i % tlo % thi % mu % sig % max_attempts % x;
+                % __func__ % name.c_str() % (int)index % tlo % thi % mu % sig % max_attempts % x;
         }
         return x;
     }

@@ -267,6 +267,10 @@ namespace PROfit {
             log<LOG_ERROR>(L"%1% || --projector-prefit and --projector are mutually exclusive.") % __func__;
             return false;
         }
+        if(!config.m_mcgen_correlations.empty()) {
+            log<LOG_ERROR>(L"%1% || Currently PROjector and <correlation> do not work together. If you need it, contact Mark.") % __func__;
+            return false;
+        }
         // Every metric honors the config fit-region (active-bin) mask, so any of them is legal
         // here; Poisson additionally needs every covariance promoted (checked after promotion).
         const bool poisson = PROmetric::canonicalizeMetricName(chi2_name) == "poisson";
@@ -360,22 +364,20 @@ namespace PROfit {
             }
 
             // Install the pre-fit posterior: centers become the prior centers, the full
-            // covariance becomes a correlated external prior consumed by PROchi::Pull.
-            // spline_priors gets the marginal widths so any code that only looks at the
-            // diagonal (throws, pre-fit error bands, logging) stays consistent.
+            // covariance becomes the correlated prior of every metric's Pull and of every
+            // throw (SplinePriorCovariance / SplinePriorSampler). spline_priors carries the
+            // marginal widths for code that only reports the diagonal.
+            if(c.covariance.rows() != (Eigen::Index)c.nuisance_names.size() || c.covariance.cols() != c.covariance.rows()
+               || Eigen::LLT<Eigen::MatrixXd>(c.covariance.cast<double>()).info() != Eigen::Success) {
+                log<LOG_ERROR>(L"%1% || PROjector constraint covariance (%2% x %3%) is not a positive-definite matrix over its %4% nuisance parameters.")
+                    % __func__ % c.covariance.rows() % c.covariance.cols() % c.nuisance_names.size();
+                return false;
+            }
             systs.spline_centers = c.centers;
             Eigen::VectorXf widths = c.covariance.diagonal().array().max(1e-12f).sqrt();
             systs.spline_priors = widths;
             systs.has_external_prior_cov = true;
             systs.external_prior_cov = c.covariance;
-
-            // Fits (Pull) use the FULL correlated posterior; pseudo-experiment throws
-            // (FC, Brazil bands, adaptive FC) go through ThrowRestrictedSplinePull, which
-            // samples each nuisance's marginal N(center, sigma) only. Correlated throwing
-            // is a known limitation — flag it so FC coverage studies are read accordingly.
-            log<LOG_WARNING>(L"%1% || PROjector: nuisance THROWS (fc, brazil bands, pseudo-experiments) sample the "
-                    L"constrained posterior's marginal widths only; posterior correlations enter the chi2 pull "
-                    L"but are not sampled in throws.") % __func__;
 
             for(size_t i = 0; i < c.nuisance_names.size(); ++i) {
                 log<LOG_INFO>(L"%1% || PROjector prior %2% : center %3% width %4%")
