@@ -593,7 +593,7 @@ namespace PROfit {
             log<LOG_INFO>(L"------ PROfitter Specific Parameters ------");
             log<LOG_INFO>(L"  n_latin_points                       : Number of Latin hypercube points to sample across all parameters");
             log<LOG_INFO>(L"  latin_diversity_factor               : Diversity of latin points, 0: no distance weighting, 1: select most diverse far away points");
-            log<LOG_INFO>(L"  latin_phys_only                      : 1 = sample the latin hypercube in physics-parameter space only (nuisances at nominal); 0 = all parameters");
+            log<LOG_INFO>(L"  latin_phys_only                      : 1 = sample the latin hypercube in physics-parameter space only (nuisances at nominal); 0 = all parameters. A model with no physics parameters always samples all parameters");
             log<LOG_INFO>(L"  localfit_warm_nuisance               : 1 = start each latin multistart descent's nuisance parameters at the best fit so far; 0 = at the latin point");
             log<LOG_INFO>(L"  n_localfit                           : Total number of L-BFGS-B fits to do after PSO");
             log<LOG_INFO>(L"  n_max_local_retries                  : Maximum retries if L-BFGS-B throws an exception");
